@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pangram.micr.dev/schemas/manifest-signature-v1.json",
+  "x-contract-owner": "specification-seed",
+  "title": "Pangram update manifest detached signature v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "algorithm",
+    "key_id",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "algorithm": {
+      "const": "ed25519"
+    },
+    "key_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "signature": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  },
+  "additionalProperties": false
+}

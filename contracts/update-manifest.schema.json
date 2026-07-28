@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pangram.micr.dev/schemas/update-manifest-v1.json",
+  "x-contract-owner": "specification-seed",
+  "title": "Pangram CLI signed update manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "channel",
+    "version",
+    "published_at",
+    "notes_url",
+    "minimum_updater_version",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "channel": {
+      "const": "stable"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "published_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "notes_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "minimum_updater_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": [
+        "target",
+        "archive_format",
+        "url",
+        "size_bytes",
+        "executable_size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "target": {
+          "enum": [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc"
+          ]
+        },
+        "archive_format": {
+          "enum": [
+            "tar.xz",
+            "zip"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "executable_size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

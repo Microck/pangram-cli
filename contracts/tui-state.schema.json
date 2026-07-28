@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pangram.micr.dev/schemas/tui-state-v1.json",
+  "x-contract-owner": "specification-seed",
+  "title": "Pangram CLI TUI state v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "intro_seen"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "intro_seen": {
+      "const": true
+    }
+  },
+  "additionalProperties": false
+}

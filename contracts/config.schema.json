@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pangram.micr.dev/schemas/config-v1.json",
+  "x-contract-owner": "specification-seed",
+  "title": "Pangram CLI configuration v1",
+  "type": "object",
+  "required": [
+    "config_version"
+  ],
+  "properties": {
+    "config_version": {
+      "const": 1
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "tui": {
+      "type": "object",
+      "properties": {
+        "intro": {
+          "enum": [
+            "once",
+            "always",
+            "off"
+          ],
+          "default": "once"
+        },
+        "keymap": {
+          "enum": [
+            "regular",
+            "vim"
+          ],
+          "default": "regular"
+        },
+        "motion": {
+          "enum": [
+            "full",
+            "reduced",
+            "off"
+          ],
+          "default": "full"
+        }
+      },
+      "additionalProperties": false
+    },
+    "updates": {
+      "type": "object",
+      "properties": {
+        "check_on_tui_start": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "max_requests_per_second": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 5,
+          "default": 5
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
