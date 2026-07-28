@@ -31,6 +31,12 @@ If the web application exposes a useful workflow that the public API cannot
 support, record it as an upstream gap. Do not add a compatibility path around
 the missing contract.
 
+Product announcements and model cards may establish output semantics, model
+limitations, and deprecation dates, but they do not substitute for a
+documented request field. A temporary upstream default is not a stable
+contract. Pangram CLI must not submit Pangram 4 work until the public API
+documents how to select it.
+
 File analysis and plagiarism remain release-gated until live conformance
 resolves their documented response conflicts.
 
@@ -40,6 +46,8 @@ resolves their documented response conflicts.
 - The CLI may intentionally omit web-only account and dashboard features.
 - New documented Pangram operations can extend the parity matrix through a
   contract-first change.
+- Pangram 4 text and bulk submission stay blocked while their public request
+  and billing documentation lags the product launch.
 - Public release still needs written Pangram permission even when only public
   endpoints are used.
 

@@ -1,27 +1,36 @@
 # Pangram CLI observable contracts
 
-Status: normative pre-implementation contract
+Status: normative implementation contract
 Schema major: `"1"`
 Configuration version: `1`
 
 This document defines behavior visible outside an implementation module. When
 code and this document disagree, update this document first or fix the code.
 
-### Pre-implementation bootstrap
+### Generated contract ownership
 
-Until the first Rust contract generator lands, this document and the committed
-schemas under `contracts/` are seed contracts owned by the specification. Phase
-0 MUST:
+Phase 0 imported the seed contracts into Rust-owned types and transferred
+artifact ownership to the Rust contract generator. The baseline seed set
+remains traceable at commit `8b5149013cb231e5aae099320f296bb3576841b1`.
+A locked differential transfer corpus passes against every retained seed and
+generated schema. The MCP 2025-11-25 Task seed was retired when the MCP
+contract moved to 2026-07-28 because Tasks left the core protocol.
 
-1. import the seed contracts into Rust-owned types
-2. generate every committed contract artifact from those types
-3. prove semantic equivalence with the seed contracts
-4. add generated-file ownership headers
-5. switch CI to reject regeneration drift
+Transfer review found two defects in the seed output schema: envelope branches
+did not reserve the opposite payload field, and unknown-submission errors did
+not require one canonical duplicate-billing warning. The observable contract
+was corrected before ownership transfer completed. Current-only regressions
+record these intentional differences from the seed.
 
-After that transition, generated artifacts are read-only outputs. Observable
-changes still update this document first, then the Rust owner and generated
-artifacts in the same change.
+The 2026-07-29 Pangram 4 correction removed the never-shipped `ai_assisted`
+document classification, renamed the never-shipped `api_version` provenance
+field to `upstream_version`, and added required humanizer evidence. No runtime
+or public schema had been released, so schema major `"1"` remains the initial
+public contract.
+
+Generated artifacts are now read-only outputs. Observable changes update this
+document first, then the Rust owner and generated artifacts in the same change.
+CI rejects regeneration drift and stale generated files.
 
 ## 1. Compatibility rules
 
@@ -34,11 +43,24 @@ Within schema major `"1"`:
 - field types and meanings MUST NOT change
 - array ordering rules MUST remain stable
 
+A public object is extensible unless its schema explicitly closes unknown
+fields for a security or integrity boundary. Consumers MUST reject unknown
+fields in an explicitly closed object. Extending a closed object is a
+compatibility change governed by that contract's version.
+
 A removal, type change, semantic change, or closed-enum expansion requires a
 new schema major.
 
 JSON object ordering is not semantic. The implementation may serialize fields
 deterministically for fixtures.
+
+### 1.1 MCP protocol compatibility
+
+The stdio MCP server targets protocol version `2026-07-28` without a legacy
+protocol path or the experimental Tasks extension. File access requires an
+explicit repeatable `--allow-file-root PATH`. The complete normative interface,
+including discovery, result metadata, and file-opening rules, lives in
+[mcp-contract.md](mcp-contract.md).
 
 ## 2. Primitive conventions
 
@@ -102,6 +124,8 @@ different meanings. The initial public model does not require it.
 
 `command` is the resolved command, not necessarily the literal argv spelling.
 Bare piped detection uses `detect`.
+A success envelope contains `data` and MUST NOT contain `error`, even when the
+extra `error` value would not validate as a canonical error.
 
 JSON envelope commands and their `data` roots are closed:
 
@@ -141,6 +165,9 @@ arbitrary command or unconstrained `data`.
   }
 }
 ```
+
+A failure envelope contains `error` and MUST NOT contain `data`, even when the
+extra `data` value would not validate for the resolved command.
 
 ### 3.3 Partial success
 
@@ -185,13 +212,15 @@ An analysis serializes as:
         "segments": [
           {
             "text": "The text to analyze",
-            "label": "Human",
+            "label": "Human Written",
             "ai_assistance_score": 0.0,
             "confidence": "high",
             "start_index": 0,
-            "end_index": 18,
+            "end_index": 19,
             "word_count": 4,
-            "token_length": 4
+            "token_length": 4,
+            "humanizer_score": 0.0,
+            "is_humanized": false
           }
         ]
       }
@@ -310,8 +339,8 @@ Every billable submission has one closed local outcome:
 
 `acceptance_unknown` is never automatically retryable. Its error details contain
 the local analysis or bulk ID, request SHA-256, any known upstream IDs, and the
-last observed state. They contain no submitted content. Recovery text MUST warn
-that a manual retry may create a second billable operation.
+last observed state. They contain no submitted content. Its recovery object is
+exactly `{"message":"A manual retry may create a second billable operation."}`.
 
 Every timeout or handled interruption after acceptance reports the local ID,
 known upstream identifiers, and last observed state before exit. With history
@@ -320,39 +349,16 @@ not create a hidden task ledger.
 
 ## 5. AI-detection result
 
-```json
-{
-  "classification": "mixed",
-  "headline": "AI Detected",
-  "prediction": "We are confident that this document contains AI-generated or AI-assisted content.",
-  "fraction_ai": 0.7,
-  "fraction_ai_assisted": 0.2,
-  "fraction_human": 0.1,
-  "num_ai_segments": 7,
-  "num_ai_assisted_segments": 2,
-  "num_human_segments": 1,
-  "segments": [
-    {
-      "text": "The text to analyze",
-      "label": "AI-Generated",
-      "ai_assistance_score": 0.85,
-      "confidence": "high",
-      "start_index": 0,
-      "end_index": 19,
-      "word_count": 4,
-      "token_length": 5
-    }
-  ],
-  "dashboard_link": "https://www.pangram.com/history/example"
-}
-```
-
+The complete result shape appears in the analysis example in section 4.
 Closed `classification` values:
 
 - `ai`
-- `ai_assisted`
 - `human`
 - `mixed`
+
+The classification maps Pangram 4's `prediction_short` values. AI-assisted
+evidence remains in fractions, segment counts, and segment labels; it is not a
+fourth document classification.
 
 Closed `confidence` values:
 
@@ -363,9 +369,12 @@ Closed `confidence` values:
 `label` is provider-authored descriptive text and is intentionally open. It is
 not used as a state discriminator.
 
-`start_index` and `end_index` preserve Pangram values. Their inclusivity and
-character-unit semantics are upstream-defined until live conformance documents
-them. Rust code MUST NOT use them directly as UTF-8 byte indices.
+`humanizer_score` is Pangram 4's estimate from 0.0 through 1.0 that a humanizer
+modified the segment. `is_humanized` preserves Pangram's thresholded decision.
+The client MUST NOT derive it from a local threshold. `start_index` and
+`end_index` preserve zero-based, half-open upstream character offsets. Pangram
+does not define the character unit precisely enough to use them as UTF-8 byte
+indices.
 
 `dashboard_link` appears only when the request explicitly asked Pangram to
 create one.
@@ -402,7 +411,7 @@ user confirmation.
 ```json
 {
   "provider": "pangram",
-  "api_version": "3.3",
+  "upstream_version": "4",
   "upstream_task_ids": ["task-123"],
   "upstream_bulk_id": "blk-123",
   "submitted_at": "2026-07-23T12:00:00Z",
@@ -411,7 +420,8 @@ user confirmation.
 ```
 
 Only applicable fields appear. `provider` is the closed value `pangram` in
-schema major 1.
+schema major 1. `upstream_version` preserves Pangram's top-level `version`
+value without claiming it identifies only an API or only a model.
 
 ## 8. Lineage
 
@@ -485,10 +495,11 @@ succeeded + failed = total_items
 ```
 
 `updated_at` is required and changes whenever counters or state change.
-Billable units use Pangram's documented rule of one started 1,000-word block
-per valid item, with a minimum of one per item. Because Pangram does not publish
-its tokenizer, local values are named `estimated_billable_units` and MUST NOT
-be presented as an exact charge.
+`estimated_billable_units` records the estimate calculated under the
+documented billing rule for the selected Pangram operation. Pangram has not
+published a Pangram 4 bulk rule or confirmed the earlier 1,000-unit maximum.
+Bulk remains blocked until then. Estimates MUST NOT be presented as exact
+charges.
 
 Bulk timestamps from Pangram are Unix epoch seconds encoded as strings. The
 normalizer converts them to RFC 3339 UTC.
@@ -646,8 +657,8 @@ GLOBAL:
   --data-dir PATH
   --error-format json|text
   --no-color
-  --version
-  --help
+  -V, --version
+  -h, --help
 ```
 
 Resolution:
@@ -701,6 +712,16 @@ Rules:
 - timeout stops waiting, not upstream work
 - `--max-billable-units` rejects a locally estimated request above the ceiling
   before submission; MCP billable tools require the same field
+- text detection estimates one billable unit per started 100-word block, with
+  a minimum of one
+
+Pangram 4 is the only production text model. The CLI has no model-selection
+flag. The analysis module MUST send Pangram's documented Pangram 4 selector
+and MUST NOT rely on the temporary Pangram 3 default. Submission remains
+blocked until Pangram publishes that field.
+
+There is no image-detection command, schema, or MCP tool. Invitation-only
+preview access does not qualify as a public documented API contract.
 
 ### 14.3 Bulk
 
@@ -771,41 +792,17 @@ process listings and shell history.
 ### 14.7 MCP
 
 ```text
-pangram mcp
-  [--history]
-  [--allow-history-mutations]
-  [--allow-config-mutations]
-  [--allow-public-links]
-
-pangram mcp install
-  [--target CLIENT]...
-  [--all]
-  [--server-name NAME]
-  [--dry-run]
-
-pangram mcp uninstall
-  [--target CLIENT]...
-  [--all]
-  [--server-name NAME]
-  [--dry-run]
-
+pangram mcp [--history] [--allow-history-mutations]
+  [--allow-config-mutations] [--allow-public-links]
+  [--allow-file-root PATH]...
+pangram mcp install [--target CLIENT]... [--all] [--server-name NAME] [--dry-run]
+pangram mcp uninstall [--target CLIENT]... [--all] [--server-name NAME] [--dry-run]
 pangram mcp status [--format json|pretty]
 ```
 
-Clients:
-
-- `claude-code`
-- `claude-desktop`
-- `codex`
-- `cursor`
-- `vscode`
-- `windsurf`
-- `gemini`
-- `opencode`
-- `cline`
-- `roo-code`
-- `droid`
-- `antigravity`
+Clients are `claude-code`, `claude-desktop`, `codex`, `cursor`, `vscode`,
+`windsurf`, `gemini`, `opencode`, `cline`, `roo-code`, `droid`, and
+`antigravity`.
 
 Default server name is `pangram`.
 

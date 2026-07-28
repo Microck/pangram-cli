@@ -6,6 +6,20 @@ Transport: stdio
 This file is the contract owner for the MCP interface. Input schemas set
 `additionalProperties: false`.
 
+## Protocol
+
+The server implements MCP `2026-07-28` over stdio. It supports
+`server/discover` and requires the protocol version and client capabilities in
+request `_meta`. It does not implement the removed
+`initialize`/`notifications/initialized` lifecycle or negotiate an older
+protocol version.
+
+All results include `resultType`. Ordinary success and tool execution failure
+use `resultType: "complete"`. List and resource-read results use `ttlMs: 0` and
+`cacheScope: "private"`; list ordering is deterministic. The v1 server does not
+open a subscription stream because its tool and resource inventories are
+immutable for the server lifetime.
+
 ## Analysis tools
 
 | Tool | Required input | Optional input |
@@ -15,12 +29,15 @@ This file is the contract owner for the MCP interface. Input schemas set
 | `check_plagiarism` | `text`, `max_billable_units` | `save`, `include_input` |
 | `analyze_text` | `text`, `max_billable_units` | `save`, `public_link`, `include_input` |
 
-`paths` is a non-empty array of filesystem paths inside current MCP roots.
-Every billable text tool requires positive `max_billable_units`. The server
-estimates locally and rejects the call before submission when the estimate is
-above the ceiling. Binary file cost remains `unknown` until Pangram publishes
-an authoritative rule; a binary file call additionally requires
-`confirm_unknown_cost: true`.
+`paths` is a non-empty array of absolute filesystem paths inside directories
+approved with `--allow-file-root`. The server selects the matching pre-opened
+root and opens only the relative path beneath that handle. Every billable text
+tool requires positive `max_billable_units`. The server estimates locally and
+rejects the call before submission when the estimate is above the ceiling.
+Pangram 4 text estimates use one unit per started 100-word block, with a
+minimum of one.
+Binary file cost remains `unknown` until Pangram publishes an authoritative
+rule; a binary file call additionally requires `confirm_unknown_cost: true`.
 
 ## Task tools
 
@@ -38,24 +55,29 @@ or:
 
 `wait_task` optionally accepts positive `timeout_ms`.
 
-Task-augmented tool calls use the MCP 2025-11-25 Task object without a
-Pangram-specific wrapper. The generated contract is
-[`mcp-task.schema.json`](../contracts/mcp-task.schema.json). `tasks/result`
-returns the same `CallToolResult` that a non-task call would return.
+These are ordinary Pangram tools, not the experimental
+`io.modelcontextprotocol/tasks` extension. The server does not expose
+`tasks/get`, `tasks/update`, or `tasks/cancel`, and it does not generate or own
+an MCP Task schema.
 
-MCP cancellation stops local observation only. It transitions the MCP task to
-`cancelled` and does not claim to cancel Pangram work. When known, the final
-status message identifies the local analysis and upstream task without
-including submitted content.
+JSON-RPC cancellation of an active call stops local observation only and does
+not claim to cancel Pangram work. When known, the cancellation diagnostic
+identifies the local analysis and upstream task without including submitted
+content.
 
 ## Bulk tools
 
 `submit_bulk` requires:
 
 - exactly one of `items` or `jsonl_path`
-- positive `max_billable_units`, at most 1,000
+- positive `max_billable_units`
 
 Optional fields are `public_link` and `save`.
+
+The server does not advertise `submit_bulk` until Pangram documents Pangram 4
+bulk selection, billing units, and the current request ceiling. The input
+schema must encode the documented ceiling once known; it must not preserve the
+Pangram 3-era 1,000-unit maximum as a fallback.
 
 `get_bulk` and `wait_bulk` require exactly one of local `bulk_id` or
 `upstream_bulk_id`. `wait_bulk` optionally accepts `timeout_ms`.
@@ -133,30 +155,32 @@ Each tool maps to one canonical command:
 
 Successful tools return:
 
+- `resultType: "complete"`
 - exactly one schema-valid canonical command success envelope in
   `structuredContent`
 - a concise text summary in text content
 
 Malformed arguments use MCP validation errors. Domain failures return
-`isError: true` and exactly one canonical command failure envelope in
-`structuredContent`. `structuredContent` never contains a bare analysis or bare
-error object. Generated per-tool output schemas constrain the command constant
-and corresponding `data` root.
+`isError: true`, `resultType: "complete"`, and exactly one canonical command
+failure envelope in `structuredContent`. `structuredContent` never contains a
+bare analysis or bare error object. Generated per-tool output schemas constrain
+the command constant and corresponding `data` root.
 
-For a failed task-augmented call, the MCP task reaches `failed`; `tasks/result`
-returns the same `isError: true` tool result.
+## File roots and file opening
 
-## Roots and file opening
+Capability flags and approved file roots are immutable for the server lifetime.
+`--allow-file-root PATH` is repeatable. Each value must be an absolute, existing
+directory. The server fails startup before reading JSON-RPC messages when it
+cannot validate and pre-open every configured root with the required
+permissions and no-follow guarantees.
 
-Capability flags are immutable for the server lifetime. Roots are not a
-startup capability. The server maintains a versioned snapshot obtained through
-the MCP roots protocol and refreshes it on the protocol's root-change event.
-Each tool invocation captures one immutable snapshot for its full duration.
+With no configured roots, the server omits `detect_files`. Installers never add
+file roots automatically.
 
-The server pre-opens approved root directories. File access is root-relative
-and handle-based, rejects symlinks and reparse-point traversal, and verifies the
-opened object rather than a pathname checked earlier. A path is never
-authorized by canonicalizing a string and reopening it later.
+File access is root-relative and handle-based, rejects symlinks and
+reparse-point traversal, and verifies the opened object rather than a pathname
+checked earlier. A path is never authorized by canonicalizing a string and
+reopening it later.
 
 ## Resources
 

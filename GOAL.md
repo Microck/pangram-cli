@@ -1,6 +1,6 @@
 # Pangram CLI completion goal
 
-Status: planning
+Status: implementation
 Destination: public v1
 Created: 2026-07-23
 
@@ -221,9 +221,9 @@ Allowed once implementation starts:
 - push verified semantic implementation bookmarks
 - open, update, review, and merge implementation pull requests
 - trigger CodeRabbit, Greptile, and Codex review, then fix valid findings
-- use securely supplied Pangram test credentials for at most 10 free-tier
-  credits across the complete live-conformance run, with at most one credit per
-  scenario and no automatic billable retry
+- use securely supplied Pangram test credentials for at most 10 current
+  Pangram billable units across the complete live-conformance run, with at
+  most one unit per scenario and no automatic billable retry
 
 Requires explicit authority:
 
@@ -243,6 +243,9 @@ Requires explicit authority:
 - The product, command, output, persistence, update, documentation, release,
   and architecture contracts have completed their pre-Phase-0 correction pass.
 - File and plagiarism response shapes need live confirmation.
+- Pangram 4 is the only intended text model. Its published model card defines
+  result semantics, but the public REST reference does not yet document the
+  model-selection request field or updated bulk billing contract.
 - The intro behavior is locked. The agent owns its initial visual baseline and
   autonomous acceptance. The user reviews the quality of the final product,
   not individual baseline snapshots.
@@ -250,15 +253,19 @@ Requires explicit authority:
   harness. It does not ship with Pangram CLI and does not create a semantic UI
   adapter.
 - Public API and logo use require written Pangram permission.
-- Live conformance may use at most 10 free-tier credits across securely
-  supplied test keys. Credentials MUST NOT appear in chat, repository files,
-  logs, fixtures, diagnostics, or retained command output.
+- Live conformance may use at most 10 current Pangram billable units across
+  securely supplied test keys. Credentials MUST NOT appear in chat, repository
+  files, logs, fixtures, diagnostics, or retained command output.
 - Live credentials are supplied to the conformance harness at runtime from a
   private operator-controlled source.
 
 ### Known unknowns
 
 1. What is the SHA-256 and provenance of the replacement fox source geometry?
+2. Which stable RMCP 3 release and resulting minimum Rust version are current
+   when Phase 6 begins?
+3. What exact documented request field selects Pangram 4?
+4. What billing unit and request ceiling apply to Pangram 4 bulk work?
 
 ### Unknown knowns
 
@@ -299,6 +306,16 @@ behavior enters this queue before implementation continues through that seam.
 - 2026-07-28: The roadmap's final loopback detection slice is treated as a
   Phase 0-through-2 milestone. Phase 0 retains its explicit network-free exit
   criterion.
+- 2026-07-28: Phase 0 transfer review found that the baseline seed output
+  schema did not reserve `data` and `error` across envelope branches or require
+  the canonical duplicate-billing recovery warning. Preserving those defects
+  for literal seed equivalence would violate the observable contract. They
+  were corrected before ownership transfer completed and are covered by
+  current-only regressions.
+- 2026-07-29: Pangram 4 launched before its public REST reference and SDK
+  documented the selection field and updated bulk billing contract. Pangram
+  CLI now targets Pangram 4 only and blocks text and bulk submission rather
+  than relying on Pangram 3 default routing or old billing assumptions.
 
 ## Progress log
 
@@ -323,6 +340,13 @@ behavior enters this queue before implementation continues through that seam.
 - 2026-07-23: Assigned initial TUI and intro baseline selection to the agent.
   The user may choose a concept direction and reviews only final product
   quality.
+- 2026-07-29: Adopted Pangram 4 as the only production text model. Added its
+  humanizer evidence and segment-offset semantics to the canonical result
+  contract, and changed text estimates to one billable unit per started 100
+  words.
+- 2026-07-29: Deferred image detection until Pangram publishes and generally
+  opens a documented Image API. Invitation-only preview access, private
+  dashboard routes, and compatibility code remain out of scope.
 - 2026-07-23: Locked the TUI direction to Concept B's three-area information
   architecture with Concept C's restrained chrome and command bar.
 - 2026-07-27: Locked production publication to one explicit authorization for
@@ -335,6 +359,17 @@ behavior enters this queue before implementation continues through that seam.
 - 2026-07-28: Revalidated the Rust toolchain and Phase 0 dependency baseline.
   Current stable is Rust 1.97.1, and the lowest selected direct-dependency MSRV
   remains Rust 1.85.
+- 2026-07-28: Retargeted the planned stdio server to MCP 2026-07-28 before MCP
+  implementation began. File access now requires explicit startup-approved
+  roots, the removed initialization lifecycle has no compatibility path, and
+  the experimental Tasks extension remains out of v1.
+- 2026-07-28: Phase 0 passed its local exit gates. The compiled binary exposes
+  only help and version, the Rust-owned generator reproduces the committed
+  contract set, and a shared transfer corpus passes against every baseline seed
+  and generated schema. Current-only regressions record the two documented
+  contract-first seed corrections. Formatting, strict Clippy, Rust 1.85
+  compatibility, repository hygiene, dependency audit, license policy, secret
+  scanning, and workflow linting are green.
 
 ## Out of scope
 
@@ -349,3 +384,4 @@ v1 excludes:
 - endpoint overrides or insecure TLS
 - pre-release compatibility shims
 - copied Droid code, frames, or artwork
+- invitation-only Pangram Image API integration

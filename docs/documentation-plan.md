@@ -86,7 +86,7 @@ Home
 |   |-- Export and rerun results
 |   |-- Use JSON, JSONL, TOON, and Markdown
 |   |-- Configure MCP clients
-|   |-- Gate MCP history and mutations
+|   |-- Gate MCP capabilities and file access
 |   |-- Generate shell completions
 |   |-- Check and install updates
 |   `-- Uninstall Pangram MCP entries
@@ -142,7 +142,8 @@ Audience: agent operator
 Goal: install the default server and complete one `detect_text` call
 Scope: persistent auth, installer dry run, one supported client, billing
 annotation, result identity
-Exclude: mutations, history, files, bulk, all-client matrix
+Exclude: mutations, history, file-root configuration, files, bulk, all-client
+matrix
 
 ## 6. How-to guides
 
@@ -169,7 +170,8 @@ Generated:
 - command tree, arguments, defaults, and incompatibilities
 - output and progress JSON Schemas
 - errors and exit codes
-- MCP tools, inputs, annotations, and capability gates
+- MCP protocol version, tools, inputs, annotations, cache metadata, and
+  capability gates
 - configuration fields and environment precedence
 - TUI keymaps
 - update manifest

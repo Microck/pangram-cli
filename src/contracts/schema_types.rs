@@ -1,0 +1,193 @@
+//! Private types which own the shapes of generated contract artifacts.
+
+#![allow(dead_code)]
+
+use schemars::JsonSchema;
+
+use crate::domain::{
+    Analysis, AnalysisPage, BulkCollection, BulkPage, SubmissionOutcomeUnknownDetails,
+};
+use crate::output::{
+    AuthStatus, CanonicalError, ConfigGetStatus, ConfigListStatus, ConfigPathStatus, DoctorStatus,
+    EnvelopeMeta, McpStatus, MutationAcknowledgement, UpdateStatus,
+};
+
+/// A Schemars-only registry which causes every output type to share one `$defs`.
+#[derive(JsonSchema)]
+#[allow(clippy::large_enum_variant)]
+pub(super) enum OutputRegistry {
+    Analysis(Analysis<CanonicalError>),
+    BulkCollection(BulkCollection),
+    BulkPage(BulkPage<CanonicalError>),
+    AnalysisPage(AnalysisPage<CanonicalError>),
+    Mutation(MutationAcknowledgement),
+    Auth(AuthStatus),
+    ConfigList(ConfigListStatus),
+    ConfigGet(ConfigGetStatus),
+    ConfigPath(ConfigPathStatus),
+    Doctor(DoctorStatus),
+    Mcp(McpStatus),
+    Update(UpdateStatus),
+    Error(CanonicalError),
+    Meta(EnvelopeMeta),
+    UnknownSubmission(SubmissionOutcomeUnknownDetails),
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Config {
+    pub config_version: u8,
+    pub history: Option<HistoryConfig>,
+    pub tui: Option<TuiConfig>,
+    pub updates: Option<UpdatesConfig>,
+    pub network: Option<NetworkConfig>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HistoryConfig {
+    #[schemars(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TuiConfig {
+    pub intro: Option<IntroMode>,
+    pub keymap: Option<Keymap>,
+    pub motion: Option<Motion>,
+}
+
+#[derive(JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum IntroMode {
+    Once,
+    Always,
+    Off,
+}
+
+#[derive(JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Keymap {
+    Regular,
+    Vim,
+}
+
+#[derive(JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Motion {
+    Full,
+    Reduced,
+    Off,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UpdatesConfig {
+    pub check_on_tui_start: Option<bool>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NetworkConfig {
+    #[schemars(range(min = 0.0, max = 5.0))]
+    pub max_requests_per_second: Option<f64>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TuiState {
+    pub schema_version: String,
+    pub intro_seen: bool,
+}
+
+#[derive(JsonSchema)]
+pub(super) enum Target {
+    #[serde(rename = "x86_64-unknown-linux-gnu")]
+    X86_64UnknownLinuxGnu,
+    #[serde(rename = "aarch64-unknown-linux-gnu")]
+    Aarch64UnknownLinuxGnu,
+    #[serde(rename = "x86_64-apple-darwin")]
+    X86_64AppleDarwin,
+    #[serde(rename = "aarch64-apple-darwin")]
+    Aarch64AppleDarwin,
+    #[serde(rename = "x86_64-pc-windows-msvc")]
+    X86_64PcWindowsMsvc,
+}
+
+#[derive(JsonSchema)]
+pub(super) enum ArchiveFormat {
+    #[serde(rename = "tar.xz")]
+    TarXz,
+    #[serde(rename = "zip")]
+    Zip,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UpdateArtifact {
+    pub target: Target,
+    pub archive_format: ArchiveFormat,
+    #[schemars(url, regex(pattern = r"^https://"))]
+    pub url: String,
+    #[schemars(range(min = 1))]
+    pub size_bytes: u64,
+    #[schemars(range(min = 1))]
+    pub executable_size_bytes: u64,
+    #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
+    pub sha256: String,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UpdateManifest {
+    pub schema_version: String,
+    pub channel: String,
+    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
+    pub version: String,
+    #[schemars(extend("format" = "date-time"))]
+    pub published_at: String,
+    #[schemars(url, regex(pattern = r"^https://"))]
+    pub notes_url: String,
+    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
+    pub minimum_updater_version: String,
+    #[schemars(length(min = 1))]
+    pub artifacts: Vec<UpdateArtifact>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManifestSignature {
+    pub schema_version: String,
+    pub algorithm: String,
+    #[schemars(length(min = 1))]
+    pub key_id: String,
+    pub signature: String,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UpdateState {
+    pub schema_version: String,
+    #[schemars(extend("format" = "date-time"))]
+    pub last_checked_at: String,
+    pub etag: Option<String>,
+    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
+    pub available_version: Option<String>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InstallReceipt {
+    pub schema_version: String,
+    pub method: String,
+    #[schemars(length(min = 1))]
+    pub executable_path: String,
+    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
+    pub installed_version: String,
+    pub target: Target,
+    #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
+    pub manifest_sha256: String,
+    #[schemars(extend("format" = "date-time"))]
+    pub installed_at: String,
+}

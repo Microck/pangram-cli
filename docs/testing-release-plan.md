@@ -55,8 +55,10 @@ Test:
 Use property tests for:
 
 - any terminal child-state combination derives the documented parent state
-- billable units equal the sum of started 1,000-word blocks with one minimum
-  unit per valid item
+- Pangram 4 text billable units equal one started 100-word block with a minimum
+  of one
+- bulk billing properties remain disabled until Pangram documents the Pangram
+  4 unit and request ceiling
 - pagination visits each item once in order
 - accepted UUIDv7 IDs round-trip
 - malformed IDs do not parse
@@ -88,6 +90,7 @@ Fixture scenarios:
 - malformed JSON
 - missing required fields
 - unknown stage, classification, and confidence
+- missing or invalid Pangram 4 humanizer fields
 - additive optional fields
 - duplicate and out-of-order bulk pages
 - partial bulk results
@@ -96,6 +99,11 @@ Fixture scenarios:
 
 Tests assert exact request method, path, header, JSON, multipart fields, and
 whether retry occurred.
+
+The text request fixture must assert Pangram's documented Pangram 4 selector.
+No fixture may encode an inferred field or accept a request that relies on
+Pangram's temporary Pangram 3 default. Bulk request fixtures remain blocked
+until Pangram publishes the Pangram 4 billing and limit contract.
 
 Ambiguous-send tests assert `submission_outcome_unknown`, `retryable: false`,
 the sanitized local operation reference, and zero automatic POST replay.
@@ -115,9 +123,10 @@ Live conformance is a manual workflow requiring:
 
 Required live gates:
 
-1. text task request and complete result
+1. Pangram 4 text task request, selected upstream version, humanizer fields,
+   and complete result
 2. text failure shape
-3. bulk submission, status, and paginated result
+3. Pangram 4 bulk submission, billed-unit behavior, status, and paginated result
 4. binary file response
 5. plagiarism result, especially `plagiarized_sentences`
 
@@ -307,10 +316,14 @@ Spawn the actual stdio MCP server.
 
 Verify:
 
-- initialization and protocol version
+- `server/discover` and protocol version `2026-07-28`
+- required protocol version, client identity, and client capabilities in
+  request `_meta`
+- rejection of the removed initialization lifecycle and older protocol versions
 - tool discovery with default capabilities
-- task support
+- ordinary `get_task` and `wait_task` tools without the Tasks extension
 - structured and text result content
+- `resultType: "complete"` on success and tool execution failure
 - canonical `isError` failures
 - billable tool annotations
 - bulk pagination
@@ -319,8 +332,9 @@ Verify:
 - no history tools by default
 - each capability gate
 - public-link rejection
-- current roots and root changes
-- root snapshot stability during one invocation
+- no file tools without `--allow-file-root`
+- absolute, existing, repeatable file-root startup validation
+- installer refusal to approve file roots automatically
 - symlink and Windows reparse-point escape
 - path replacement between authorization and open
 - handle-relative open never escapes a pre-opened root
@@ -329,8 +343,14 @@ Verify:
 - check-only update behavior
 - static resources
 - no prompts and no history resources
+- deterministic tool and resource ordering
+- `ttlMs: 0` and `cacheScope: "private"` on list and resource-read results
+- no subscription stream for immutable inventories
 - exact per-tool success and failure envelope schemas
-- MCP 2025-11-25 task states, timestamps, TTL, polling, result, and cancellation
+- absence of `io.modelcontextprotocol/tasks`, `tasks/get`, `tasks/update`, and
+  `tasks/cancel`
+- JSON-RPC cancellation stops local observation without claiming upstream
+  cancellation
 - `--allow-history-mutations` startup rejection without `--history`
 
 Run the official MCP conformance suite against the compiled server.

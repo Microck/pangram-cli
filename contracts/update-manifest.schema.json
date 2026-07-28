@@ -1,18 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pangram.micr.dev/schemas/update-manifest-v1.json",
-  "x-contract-owner": "specification-seed",
   "title": "Pangram CLI signed update manifest v1",
   "type": "object",
-  "required": [
-    "schema_version",
-    "channel",
-    "version",
-    "published_at",
-    "notes_url",
-    "minimum_updater_version",
-    "artifacts"
-  ],
   "properties": {
     "schema_version": {
       "const": "1"
@@ -40,39 +29,31 @@
     },
     "artifacts": {
       "type": "array",
-      "minItems": 1,
       "items": {
-        "$ref": "#/$defs/artifact"
-      }
+        "$ref": "#/$defs/UpdateArtifact"
+      },
+      "minItems": 1
     }
   },
   "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "channel",
+    "version",
+    "published_at",
+    "notes_url",
+    "minimum_updater_version",
+    "artifacts"
+  ],
   "$defs": {
-    "artifact": {
+    "UpdateArtifact": {
       "type": "object",
-      "required": [
-        "target",
-        "archive_format",
-        "url",
-        "size_bytes",
-        "executable_size_bytes",
-        "sha256"
-      ],
       "properties": {
         "target": {
-          "enum": [
-            "x86_64-unknown-linux-gnu",
-            "aarch64-unknown-linux-gnu",
-            "x86_64-apple-darwin",
-            "aarch64-apple-darwin",
-            "x86_64-pc-windows-msvc"
-          ]
+          "$ref": "#/$defs/Target"
         },
         "archive_format": {
-          "enum": [
-            "tar.xz",
-            "zip"
-          ]
+          "$ref": "#/$defs/ArchiveFormat"
         },
         "url": {
           "type": "string",
@@ -81,10 +62,12 @@
         },
         "size_bytes": {
           "type": "integer",
+          "format": "uint64",
           "minimum": 1
         },
         "executable_size_bytes": {
           "type": "integer",
+          "format": "uint64",
           "minimum": 1
         },
         "sha256": {
@@ -92,7 +75,34 @@
           "pattern": "^[0-9a-f]{64}$"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "archive_format",
+        "url",
+        "size_bytes",
+        "executable_size_bytes",
+        "sha256"
+      ]
+    },
+    "Target": {
+      "type": "string",
+      "enum": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc"
+      ]
+    },
+    "ArchiveFormat": {
+      "type": "string",
+      "enum": [
+        "tar.xz",
+        "zip"
+      ]
     }
-  }
+  },
+  "$id": "https://pangram.micr.dev/schemas/update-manifest-v1.json",
+  "x-contract-owner": "rust:microck_pangram_cli::contracts"
 }
