@@ -102,6 +102,23 @@ jobs:
           git status --short
           test -z "$(git status --porcelain --untracked-files=all)"
 
+  windows-credential-acl:
+    name: Windows credential ACL
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        # dtolnay/rust-toolchain master, pinned 2026-07-28
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.97.1"
+      - name: Run Windows credential ACL integration tests
+        run: cargo test --locked --test windows-credential-acl
+
   supply-chain:
     name: Supply chain
     runs-on: ubuntu-24.04
@@ -156,6 +173,7 @@ jobs:
             '  "Unicode-3.0",' \
             '  "Unlicense",' \
             '  "Zlib",' \
+            '  "MPL-2.0",' \
             ']' \
             '[licenses.private]' \
             'ignore = true' \

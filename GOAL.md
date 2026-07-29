@@ -55,7 +55,8 @@ Read these before implementation:
 7. [History contract](docs/history-contract.md)
 8. [MCP contract](docs/mcp-contract.md)
 9. [Update contract](docs/update-contract.md)
-10. [Architecture decisions](docs/adr/)
+10. [Local setup contract](docs/local-setup-contract.md)
+11. [Architecture decisions](docs/adr/)
 
 The observable contracts take precedence over implementation. A discovered
 contract flaw requires a contract-first correction, not a compatibility path
@@ -159,8 +160,8 @@ approved contracts.
 
 | Phase | Status |
 | --- | --- |
-| 0 | In progress |
-| 1 | Not started |
+| 0 | Complete |
+| 1 | Complete |
 | 2 | Not started |
 | 3 | Not started |
 | 4 | Not started |
@@ -370,6 +371,30 @@ behavior enters this queue before implementation continues through that seam.
   contract-first seed corrections. Formatting, strict Clippy, Rust 1.85
   compatibility, repository hygiene, dependency audit, license policy, secret
   scanning, and workflow linting are green.
+- 2026-07-30: Phase 1 implementation is in place. Strict configuration,
+  atomic credential persistence with Unix `0600` and owner-only protected
+  Windows ACL enforcement, the `auth`, `config`, and non-billable `doctor`
+  commands, and a `windows-latest` CI gate running the real Win32 credential
+  ACL integration tests are implemented with focused current-Rust tests green.
+  Phase 1 remains In progress until the separately delegated full validation
+  suite passes on the integrated tree.
+- 2026-07-30: Final-review remediation resolved both P1 findings
+  contract-first and test-first. `config get`/`config list` now report one
+  effective configuration: absent keys resolve to documented built-in defaults
+  (typed bool/number/string), and the pre-onboarding
+  `updates.check_on_tui_start` reports `null` rather than the never-documented
+  `(unset)` sentinel. `doctor` exits 7 (the canonical local-state code) when
+  any check is `fail` while still emitting the complete typed checks payload
+  in both JSON and pretty projections; pass/warn-only reports remain exit 0
+  and stdout render failures remain general failure 1.
+- 2026-07-30: Phase 1 final validation passed on the integrated tree:
+  formatting, strict Clippy, full current-Rust tests, generated-contract
+  drift, repository hygiene, cargo audit, cargo deny licenses+bans, gitleaks
+  secret scanning, and CI workflow structural checks were green, and the
+  Windows credential ACL integration tests were validated locally on the
+  cross-compiled target with the `windows-latest` native CI gate configured.
+  Independent review returned READY with no unresolved P0 or P1 findings, so
+  Phase 1 moves to Complete.
 
 ## Out of scope
 

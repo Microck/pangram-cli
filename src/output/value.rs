@@ -232,6 +232,15 @@ impl DoctorStatus {
     pub fn checks(&self) -> &[DoctorCheck] {
         &self.checks
     }
+
+    /// True when any ordered check reports `fail`. This drives the local-state
+    /// process exit: unhealthy local state exits 7 even though the envelope
+    /// itself is a canonical success payload.
+    pub fn has_fail(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|check| check.status() == DoctorCheckStatus::Fail)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

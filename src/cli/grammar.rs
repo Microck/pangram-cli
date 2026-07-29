@@ -249,10 +249,28 @@ const fn planned_command(
     }
 }
 
+/// A command whose compiled behavior and contract tests landed together.
+const fn available_command(
+    path: &'static [&'static str],
+    kind: CommandKind,
+    arguments: &'static [ArgumentSpec],
+    argument_groups: &'static [ArgumentGroupSpec],
+    phase: Phase,
+) -> CommandSpec {
+    CommandSpec {
+        path,
+        kind,
+        arguments,
+        argument_groups,
+        phase,
+        availability: Availability::Available,
+    }
+}
+
 #[rustfmt::skip]
 const GLOBAL_ARGUMENTS: &[ArgumentSpec] = &[
-    option("--config", "PATH", &[], false, false, Phase::LocalSetup),
-    option("--data-dir", "PATH", &[], false, false, Phase::LocalSetup),
+    option("--config", "PATH", &[], false, false, Phase::LocalSetup).available(),
+    option("--data-dir", "PATH", &[], false, false, Phase::LocalSetup).available(),
     option("--error-format", "FORMAT", &["json", "text"], false, false, Phase::TextDetection),
     flag("--no-color", Phase::TextDetection),
     flag("--version", Phase::Scaffold).with_aliases(&["-V"]).available(),
@@ -403,13 +421,13 @@ const API_KEY_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
 
 #[rustfmt::skip]
 const AUTH_SET_ARGUMENTS: &[ArgumentSpec] = &[
-    grouped_argument("--api-key", ArgumentKind::Option, Some("VALUE"), "api_key_source", Phase::LocalSetup),
-    grouped_argument("--api-key-stdin", ArgumentKind::Flag, None, "api_key_source", Phase::LocalSetup),
+    grouped_argument("--api-key", ArgumentKind::Option, Some("VALUE"), "api_key_source", Phase::LocalSetup).available(),
+    grouped_argument("--api-key-stdin", ArgumentKind::Flag, None, "api_key_source", Phase::LocalSetup).available(),
 ];
 
 #[rustfmt::skip]
 const AUTH_LOGOUT_ARGUMENTS: &[ArgumentSpec] = &[
-    flag("--yes", Phase::LocalSetup),
+    flag("--yes", Phase::LocalSetup).available(),
 ];
 
 #[rustfmt::skip]
@@ -447,18 +465,18 @@ const SKILLS_PATH_ARGUMENTS: &[ArgumentSpec] = &[
 
 #[rustfmt::skip]
 const CONFIG_GET_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("KEY", &[], true, false, Phase::LocalSetup),
+    positional("KEY", &[], true, false, Phase::LocalSetup).available(),
 ];
 
 #[rustfmt::skip]
 const CONFIG_SET_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("KEY", &[], true, false, Phase::LocalSetup),
-    positional("VALUE", &[], true, false, Phase::LocalSetup),
+    positional("KEY", &[], true, false, Phase::LocalSetup).available(),
+    positional("VALUE", &[], true, false, Phase::LocalSetup).available(),
 ];
 
 #[rustfmt::skip]
 const DOCTOR_ARGUMENTS: &[ArgumentSpec] = &[
-    option("--format", "FORMAT", &["json", "pretty"], false, false, Phase::LocalSetup),
+    option("--format", "FORMAT", &["json", "pretty"], false, false, Phase::LocalSetup).available(),
 ];
 
 #[rustfmt::skip]
@@ -510,10 +528,10 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         planned_command(&["history", "clear"], CommandKind::Command, HISTORY_CLEAR_ARGUMENTS, &[], Phase::History),
         planned_command(&["history", "export"], CommandKind::Command, HISTORY_EXPORT_ARGUMENTS, &[], Phase::History),
         planned_command(&["history", "rerun"], CommandKind::Command, HISTORY_RERUN_ARGUMENTS, &[], Phase::History),
-        planned_command(&["auth"], CommandKind::Command, &[], &[], Phase::LocalSetup),
-        planned_command(&["auth", "set"], CommandKind::Command, AUTH_SET_ARGUMENTS, API_KEY_GROUP, Phase::LocalSetup),
-        planned_command(&["auth", "status"], CommandKind::Command, &[], &[], Phase::LocalSetup),
-        planned_command(&["auth", "logout"], CommandKind::Command, AUTH_LOGOUT_ARGUMENTS, &[], Phase::LocalSetup),
+        available_command(&["auth"], CommandKind::Command, &[], &[], Phase::LocalSetup),
+        available_command(&["auth", "set"], CommandKind::Command, AUTH_SET_ARGUMENTS, API_KEY_GROUP, Phase::LocalSetup),
+        available_command(&["auth", "status"], CommandKind::Command, &[], &[], Phase::LocalSetup),
+        available_command(&["auth", "logout"], CommandKind::Command, AUTH_LOGOUT_ARGUMENTS, &[], Phase::LocalSetup),
         planned_command(&["mcp"], CommandKind::Command, MCP_ARGUMENTS, &[], Phase::McpAndAgents),
         planned_command(&["mcp", "install"], CommandKind::Command, MCP_MUTATION_ARGUMENTS, &[], Phase::McpAndAgents),
         planned_command(&["mcp", "uninstall"], CommandKind::Command, MCP_MUTATION_ARGUMENTS, &[], Phase::McpAndAgents),
@@ -523,12 +541,12 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         planned_command(&["skills", "list"], CommandKind::Command, &[], &[], Phase::McpAndAgents),
         planned_command(&["skills", "get"], CommandKind::Command, SKILLS_GET_ARGUMENTS, &[], Phase::McpAndAgents),
         planned_command(&["skills", "path"], CommandKind::Command, SKILLS_PATH_ARGUMENTS, &[], Phase::McpAndAgents),
-        planned_command(&["config"], CommandKind::Namespace, &[], &[], Phase::LocalSetup),
-        planned_command(&["config", "list"], CommandKind::Command, &[], &[], Phase::LocalSetup),
-        planned_command(&["config", "get"], CommandKind::Command, CONFIG_GET_ARGUMENTS, &[], Phase::LocalSetup),
-        planned_command(&["config", "set"], CommandKind::Command, CONFIG_SET_ARGUMENTS, &[], Phase::LocalSetup),
-        planned_command(&["config", "path"], CommandKind::Command, &[], &[], Phase::LocalSetup),
-        planned_command(&["doctor"], CommandKind::Command, DOCTOR_ARGUMENTS, &[], Phase::LocalSetup),
+        available_command(&["config"], CommandKind::Namespace, &[], &[], Phase::LocalSetup),
+        available_command(&["config", "list"], CommandKind::Command, &[], &[], Phase::LocalSetup),
+        available_command(&["config", "get"], CommandKind::Command, CONFIG_GET_ARGUMENTS, &[], Phase::LocalSetup),
+        available_command(&["config", "set"], CommandKind::Command, CONFIG_SET_ARGUMENTS, &[], Phase::LocalSetup),
+        available_command(&["config", "path"], CommandKind::Command, &[], &[], Phase::LocalSetup),
+        available_command(&["doctor"], CommandKind::Command, DOCTOR_ARGUMENTS, &[], Phase::LocalSetup),
         planned_command(&["completions"], CommandKind::Command, COMPLETIONS_ARGUMENTS, &[], Phase::DistributionAndUpdate),
         planned_command(&["update"], CommandKind::Command, UPDATE_ARGUMENTS, UPDATE_MODE_GROUP, Phase::DistributionAndUpdate),
     ],
