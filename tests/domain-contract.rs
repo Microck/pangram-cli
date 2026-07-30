@@ -454,6 +454,33 @@ fn bulk_collection_status_matches_exact_terminal_counters() {
 }
 
 #[test]
+fn bulk_counters_allow_finished_to_exceed_accepted_for_rejected_items() {
+    // `failed` includes immediate upstream rejection, so a rejected item counts
+    // toward `failed` without entering `accepted`. The documented contracts.md
+    // section 9 example (`total_items = 3`, `accepted = 2`, `succeeded = 2`,
+    // `failed = 1`) is terminal and valid even though `succeeded + failed = 3`
+    // exceeds `accepted = 2` (PR #14 disputed counter).
+    let counters = BulkCounters::new(3, 2, 2, 1).unwrap();
+    assert!(counters.is_terminal());
+    assert!(
+        bulk_collection(
+            AnalysisStatus::Partial,
+            SubmissionOutcome::Terminal,
+            None,
+            counters,
+        )
+        .is_ok()
+    );
+
+    // The constructor still rejects impossible progress: an item cannot succeed
+    // without being accepted first.
+    assert!(BulkCounters::new(3, 2, 3, 0).is_err());
+    // Cross-field bounds are constructor-owned, not schema keywords.
+    assert!(BulkCounters::new(3, 4, 0, 0).is_err());
+    assert!(BulkCounters::new(3, 2, 2, 2).is_err());
+}
+
+#[test]
 fn accepted_bulk_collections_require_an_upstream_bulk_id() {
     let counters = BulkCounters::new(2, 1, 0, 0).unwrap();
     assert!(

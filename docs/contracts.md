@@ -246,6 +246,10 @@ Closed values:
 - `failed`
 - `partial`
 
+The parent status derives from its checks; a disagreeing status is invalid. In
+precedence order: any `running` check, then any `queued` check, then all
+`succeeded`, then all `failed`, else (mixed succeeded and failed) `partial`.
+
 ### 4.2 Save state
 
 Closed values:
@@ -487,12 +491,30 @@ items contain `analysis` and no `error`. Failed items contain `error` and no
 `total_items` is the locally validated input count. `accepted` is the count for
 which Pangram returned an accepted item and upstream task ID. `failed` includes
 immediate upstream rejection and terminal analysis failure, not local
-whole-request validation failures. At terminal state:
+whole-request validation failures. A rejected item counts in `failed` without
+entering `accepted`, so `succeeded + failed` may exceed `accepted`; the
+committed example (`accepted: 2`, `succeeded: 2`, `failed: 1`) is valid. The
+only counter bounds are `accepted <= total_items`, `succeeded <= accepted`,
+and `succeeded + failed <= total_items`. At terminal state:
 
 ```text
 accepted <= total_items
 succeeded + failed = total_items
 ```
+
+The collection `status` agrees with its counters; a disagreeing status is
+invalid. `queued` and `running` are not terminal (`succeeded + failed <
+total_items`). `succeeded` requires `succeeded = total_items` and `failed = 0`;
+`failed` requires `failed = total_items` and `succeeded = 0`; `partial`
+requires a terminal count with both `succeeded > 0` and `failed > 0`.
+
+`output.schema.json` encodes the status-driven counter relations Draft 2020-12
+can express (a `succeeded` collection has `failed: 0` and a positive
+`succeeded`). No standard Draft 2020-12 keyword expresses the cross-field
+arithmetic bounds or the exact terminal equation over unbounded integers, so
+the canonical `BulkCounters` and `BulkCollection` constructors remain
+authoritative for them, exactly as the update contract leaves non-expressible
+manifest invariants to the Rust verifier.
 
 `updated_at` is required and changes whenever counters or state change.
 `estimated_billable_units` records the estimate calculated under the

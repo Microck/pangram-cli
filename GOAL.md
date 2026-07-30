@@ -229,8 +229,8 @@ Requires explicit authority:
 
 - close, delete, or otherwise mutate standalone GitHub issues
 - create or mutate pull requests unrelated to this implementation goal
-- purchase Pangram credits, enable auto-refill, or exceed the 10-credit
-  live-conformance ceiling
+- purchase Pangram billable units, enable auto-refill, or exceed the
+  10-billable-unit live-conformance ceiling
 - publish packages or formulas
 - deploy production documentation
 - create releases or tags
@@ -330,9 +330,9 @@ behavior enters this queue before implementation continues through that seam.
   CodeRabbit, Greptile, and Codex review loops, fixes, and autonomous merge to
   the default branch after all gates pass. This authority ends at the merged
   release candidate.
-- 2026-07-23: Authorized at most 10 free-tier Pangram credits for live
-  conformance, with one credit per scenario and no automatic billable retry.
-  Credentials pasted into chat are treated as compromised and require
+- 2026-07-23: Authorized at most 10 free-tier Pangram billable units for live
+  conformance, with one billable unit per scenario and no automatic billable
+  retry. Credentials pasted into chat are treated as compromised and require
   replacement through secure local secret injection before use.
 - 2026-07-23: Locked Terminal Control 0.6.0 as the development-only autonomous
   TUI acceptance harness. Ratatui snapshots and native PTY tests remain the

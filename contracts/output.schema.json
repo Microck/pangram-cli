@@ -83,6 +83,277 @@
       },
       "allOf": [
         {
+          "type": "object"
+        },
+        {
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "running"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "contains": {
+                      "properties": {
+                        "status": {
+                          "const": "running"
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "queued"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "status": {
+                              "const": "queued"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "succeeded"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "queued"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "items": {
+                          "properties": {
+                            "status": {
+                              "enum": [
+                                "succeeded"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "failed"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "queued"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "items": {
+                          "properties": {
+                            "status": {
+                              "enum": [
+                                "failed"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "partial"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "queued"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "status": {
+                              "const": "succeeded"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "status": {
+                              "const": "failed"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
           "if": {
             "properties": {
               "submission_outcome": {
@@ -1401,6 +1672,72 @@
         "updated_at"
       ],
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "succeeded"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failed": {
+                "const": 0
+              },
+              "succeeded": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "succeeded": {
+                "const": 0
+              },
+              "failed": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "succeeded": {
+                "minimum": 1
+              },
+              "failed": {
+                "minimum": 1
+              }
+            }
+          }
+        },
         {
           "if": {
             "properties": {

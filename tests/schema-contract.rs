@@ -107,6 +107,8 @@ fn canonical_error(code: &str, category: &str, retryable: bool) -> Value {
 
 #[test]
 fn output_schema_preserves_envelope_and_domain_invariants() {
+    // One running check makes the parent running regardless of the other
+    // check.
     let mut both_checks = analysis("running");
     both_checks["checks"] = json!([
         {"kind": "ai_detection", "status": "running"},
@@ -115,6 +117,26 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
 
     let mut reversed_checks = both_checks.clone();
     reversed_checks["checks"].as_array_mut().unwrap().reverse();
+
+    // With no running or queued check, a mixed succeeded/failed parent is
+    // partial (the AI-detection result is well-formed; only the leading kind
+    // is mislabeled, so the AI-first ordering invariant rejects it).
+    let mut partial_two_checks = analysis("running");
+    partial_two_checks["status"] = json!("partial");
+    partial_two_checks["submission_outcome"] = json!("accepted");
+    partial_two_checks["checks"] = json!([
+        {
+            "kind": "ai_detection",
+            "status": "succeeded",
+            "upstream": {"task_id": "task-123", "last_stage": "STAGE_SUCCESS"},
+            "result": analysis("succeeded")["checks"][0]["result"].clone()
+        },
+        {
+            "kind": "plagiarism",
+            "status": "failed",
+            "error": canonical_error("upstream_analysis_failed", "upstream", false)
+        }
+    ]);
 
     let mut offset_timestamp = analysis("queued");
     offset_timestamp["created_at"] = json!("2026-07-23T13:00:00+01:00");
@@ -136,6 +158,41 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
         .as_object_mut()
         .unwrap()
         .remove("result");
+
+    // Parent-status derivation from contracts.md section 4.1: a declared
+    // parent status must agree with the checks it summarizes.
+    let mut succeeded_parent_with_running_check = analysis("succeeded");
+    succeeded_parent_with_running_check["checks"][0]["status"] = json!("running");
+    succeeded_parent_with_running_check["checks"][0]["upstream"]
+        .as_object_mut()
+        .unwrap()
+        .remove("last_stage");
+    succeeded_parent_with_running_check["checks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("result");
+
+    let mut running_parent_with_terminal_checks = analysis("running");
+    running_parent_with_terminal_checks["checks"] = json!([
+        {
+            "kind": "ai_detection",
+            "status": "succeeded",
+            "upstream": {"task_id": "task-123", "last_stage": "STAGE_SUCCESS"},
+            "result": analysis("succeeded")["checks"][0]["result"].clone()
+        },
+        {
+            "kind": "plagiarism",
+            "status": "failed",
+            "error": canonical_error("upstream_analysis_failed", "upstream", false)
+        }
+    ]);
+
+    // A queued check makes the parent queued, never running.
+    let mut running_parent_with_queued_checks = analysis("running");
+    running_parent_with_queued_checks["checks"] = json!([
+        {"kind": "plagiarism", "status": "queued"},
+        {"kind": "ai_detection", "status": "queued"}
+    ]);
 
     let mut explicit_null = analysis("succeeded");
     explicit_null["completed_at"] = Value::Null;
@@ -214,6 +271,50 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
     let mut not_submitted_bulk_with_failed_item = not_submitted_bulk.clone();
     not_submitted_bulk_with_failed_item["failed"] = json!(1);
 
+    // A `succeeded` collection must not carry failures and must record at
+    // least one succeeded item; the base running fixture has both terminal
+    // counters at zero.
+    let mut terminal_succeeded_bulk_with_unfinished_items = bulk_collection();
+    terminal_succeeded_bulk_with_unfinished_items["status"] = json!("succeeded");
+
+    let mut succeeded_bulk_with_failures = bulk_collection();
+    succeeded_bulk_with_failures["status"] = json!("succeeded");
+    succeeded_bulk_with_failures["submission_outcome"] = json!("terminal");
+    succeeded_bulk_with_failures["succeeded"] = json!(1);
+    succeeded_bulk_with_failures["failed"] = json!(1);
+    succeeded_bulk_with_failures["total_items"] = json!(2);
+    succeeded_bulk_with_failures["accepted"] = json!(2);
+
+    let mut failed_bulk_with_successes = bulk_collection();
+    failed_bulk_with_successes["status"] = json!("failed");
+    failed_bulk_with_successes["submission_outcome"] = json!("terminal");
+    failed_bulk_with_successes["succeeded"] = json!(1);
+    failed_bulk_with_successes["failed"] = json!(1);
+    failed_bulk_with_successes["total_items"] = json!(2);
+    failed_bulk_with_successes["accepted"] = json!(2);
+
+    let mut partial_bulk_with_unfinished_items = bulk_collection();
+    partial_bulk_with_unfinished_items["status"] = json!("partial");
+
+    // A `partial` collection requires both outcomes, so `failed: 0` is invalid
+    // even when the counters otherwise remain terminal and consistent.
+    let mut partial_bulk_without_failures = bulk_collection();
+    partial_bulk_without_failures["status"] = json!("partial");
+    partial_bulk_without_failures["submission_outcome"] = json!("terminal");
+    partial_bulk_without_failures["succeeded"] = json!(1);
+    partial_bulk_without_failures["failed"] = json!(0);
+    partial_bulk_without_failures["total_items"] = json!(1);
+    partial_bulk_without_failures["accepted"] = json!(1);
+
+    let mut partial_bulk_may_finish_beyond_accepted = bulk_collection();
+    partial_bulk_may_finish_beyond_accepted["status"] = json!("partial");
+    partial_bulk_may_finish_beyond_accepted["submission_outcome"] = json!("terminal");
+    partial_bulk_may_finish_beyond_accepted["total_items"] = json!(3);
+    partial_bulk_may_finish_beyond_accepted["accepted"] = json!(2);
+    partial_bulk_may_finish_beyond_accepted["succeeded"] = json!(2);
+    partial_bulk_may_finish_beyond_accepted["failed"] = json!(1);
+    partial_bulk_may_finish_beyond_accepted["completed_at"] = json!("2026-07-23T12:00:30Z");
+
     let mut both_data_and_error = success("detect", analysis("running"));
     both_data_and_error["error"] = canonical_error("missing_api_key", "authentication", false);
 
@@ -273,8 +374,28 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
                 valid: true,
             },
             Case {
+                name: "partial parents allow mixed succeeded and failed checks",
+                instance: success("analyze", partial_two_checks),
+                valid: true,
+            },
+            Case {
                 name: "reversed checks are rejected",
                 instance: success("analyze", reversed_checks),
+                valid: false,
+            },
+            Case {
+                name: "a succeeded parent cannot contain a running check",
+                instance: success("detect", succeeded_parent_with_running_check),
+                valid: false,
+            },
+            Case {
+                name: "a running parent cannot contain only terminal checks",
+                instance: success("analyze", running_parent_with_terminal_checks),
+                valid: false,
+            },
+            Case {
+                name: "a running parent cannot contain only finished checks",
+                instance: success("detect", running_parent_with_queued_checks),
                 valid: false,
             },
             Case {
@@ -354,6 +475,47 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
                 name: "bulk collections require positive estimated units",
                 instance: success("bulk_status", zero_billable_units),
                 valid: false,
+            },
+            // The cross-field arithmetic bounds (accepted <= total_items,
+            // succeeded <= accepted, succeeded + failed <= total_items) and the
+            // exact terminal equation compare or sum distinct integer fields.
+            // Draft 2020-12 has no keyword for that over unbounded integers, so
+            // the canonical `BulkCounters`/`BulkCollection` constructor remains
+            // authoritative for them; they are proven in the domain-contract
+            // counter and terminal-status regressions (see contracts.md
+            // section 9). The schema encodes the expressible status-driven
+            // counter minimums and zero-pins instead.
+            Case {
+                name: "terminal succeeded bulk collections cannot leave unfinished items",
+                instance: success("bulk_status", terminal_succeeded_bulk_with_unfinished_items),
+                valid: false,
+            },
+            Case {
+                name: "terminal succeeded bulk collections cannot carry failures",
+                instance: success("bulk_status", succeeded_bulk_with_failures),
+                valid: false,
+            },
+            Case {
+                name: "terminal failed bulk collections cannot carry successes",
+                instance: success("bulk_status", failed_bulk_with_successes),
+                valid: false,
+            },
+            Case {
+                name: "terminal partial bulk collections cannot leave unfinished items",
+                instance: success("bulk_status", partial_bulk_with_unfinished_items),
+                valid: false,
+            },
+            Case {
+                name: "terminal partial bulk collections require failures",
+                instance: success("bulk_status", partial_bulk_without_failures),
+                valid: false,
+            },
+            // Failed includes immediate upstream rejection, so a terminal
+            // partial may finish beyond accepted (PR #14 disputed counter).
+            Case {
+                name: "terminal partial bulk collections may finish beyond accepted",
+                instance: success("bulk_status", partial_bulk_may_finish_beyond_accepted),
+                valid: true,
             },
             Case {
                 name: "not-submitted bulk collections accept zero progress",

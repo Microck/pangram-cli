@@ -1,13 +1,20 @@
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 const LINE_WARNING_THRESHOLD: usize = 800;
 const LINE_ERROR_THRESHOLD: usize = 1_000;
-// ADR 0008 grants this generated union the only line-limit exception.
-const LINE_LIMIT_EXCEPTION: &str = "contracts/output.schema.json";
+// The roadmap mandates a file-size CI gate without fixing a number, so this
+// conservative 1 MiB ceiling is internal hygiene policy. The cap reads file
+// metadata before content so an oversized one-line file cannot bypass the
+// line limit through a large unvalidated allocation.
+const MAX_TEXT_FILE_BYTES: u64 = 1_048_576; // 1 MiB
+// ADR 0008 grants the generated output-schema union a line-limit exception;
+// ADR 0009 grants the single normative contracts reference one. Both documents
+// still receive every other hygiene check.
+const LINE_LIMIT_EXCEPTIONS: &[&str] = &["contracts/output.schema.json", "docs/contracts.md"];
 // These are exact paths relative to the repository root, not directory basenames.
 const EXCLUDED_ROOT_DIRECTORIES: &[&str] = &[
     ".codebase-memory",
@@ -95,7 +102,7 @@ fn check_repository(root: &Path) -> Result<usize, String> {
         };
         scanned_files += 1;
         let line_count = contents.lines().count();
-        let has_line_limit_exception = relative_path == LINE_LIMIT_EXCEPTION;
+        let has_line_limit_exception = LINE_LIMIT_EXCEPTIONS.contains(&relative_path.as_str());
 
         if line_count >= LINE_WARNING_THRESHOLD && !has_line_limit_exception {
             eprintln!(
@@ -192,8 +199,51 @@ fn is_excluded_file(path: &Path) -> bool {
 }
 
 fn read_text_file(path: &Path, relative_path: &str) -> Result<Option<String>, String> {
-    let bytes = fs::read(path).map_err(|error| format!("cannot read {relative_path}: {error}"))?;
     let expected_text = is_expected_text_file(path);
+    classify_text_source(
+        path,
+        relative_path,
+        expected_text,
+        file_byte_length,
+        file_contents,
+    )
+}
+
+fn file_byte_length(path: &Path) -> io::Result<u64> {
+    fs::metadata(path).map(|metadata| metadata.len())
+}
+
+fn file_contents(path: &Path) -> io::Result<Vec<u8>> {
+    fs::read(path)
+}
+
+/// Classifies one candidate file through metadata-then-content probes.
+///
+/// The size gate consults only metadata (a byte length) and returns before
+/// any content read, so an over-limit file is rejected without an unvalidated
+/// allocation. The probes are parameters so tests can prove that over-limit
+/// files never reach the read probe.
+fn classify_text_source(
+    path: &Path,
+    relative_path: &str,
+    expected_text: bool,
+    byte_length: fn(&Path) -> io::Result<u64>,
+    read: fn(&Path) -> io::Result<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    let byte_len =
+        byte_length(path).map_err(|error| format!("cannot stat {relative_path}: {error}"))?;
+    if byte_len > MAX_TEXT_FILE_BYTES {
+        return if expected_text {
+            Err(format!(
+                "{relative_path} has {byte_len} bytes; the text-file limit is \
+                 {MAX_TEXT_FILE_BYTES} bytes"
+            ))
+        } else {
+            Ok(None)
+        };
+    }
+
+    let bytes = read(path).map_err(|error| format!("cannot read {relative_path}: {error}"))?;
 
     if bytes.contains(&0) {
         return if expected_text {
@@ -264,9 +314,29 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{check_repository, forbidden_character_name};
+    use super::{
+        MAX_TEXT_FILE_BYTES, check_repository, classify_text_source, forbidden_character_name,
+    };
 
     static NEXT_TEMP_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+    static READ_PROBE_CALLED: AtomicUsize = AtomicUsize::new(0);
+
+    fn over_limit_byte_length(_path: &Path) -> std::io::Result<u64> {
+        Ok(MAX_TEXT_FILE_BYTES + 1)
+    }
+
+    fn at_limit_byte_length(_path: &Path) -> std::io::Result<u64> {
+        Ok(MAX_TEXT_FILE_BYTES)
+    }
+
+    fn counting_read(_path: &Path) -> std::io::Result<Vec<u8>> {
+        READ_PROBE_CALLED.fetch_add(1, Ordering::Relaxed);
+        Ok(Vec::new())
+    }
+
+    fn limit_read(_path: &Path) -> std::io::Result<Vec<u8>> {
+        Ok(b"within the limit\n".to_vec())
+    }
 
     struct TempDirectory {
         path: PathBuf,
@@ -345,6 +415,83 @@ mod tests {
         .unwrap();
 
         assert_eq!(check_repository(repository.path()).unwrap(), 0);
+    }
+
+    // The roadmap mandates a file-size CI gate (c); it must reject an
+    // over-limit expected-text file using metadata alone, without reading
+    // content.
+    #[test]
+    fn rejects_oversized_expected_text_files_using_metadata_before_any_read() {
+        READ_PROBE_CALLED.store(0, Ordering::Relaxed);
+        let result = classify_text_source(
+            Path::new("huge.md"),
+            "huge.md",
+            true,
+            over_limit_byte_length,
+            counting_read,
+        );
+
+        assert_eq!(
+            READ_PROBE_CALLED.load(Ordering::Relaxed),
+            0,
+            "over-limit files must not be read"
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("huge.md has 1048577 bytes"), "{error}");
+        assert!(
+            error.contains("the text-file limit is 1048576 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn skips_oversized_unknown_extensions_using_metadata_before_any_read() {
+        READ_PROBE_CALLED.store(0, Ordering::Relaxed);
+        let result = classify_text_source(
+            Path::new("huge.blob"),
+            "huge.blob",
+            false,
+            over_limit_byte_length,
+            counting_read,
+        );
+
+        assert_eq!(
+            READ_PROBE_CALLED.load(Ordering::Relaxed),
+            0,
+            "over-limit files must not be read"
+        );
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn admits_files_at_the_size_limit() {
+        let result = classify_text_source(
+            Path::new("ok.md"),
+            "ok.md",
+            true,
+            at_limit_byte_length,
+            limit_read,
+        );
+
+        assert_eq!(result.unwrap().as_deref(), Some("within the limit\n"));
+    }
+
+    #[test]
+    fn rejects_an_end_to_end_over_limit_expected_text_file() {
+        let repository = TempDirectory::new();
+        let oversized = vec![b'x'; (MAX_TEXT_FILE_BYTES + 1) as usize];
+        fs::write(repository.path().join("huge.md"), oversized).unwrap();
+
+        let error = check_repository(repository.path()).unwrap_err();
+        assert!(error.contains("huge.md"), "{error}");
+    }
+
+    #[test]
+    fn accepts_an_end_to_end_expected_text_file_at_the_under_limit() {
+        let repository = TempDirectory::new();
+        fs::write(repository.path().join("ok.md"), "small\n").unwrap();
+
+        assert_eq!(check_repository(repository.path()).unwrap(), 1);
     }
 
     #[test]

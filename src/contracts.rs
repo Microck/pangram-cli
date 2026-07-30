@@ -227,6 +227,20 @@ fn object_mut(value: &mut Value) -> &mut Map<String, Value> {
         .expect("contract schemas are JSON objects")
 }
 
+/// Walks a generated schema through existing object properties only.
+///
+/// `schemars` owns the `$defs` layout, so a renamed or reshaped definition
+/// must fail loudly here instead of fabricating a null placeholder through
+/// `Value`'s `IndexMut` and silently emitting an invalid schema.
+fn generated_path_mut<'a>(mut schema: &'a mut Value, segments: &[&str]) -> &'a mut Value {
+    for segment in segments {
+        schema = object_mut(schema)
+            .get_mut(*segment)
+            .unwrap_or_else(|| panic!("generated schema is missing the {segment} property"));
+    }
+    schema
+}
+
 fn property_mut<'a>(schema: &'a mut Value, property: &str) -> &'a mut Map<String, Value> {
     schema["properties"][property]
         .as_object_mut()
@@ -249,15 +263,43 @@ fn config_schema() -> Value {
         "Pangram CLI configuration v1",
     );
     set_const(&mut schema, "config_version", json!(1));
-    schema["$defs"]["HistoryConfig"]["properties"]["enabled"]["default"] = json!(false);
-    schema["$defs"]["TuiConfig"]["properties"]["intro"]["default"] = json!("once");
-    schema["$defs"]["TuiConfig"]["properties"]["keymap"]["default"] = json!("regular");
-    schema["$defs"]["TuiConfig"]["properties"]["motion"]["default"] = json!("full");
-    let rate = &mut schema["$defs"]["NetworkConfig"]["properties"]["max_requests_per_second"];
-    object_mut(rate).remove("minimum");
-    object_mut(rate).insert("exclusiveMinimum".into(), json!(0));
-    object_mut(rate).insert("default".into(), json!(5));
+    set_default(
+        &mut schema,
+        &["$defs", "HistoryConfig", "properties", "enabled"],
+        json!(false),
+    );
+    set_default(
+        &mut schema,
+        &["$defs", "TuiConfig", "properties", "intro"],
+        json!("once"),
+    );
+    set_default(
+        &mut schema,
+        &["$defs", "TuiConfig", "properties", "keymap"],
+        json!("regular"),
+    );
+    set_default(
+        &mut schema,
+        &["$defs", "TuiConfig", "properties", "motion"],
+        json!("full"),
+    );
+    let rate = object_mut(generated_path_mut(
+        &mut schema,
+        &[
+            "$defs",
+            "NetworkConfig",
+            "properties",
+            "max_requests_per_second",
+        ],
+    ));
+    rate.remove("minimum");
+    rate.insert("exclusiveMinimum".into(), json!(0));
+    rate.insert("default".into(), json!(5));
     schema
+}
+
+fn set_default(schema: &mut Value, segments: &[&str], value: Value) {
+    object_mut(generated_path_mut(schema, segments)).insert("default".into(), value);
 }
 
 fn tui_state_schema() -> Value {
@@ -523,6 +565,14 @@ fn patch_output_definitions(definitions: &mut Value) {
     );
     let analysis = definition_mut::<Analysis<CanonicalError>>(definitions);
     object_mut(analysis).insert("not".into(), json!({"required": ["retry_of", "rerun_of"]}));
+    // Constrain the derived analysis schema to a single object. The
+    // Schemars-derived definition also validates against bare array items in
+    // some envelopes, which would make the multi-form object-versus-array
+    // `oneOf` ambiguous.
+    push_all_of(analysis, json!({"type": "object"}));
+    // Encode the documented parent-status derivation so schema consumers agree
+    // with the canonical `Analysis` deserializer (PR #14 review d).
+    push_all_of(analysis, parent_status_invariant());
     push_all_of(
         analysis,
         when_not_submitted(json!({
@@ -553,8 +603,17 @@ fn patch_output_definitions(definitions: &mut Value) {
             }
         })),
     );
+    // Encode the documented bulk status/counter relationships that Draft
+    // 2020-12 can express, so schema consumers agree with the canonical
+    // `BulkCollection` constructor. The cross-field arithmetic bounds and the
+    // exact terminal equation remain constructor-owned; see
+    // `bulk_status_invariants` (PR #14 review d).
+    let bulk_collection = definition_mut::<BulkCollection>(definitions);
+    for invariant in bulk_status_invariants() {
+        push_all_of(bulk_collection, invariant);
+    }
     push_all_of(
-        definition_mut::<BulkCollection>(definitions),
+        bulk_collection,
         when_not_submitted(json!({
             "properties": {
                 "accepted": {"const": 0},
@@ -625,6 +684,130 @@ fn push_all_of(schema: &mut Value, invariant: Value) {
         .as_array_mut()
         .expect("allOf is an array")
         .push(invariant);
+}
+
+// The parent-status derivation depends only on the set of check statuses, not
+// their positions, so the schema constrains the multiset with `contains`,
+// `not contains`, and `items` rather than addressing array indices. Every
+// clause is forward implications: each of the five statuses reaches exactly
+// the check-status sets that the canonical `derive_parent_status` maps to it,
+// and every other status fails its own clause for those sets.
+fn checks_contain_status(status: &str) -> Value {
+    json!({
+        "contains": {
+            "properties": {"status": {"const": status}},
+            "required": ["status"]
+        }
+    })
+}
+
+fn checks_lack_status(status: &str) -> Value {
+    json!({"not": checks_contain_status(status)})
+}
+
+fn checks_all_status(status: &str) -> Value {
+    json!({
+        "items": {
+            "properties": {"status": {"enum": [status]}}
+        }
+    })
+}
+
+fn parent_status_case(status: &str, checks: Value) -> Value {
+    json!({
+        "if": {
+            "properties": {"status": {"const": status}},
+            "required": ["status"]
+        },
+        "then": {"properties": {"checks": checks}}
+    })
+}
+
+/// The documented parent-status derivation from contracts.md section 4.1,
+/// encoded as one `if status ... then checks ...` implication per status. The
+/// five conditions mirror `derive_parent_status`:
+///
+/// - `running`: some check is `running`
+/// - `queued`: no `running` check and some check is `queued`
+/// - `succeeded`: no `running` or `queued` check and every check is `succeeded`
+/// - `failed`: no `running` or `queued` check and every check is `failed`
+/// - `partial`: no `running` or `queued` check with both a `succeeded` and a
+///   `failed` check
+///
+/// Because every non-empty set of one or two check statuses derives exactly one
+/// parent status, a declared status that disagrees triggers its own `then` and
+/// fails; the matching status passes. No separate reverse implication is
+/// required.
+fn parent_status_invariant() -> Value {
+    json!({
+        "allOf": [
+            parent_status_case("running", checks_contain_status("running")),
+            parent_status_case(
+                "queued",
+                json!({"allOf": [checks_lack_status("running"), checks_contain_status("queued")]})
+            ),
+            parent_status_case(
+                "succeeded",
+                json!({"allOf": [
+                    checks_lack_status("running"),
+                    checks_lack_status("queued"),
+                    checks_all_status("succeeded")
+                ]})
+            ),
+            parent_status_case(
+                "failed",
+                json!({"allOf": [
+                    checks_lack_status("running"),
+                    checks_lack_status("queued"),
+                    checks_all_status("failed")
+                ]})
+            ),
+            parent_status_case(
+                "partial",
+                json!({"allOf": [
+                    checks_lack_status("running"),
+                    checks_lack_status("queued"),
+                    checks_contain_status("succeeded"),
+                    checks_contain_status("failed")
+                ]})
+            )
+        ]
+    })
+}
+
+/// The bulk status/counter relationships that Draft 2020-12 can express with
+/// standard keywords: keyword-level counter minimums and zero-pins tied to the
+/// collection `status`. The cross-field arithmetic bounds and the exact
+/// terminal equation (`accepted <= total_items`, `succeeded <= accepted`,
+/// `succeeded + failed <= total_items`, terminal `succeeded + failed =
+/// total_items`) compare or sum distinct integer fields; no standard keyword
+/// expresses those over unbounded integers, so the canonical
+/// `BulkCounters`/`BulkCollection` constructor remains authoritative for them
+/// (see contracts.md section 9 and docs/update-contract.md, which delegates
+/// non-expressible invariants to the Rust type). `failed` includes immediate
+/// upstream rejection, so `succeeded + failed` may exceed `accepted`; there is
+/// intentionally no `succeeded + failed <= accepted` clause (PR #14 review d).
+fn bulk_status_invariants() -> Vec<Value> {
+    vec![
+        // A `succeeded` collection finished every item successfully, so no
+        // item failed and at least one succeeded (`total_items >= 1`).
+        json!({
+            "if": {"properties": {"status": {"const": "succeeded"}}, "required": ["status"]},
+            "then": {"properties": {"failed": {"const": 0}, "succeeded": {"minimum": 1}}}
+        }),
+        // A `failed` collection finished every item unsuccessfully, so no item
+        // succeeded and at least one failed.
+        json!({
+            "if": {"properties": {"status": {"const": "failed"}}, "required": ["status"]},
+            "then": {"properties": {"succeeded": {"const": 0}, "failed": {"minimum": 1}}}
+        }),
+        // A `partial` collection finished every item with both outcomes, so
+        // both terminal counters are positive.
+        json!({
+            "if": {"properties": {"status": {"const": "partial"}}, "required": ["status"]},
+            "then": {"properties": {"succeeded": {"minimum": 1}, "failed": {"minimum": 1}}}
+        }),
+    ]
 }
 
 fn when_not_submitted(then: Value) -> Value {
@@ -701,4 +884,34 @@ fn error_retry_invariant() -> Value {
             }
         ]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::generated_path_mut;
+
+    // A renamed or reshaped `$defs` entry must panic instead of fabricating a
+    // null placeholder through `Value`'s `IndexMut` (PR #14 review b).
+    #[test]
+    #[should_panic(expected = "generated schema is missing the TuiConfig property")]
+    fn generated_schema_paths_fail_loudly_instead_of_fabricating_nulls() {
+        let mut schema = json!({"$defs": {}});
+        generated_path_mut(&mut schema, &["$defs", "TuiConfig", "properties", "intro"]);
+    }
+
+    #[test]
+    fn generated_schema_paths_resolve_existing_objects() {
+        let mut schema = json!({"$defs": {"TuiConfig": {"properties": {}}}});
+        let intro = generated_path_mut(&mut schema, &["$defs", "TuiConfig", "properties"]);
+        intro
+            .as_object_mut()
+            .unwrap()
+            .insert("intro".into(), json!({"default": "once"}));
+        assert_eq!(
+            schema["$defs"]["TuiConfig"]["properties"]["intro"],
+            json!({"default": "once"})
+        );
+    }
 }
