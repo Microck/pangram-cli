@@ -46,7 +46,7 @@ pub use handle::{
     StopObserving,
 };
 pub use task::{Accepted, AcceptedInput, AnalysisRequest, AnalysisResult, TaskError};
-pub use upstream::{AnalysisError, UpstreamClient, UpstreamEndpoints};
+pub use upstream::{AnalysisError, SubmissionFailure, UpstreamClient, UpstreamEndpoints};
 
 pub use crate::config::MAX_REQUESTS_PER_SECOND;
 pub use tokio::time::{Duration, Instant};

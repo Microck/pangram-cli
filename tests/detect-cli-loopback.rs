@@ -779,3 +779,168 @@ async fn pretty_format_with_json_error_override_emits_json_envelope() {
     assert_eq!(envelope["error"]["code"], "missing_api_key");
     assert_no_leak(&output);
 }
+
+/// Greptile P1 (Option A): a repeated `--file` run preserves completed
+/// billable analyses when a later file fails. The default JSONL stream keeps
+/// the ordered series: the first file's success envelope, then the failed
+/// file's synthesized member with status `failed`, honest `submission_outcome`
+/// (`acceptance_unknown` because the ambiguous POST may have reached the
+/// peer), real input metadata, a canonical `submission_outcome_unknown` check
+/// error, and no fabricated upstream identity. The process exits 3 (partial).
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_files_preserve_completed_and_report_failed_member_as_partial() {
+    let fixture = ProtocolFixture::start().await;
+    let first_text = "First file that completes billing successfully here";
+    let second_text = "Second file whose submission POST is issued then lost";
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-aaa"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    // The second file's billable POST is issued, then the connection drops:
+    // ambiguous delivery, never replayed, honest submission_outcome_unknown.
+    fixture.on_submit(Step::Hang);
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run pangram detect with a completing and a failing file");
+
+    assert_eq!(output.status.code(), Some(3), "partial result exits 3");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(!stdout.starts_with('['), "JSONL never wraps in an array");
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "one ordered envelope per analyzed file");
+
+    let succeeded: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(succeeded["data"]["status"], "succeeded");
+    assert_eq!(succeeded["data"]["input"]["name"], "first.txt");
+    assert_eq!(succeeded["data"]["input"]["origin"], "file");
+    assert_eq!(succeeded["data"]["checks"][0]["status"], "succeeded");
+
+    let failed: Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(failed["data"]["status"], "failed");
+    assert_eq!(failed["data"]["input"]["name"], "second.txt");
+    assert_eq!(failed["data"]["input"]["origin"], "file");
+    // The most precise honest outcome for an ambiguous issued POST.
+    assert_eq!(failed["data"]["submission_outcome"], "acceptance_unknown");
+    assert_eq!(failed["data"]["save_state"], "ephemeral");
+    let check = &failed["data"]["checks"][0];
+    assert_eq!(check["kind"], "ai_detection");
+    assert_eq!(check["status"], "failed");
+    assert_eq!(check["error"]["code"], "submission_outcome_unknown");
+    // No fabricated upstream identity on a dropped-connection failure.
+    assert!(check["upstream"].is_null() || check.get("upstream").is_none());
+    assert!(check.get("result").is_none(), "no fabricated result");
+    // Local reconciliation identity is present; the ambiguous billable POST
+    // was issued exactly once and never replayed.
+    assert_eq!(fixture.post_count(), 2, "two issued POSTs, no replay");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// Greptile P1 (Option A) single-document form: repeated `--file` under an
+/// explicit `--format json` wraps the preserved order plus the failed member
+/// in one ordered partial array envelope, never discarding completed work.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_files_json_wraps_partial_series_with_failed_member() {
+    let fixture = ProtocolFixture::start().await;
+    let first_text = "Ordered completing file one for the partial array";
+    let second_text = "Ordered failing file two for the partial array";
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-aaa"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    fixture.on_submit(Step::Hang);
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--format",
+            "json",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run detect --format json, one completing one failing file");
+
+    assert_eq!(output.status.code(), Some(3));
+    let envelope = stdout_envelope(&output);
+    assert!(
+        envelope.get("error").is_none(),
+        "partial is a success envelope"
+    );
+    let data = &envelope["data"];
+    assert!(data.is_array(), "json data is the ordered analysis array");
+    let analyses = data.as_array().unwrap();
+    assert_eq!(analyses.len(), 2);
+    assert_eq!(analyses[0]["input"]["name"], "first.txt");
+    assert_eq!(analyses[0]["status"], "succeeded");
+    assert_eq!(analyses[1]["input"]["name"], "second.txt");
+    assert_eq!(analyses[1]["status"], "failed");
+    assert_eq!(analyses[1]["submission_outcome"], "acceptance_unknown");
+    assert_eq!(analyses[1]["checks"][0]["status"], "failed");
+    assert_eq!(fixture.post_count(), 2, "no billable replay");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// Greptile P1 (Finding 2): when the observation GET never completes, an
+/// explicit short `--timeout` stops the body read at its own deadline instead
+/// of waiting for the much longer per-request transport timeout, surfacing
+/// the canonical wait-timeout outcome and exiting per its category. The body
+/// read is selected against the observation stop, so a stalled peer cannot
+/// pin the flow.
+#[tokio::test(flavor = "multi_thread")]
+async fn timeout_during_stalled_poll_body_exits_promptly() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    // The poll GET never produces a complete response: only the caller's
+    // wait deadline (or local cancellation) can end the read promptly.
+    fixture.on_poll(Step::Hang);
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--timeout",
+            "1",
+            "text observed under a stalled poll",
+        ])
+        .output()
+        .expect("run pangram detect with a stalled poll and short timeout");
+
+    assert_eq!(
+        output.status.code(),
+        Some(6),
+        "wait timeout is network/upstream"
+    );
+    let envelope = stdout_envelope(&output);
+    // A local observation failure (wait timeout) surfaces as the canonical
+    // top-level wait-timeout error envelope, selected against the stop so a
+    // stalled peer cannot pin the read past the caller's deadline.
+    assert_eq!(envelope["error"]["code"], "wait_timeout");
+    assert_eq!(fixture.post_count(), 1, "submission completed once");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}

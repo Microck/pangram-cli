@@ -179,9 +179,47 @@ extra `data` value would not validate for the resolved command.
 
 ### 3.3 Partial success
 
-Partial combined and bulk output uses the success envelope. `data.status` is
-`partial`, successful data remains present, and failed checks or items contain
-canonical errors. The process exits 3.
+Partial combined, bulk, and repeated-file output uses the success envelope.
+`data.status` is `partial`, successful data remains present, and failed checks
+or items contain canonical errors. The process exits 3.
+
+Repeated single-document files form one ordered series, each member one
+analysis. Only an *ambiguous* mid-run submission preserves the run as a
+partial series: a billable submission POST that was issued but whose
+acceptance became uncertain (for example a dropped connection after the
+send). Three other failure classes behave differently and abort the run with
+their canonical top-level failure envelope: a deterministic pre-billing
+rejection (authentication, payment, usage, or a provably unreached send), an
+accepted task's local observation failure (wait timeout, contract drift, or
+transport), and a genuine SIGINT interruption, which always exits 130. An
+ambiguous submission never discards the analyses already completed; the run
+continues with the remaining files, and the ambiguous-submission file is
+represented in the ordered series by one synthesized analysis member whose:
+
+- `id` is the local `AnalysisId` generated for that file's request, so the
+  member is reconcilable to the exact request that failed
+- `input` carries the file's real `TextInput` (`origin`, `name`, `sha256`,
+  `byte_count`, `word_count`, and `text` only when `--include-input`), so
+  source identity and order metadata are preserved without fabrication
+- single `ai_detection` check is `failed` with the canonical
+  `submission_outcome_unknown` error
+- `save_state` is `ephemeral`
+- `submission_outcome` is `acceptance_unknown`, with
+  `submission_outcome_unknown` reconciliation details (request `sha256`, and
+  the `analysis_id`); the run never replays the ambiguous billable POST and
+  reports the ambiguous outcome so the operator reconciles it
+- `provenance` carries only upstream identity facts that actually exist; the
+  synthesized member never fabricates `result`, upstream identity, or other
+  remote detail, and carries no task id because acceptance was never reached
+
+The envelope's parent `status` is `partial` (mixed succeeded and failed
+members; section 4.1), and the process exits 3. JSONL preserves the ordered
+series as one envelope per line, with the failed member emitted as its own
+line in submission order; single-document formats (JSON, TOON, Markdown,
+pretty) emit the whole ordered series inside one success envelope. Because
+the ambiguous member's outcome is uncertain, reconciliation guidance is
+emitted on stderr with the local reconciliation identity and the fixed
+duplicate-billing recovery reminder.
 
 ## 4. Analysis model
 
@@ -526,10 +564,12 @@ manifest invariants to the Rust verifier.
 
 `updated_at` is required and changes whenever counters or state change.
 `estimated_billable_units` records the estimate calculated under the
-documented billing rule for the selected Pangram operation. Pangram has not
-published a Pangram 4 bulk rule or confirmed the earlier 1,000-unit maximum.
-Bulk remains blocked until then. Estimates MUST NOT be presented as exact
-charges.
+documented billing rule for the selected Pangram operation. Pangram 4 bulk
+selection uses one job-wide JSON `model` field with the exact value
+`pangram-4`; per-item model selectors are not supported. Pangram has not
+published a Pangram 4 bulk billing rule or confirmed the current request
+ceiling. Bulk remains blocked until both are documented. Estimates MUST NOT be
+presented as exact charges.
 
 Bulk timestamps from Pangram are Unix epoch seconds encoded as strings. The
 normalizer converts them to RFC 3339 UTC.
@@ -656,7 +696,7 @@ hints from delaying interruption indefinitely.
 | 0 | Success, accepted asynchronous work, or no update needed |
 | 1 | General operation failure not covered below |
 | 2 | Usage or local input error |
-| 3 | Partial combined or bulk result |
+| 3 | Partial combined, bulk, or repeated-file result |
 | 4 | Authentication or permission failure |
 | 5 | Payment, quota, or rate-limit failure |
 | 6 | Network or upstream failure |

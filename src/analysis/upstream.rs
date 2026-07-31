@@ -24,6 +24,7 @@ use crate::output::{CanonicalError, ErrorCode, OutputValidationError};
 use super::config::{AnalysisConfig, Clock, Duration, Instant};
 use super::http::{self, HttpClient, Response, SendOutcome};
 use super::pacemaker::Pacemaker;
+use super::task::TaskError;
 
 /// The fixed production submit URL. Never construct it from configuration.
 const PRODUCTION_SUBMIT_URL: &str = "https://text.external-api.pangram.com/task";
@@ -140,6 +141,10 @@ impl AnalysisError {
 
     pub(crate) fn transport(error: reqwest::Error) -> Self {
         Self::Transport(sanitize_reqwest(&error))
+    }
+
+    pub(crate) fn cancelled() -> Self {
+        Self::Cancelled
     }
 
     pub(crate) fn response_too_large() -> Self {
@@ -443,6 +448,17 @@ impl ResponseSummary {
     pub fn structural(&self) -> &str {
         &self.structural
     }
+}
+
+/// One completed submission that did not reach an acceptance, carrying the
+/// canonical error plus the original request so the adapter can build an
+/// honest failed series member without re-deriving identity or input.
+/// Produced only by `Analyzer::start_full`; the request is `Some` exactly
+/// when submission semantics were exercised (never `None` for a real send).
+#[derive(Debug)]
+pub struct SubmissionFailure {
+    pub task_error: TaskError,
+    pub request: Option<super::task::AnalysisRequest>,
 }
 
 /// How a billable submission ended.

@@ -238,8 +238,9 @@ pub(crate) fn execute(
     let stop = StopObserving::new();
     let _cancel_guard = set_active_cancel(stop.token());
 
-    let analyses = runtime.block_on(async {
-        let mut completed = Vec::with_capacity(plan.inputs.len());
+    let outcome = runtime.block_on(async {
+        let mut members: Vec<crate::domain::Analysis<CanonicalError>> =
+            Vec::with_capacity(plan.inputs.len());
         for input in &plan.inputs {
             match analyze_one(
                 &analyzer,
@@ -251,15 +252,22 @@ pub(crate) fn execute(
             )
             .await
             {
-                Ok(analysis) => completed.push(analysis),
-                Err(error) => return Err(error),
+                // A completed (succeeded or honestly failed) member is kept in
+                // order; the run continues with the remaining files so one
+                // failed file never discards the billable work already done.
+                Ok(analysis) => members.push(analysis),
+                // An accepted task's local observation failure or a genuine
+                // local interruption unwinds the whole run with its canonical
+                // envelope; these already-reported billable members are not
+                // re-rendered (their costs are logged in history later).
+                Err(flow) => return Err(flow),
             }
         }
-        Ok(completed)
+        Ok(members)
     });
 
-    match analyses {
-        Ok(analyses) => success_outcome(output, started_at, analyses),
+    match outcome {
+        Ok(members) => success_outcome(output, started_at, members),
         Err(Flow::Failed(error)) => failure_outcome(output, started_at, error),
         Err(Flow::Interrupted(error, note)) => interrupted_outcome(output, started_at, error, note),
     }
@@ -289,9 +297,13 @@ impl GlobalFlags {
     }
 }
 
-/// The stop condition of one detection flow.
+/// The stop condition of one detection flow. A failed file submission is
+/// preserved as a failed series member (Option A) rather than aborting; only
+/// an accepted task's local observation failure and a genuine SIGINT stop the
+/// run through these variants.
 enum Flow {
-    /// A canonical failure to surface and map to an exit code.
+    /// An accepted task's local observation failure (wait timeout, contract
+    /// drift, transport): surfaces as the canonical top-level error envelope.
     Failed(CanonicalError),
     /// Ctrl+C / SIGINT stopped the flow. The carried error is the honest
     /// canonical outcome: a pre-issue local stop (`network_unavailable`) when
@@ -322,19 +334,34 @@ async fn analyze_one(
     );
 
     let cancel = stop.token().child_token();
-    let accepted = match analyzer.start(request, &cancel).await {
+    let accepted = match analyzer.start_full(request, &cancel).await {
         Ok(accepted) => accepted,
-        Err(error) => {
-            let error = error.into_error();
-            // A SIGINT landing during submission still exits 130; the carried
-            // error is the honest canonical outcome the analysis module
-            // already classified (pre-issue local stop, or
-            // submission_outcome_unknown once the POST was issued).
+        Err(failure) => {
+            let crate::analysis::SubmissionFailure {
+                task_error,
+                request,
+            } = failure;
+            let error = task_error.into_error();
+            // A SIGINT landing during submission still exits 130 for the
+            // whole run; the carried error is the honest canonical outcome
+            // the analysis module already classified (pre-issue local stop,
+            // or submission_outcome_unknown once the POST was issued).
             if cancel.is_cancelled() {
                 let note = identity_note_for_error(&error);
                 return Err(Flow::Interrupted(error, note));
             }
-            return Err(Flow::Failed(error));
+            // A deterministic pre-billing submission rejection (auth,
+            // payment, usage) aborts the run with its canonical top-level
+            // error; the request provably produced no ambiguous billable
+            // state worth preserving a member for. Only an ambiguous issued
+            // POST preserves this file as a failed series member so the
+            // completed billable work around it is not discarded, and the
+            // run never replays the ambiguous send (contracts.md 3.3).
+            if !matches!(error.code(), ErrorCode::SubmissionOutcomeUnknown) {
+                return Err(Flow::Failed(error));
+            }
+            let request = request.expect("a completed submission carries its request");
+            return Ok(failed_member(&request, error));
         }
     };
 
@@ -362,14 +389,78 @@ async fn analyze_one(
                 .observe(wait, |event| progress_sink.on_progress(event), stop.clone())
                 .await
             {
+                // Both a terminal success and a terminal upstream analysis
+                // failure (`finish_failed`) arrive as a committed analysis.
                 Ok(Ok(analysis)) => Ok(analysis),
-                Ok(Err(error)) => Err(Flow::Failed(error.into_error())),
+                // A local observation failure (wait timeout, contract drift,
+                // transport) is a canonical wait/observation error envelope.
+                Ok(Err(task_error)) => Err(Flow::Failed(task_error.into_error())),
                 Err(interrupted_analysis) => Err(Flow::Interrupted(
                     stopped_observation_error(),
                     identity_note(&interrupted_analysis.identity),
                 )),
             }
         }
+    }
+}
+
+/// Builds the ordered-series member for a file whose submission completed
+/// without an acceptance (a proven-no-send network failure, or an ambiguous
+/// issued POST). The member carries the file's real input descriptor and the
+/// canonical error, never a fabricated result or upstream identity.
+/// `submission_outcome` is the most precise honest value the error implies:
+/// `acceptance_unknown` for an ambiguous issued send, `terminal` otherwise.
+/// The member never carries upstream identity: an unaccepted submission has
+/// no real task id or result, so none is fabricated.
+fn failed_member(
+    request: &AnalysisRequest,
+    error: CanonicalError,
+) -> crate::domain::Analysis<CanonicalError> {
+    let outcome = submission_outcome_for_error(&error);
+    let check: crate::domain::CheckState<crate::domain::AiDetectionResult, CanonicalError> =
+        crate::domain::CheckState::Failed {
+            upstream: None,
+            error,
+        };
+    let checks = crate::domain::OrderedChecks::new([crate::domain::Check::AiDetection(check)])
+        .expect("one check is valid");
+    let now = crate::domain::UtcTimestamp::now();
+    let provenance = crate::domain::Provenance {
+        provider: crate::domain::Provider::Pangram,
+        upstream_version: None,
+        upstream_task_ids: None,
+        upstream_bulk_id: None,
+        submitted_at: None,
+        completed_at: None,
+    };
+    crate::domain::Analysis::new(
+        request.id(),
+        outcome,
+        request.input(),
+        checks,
+        crate::domain::SaveState::Ephemeral,
+        provenance,
+        None,
+        None,
+        now,
+        now,
+        None,
+    )
+    .expect("a synthesized failed member satisfies the analysis invariants")
+}
+
+/// The most precise honest submission outcome an error implies. An ambiguous
+/// issued send is `acceptance_unknown`; every other completed local or
+/// network failure is `terminal` (the run reached a definitive local result
+/// with no remote acceptance to reconcile).
+fn submission_outcome_for_error(error: &CanonicalError) -> crate::domain::SubmissionOutcome {
+    if matches!(
+        error.code(),
+        crate::output::ErrorCode::SubmissionOutcomeUnknown
+    ) {
+        crate::domain::SubmissionOutcome::AcceptanceUnknown
+    } else {
+        crate::domain::SubmissionOutcome::Terminal
     }
 }
 

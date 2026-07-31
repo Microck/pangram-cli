@@ -44,10 +44,13 @@ pub struct Response {
 
 impl Response {
     /// Reads a bounded body and extracts the safe `Retry-After` hint.
-    async fn collect(response: reqwest::Response) -> Result<Self, AnalysisError> {
+    async fn collect(
+        response: reqwest::Response,
+        cancel: &CancellationToken,
+    ) -> Result<Self, AnalysisError> {
         let status = response.status().as_u16();
         let retry_after_ms = parse_retry_after(response.headers());
-        let body = read_bounded(response).await?;
+        let body = read_bounded(response, cancel).await?;
         Ok(Self {
             status,
             retry_after_ms,
@@ -95,7 +98,10 @@ fn structural_symptom(body: &[u8]) -> String {
     }
 }
 
-async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, AnalysisError> {
+async fn read_bounded(
+    mut response: reqwest::Response,
+    cancel: &CancellationToken,
+) -> Result<Vec<u8>, AnalysisError> {
     if let Some(length) = response.content_length() {
         if length > MAX_BODY_BYTES {
             return Err(AnalysisError::response_too_large());
@@ -104,8 +110,19 @@ async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, Analys
 
     let mut body = Vec::new();
     // Chunked streaming keeps the ceiling enforced even when the peer lies
-    // about or omits Content-Length.
-    while let Some(chunk) = response.chunk().await.map_err(AnalysisError::transport)? {
+    // about or omits Content-Length. Cancellation is selected per chunk so a
+    // peer that sends headers then stalls or slowly streams does not pin the
+    // flow to the longer per-request transport timeout: an observation stop
+    // (SIGINT or `--timeout`-driven local cancellation) interrupts the body
+    // read at the next chunk boundary and surfaces the canonical local stop
+    // outcome instead of waiting for the transport to give up.
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(AnalysisError::cancelled()),
+            chunk = response.chunk() => chunk.map_err(AnalysisError::transport)?,
+        };
+        let Some(chunk) = chunk else { break };
         if u64::try_from(body.len() + chunk.len()).unwrap_or(u64::MAX) > MAX_BODY_BYTES {
             return Err(AnalysisError::response_too_large());
         }
@@ -252,8 +269,16 @@ impl HttpClient {
             }
         };
         match outcome {
-            Ok(response) => match Response::collect(response).await {
+            // Pass `cancel` down so an observation stop interrupts a slow or
+            // stalled body read at the next chunk boundary. The send is
+            // post-issue here, so a cancellation during body consumption is
+            // ambiguous in exactly the F3 sense; surfacing it as
+            // `Cancelled { issued: true }` keeps the honest reconciliation
+            // outcome (submission_outcome_unknown) rather than misclassifying
+            // a slow peer as a transport failure.
+            Ok(response) => match Response::collect(response, cancel).await {
                 Ok(response) => SendOutcome::Responded(response),
+                Err(AnalysisError::Cancelled) => SendOutcome::Cancelled { issued: true },
                 Err(error) => SendOutcome::Failed {
                     // The response had already arrived when body consumption
                     // failed, so a billable peer-side effect must be assumed.

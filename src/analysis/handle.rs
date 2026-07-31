@@ -379,6 +379,22 @@ impl<C: super::config::Clock> Analyzer<C> {
         request: AnalysisRequest,
         cancel: &CancellationToken,
     ) -> Result<Accepted, TaskError> {
+        match self.start_full(request, cancel).await {
+            Ok(accepted) => Ok(accepted),
+            Err(super::upstream::SubmissionFailure { task_error, .. }) => Err(task_error),
+        }
+    }
+
+    /// Submits one text-analysis request exactly once, preserving the full
+    /// [`AnalysisRequest`] on failure so an adapter can reconcile or render a
+    /// failed series member with the original identity and input. Success is
+    /// identical to [`Analyzer::start`]; a completed submission that failed to
+    /// reach an acceptance carries the request through.
+    pub async fn start_full(
+        &self,
+        request: AnalysisRequest,
+        cancel: &CancellationToken,
+    ) -> Result<Accepted, super::upstream::SubmissionFailure> {
         match self
             .client
             .submit_text(request.text(), request.public_dashboard_link(), cancel)
@@ -388,12 +404,21 @@ impl<C: super::config::Clock> Analyzer<C> {
                 task_id: accepted.task_id,
                 request,
             })),
-            Err(SubmitOutcome::Failed(error)) => Err(TaskError::new(request.id(), *error)),
-            Err(SubmitOutcome::Cancelled) => Err(TaskError::new(request.id(), cancelled_error())),
-            Err(SubmitOutcome::Ambiguous(error)) => Err(TaskError::new(
-                request.id(),
-                submission_unknown_error(&request, &error),
-            )),
+            Err(SubmitOutcome::Failed(error)) => Err(super::upstream::SubmissionFailure {
+                task_error: TaskError::new(request.id(), *error),
+                request: Some(request),
+            }),
+            Err(SubmitOutcome::Cancelled) => Err(super::upstream::SubmissionFailure {
+                task_error: TaskError::new(request.id(), cancelled_error()),
+                request: Some(request),
+            }),
+            Err(SubmitOutcome::Ambiguous(error)) => Err(super::upstream::SubmissionFailure {
+                task_error: TaskError::new(
+                    request.id(),
+                    submission_unknown_error(&request, &error),
+                ),
+                request: Some(request),
+            }),
         }
     }
 
