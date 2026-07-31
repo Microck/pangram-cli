@@ -17,19 +17,26 @@
 //!   Ambiguity yields `submission_outcome_unknown` (non-retryable) with the
 //!   fixed duplicate-billing recovery.
 //! - Safe GET polling retries bounded transient failures, honors
-//!   `Retry-After`, and uses decorrelated bounded backoff with jitter.
-//! - Client throughput never exceeds 5 requests per second; configuration
-//!   may only lower it.
+//!   `Retry-After`, and uses decorrelated bounded backoff with jitter. The
+//!   retry chain observes the caller's wait deadline and a cumulative
+//!   retry-time budget, so a wait timeout or cancellation interrupts pending
+//!   retry sleeps promptly.
+//! - Every request (submit and poll) is issued through one shared time-based
+//!   issue gate that enforces the hard 5-requests-per-second ceiling on
+//!   request issue timing; configuration may only lower the rate.
 //! - Wait timeouts and cancellation stop local observation only. No remote
 //!   cancellation request is ever sent.
 //! - Credentials, auth headers, submitted content, and raw response bodies
 //!   never enter errors, `Debug` output, or serialized error details.
+//!   Upstream-reported failure text is reduced (control sequences stripped,
+//!   non-printable bytes removed, bounded length) before it can appear in
+//!   canonical details.
 
 mod config;
 mod handle;
 mod http;
 mod normalize;
-mod semaphore;
+mod pacemaker;
 mod task;
 mod upstream;
 

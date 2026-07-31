@@ -259,6 +259,7 @@ async fn safe_get_retries_are_bounded_and_honor_retry_after() {
         max_attempts: 3,
         base_delay: Duration::ZERO,
         max_delay: Duration::from_secs(30),
+        cumulative_retry_budget: None,
     }
     .validate()
     .expect("valid policy");
@@ -306,6 +307,7 @@ async fn safe_get_retry_exhaustion_returns_the_classified_error() {
         max_attempts: 2,
         base_delay: Duration::ZERO,
         max_delay: Duration::ZERO,
+        cumulative_retry_budget: None,
     }
     .validate()
     .expect("valid policy");
@@ -413,10 +415,13 @@ async fn wait_timeout_reports_identity_and_last_stage() {
         panic!();
     };
     let analysis_id = input.request.id();
+    // The shared pacing gate spaces the first poll one 200 ms interval
+    // behind the submit, so the wait budget must exceed that interval for
+    // at least one stage-bearing observation to land before the deadline.
     let result = analyzer
         .running(input)
         .observe(
-            WaitOptions::with_timeout(Duration::from_millis(50)),
+            WaitOptions::with_timeout(Duration::from_millis(600)),
             |_| {},
             StopObserving::new(),
         )
@@ -435,6 +440,224 @@ async fn wait_timeout_reports_identity_and_last_stage() {
     assert!(details.contains(TASK_ID), "{details}");
     assert!(details.contains("STAGE_INFERENCE"), "{details}");
     assert_scrubbed(error.error());
+    fixture.shutdown().await;
+}
+
+/// 8a. A tiny wait deadline interrupts a bounded safe-GET retry chain
+/// promptly, not after the full Retry-After hint schedule. The loopback
+/// serves repeated 503/429 with a long hint; the caller's 250 ms wait
+/// timeout must end the chain near 250 ms, never through the 30 s hint.
+#[tokio::test(flavor = "current_thread")]
+async fn tiny_wait_deadline_interrupts_retry_after_chain_promptly() {
+    let fixture = ProtocolFixture::start().await;
+    let retry = RetryPolicy {
+        max_attempts: 5,
+        base_delay: Duration::ZERO,
+        // A long hint window so the honored 30 s Retry-After is not the
+        // constraint; the deadline must be.
+        max_delay: Duration::from_secs(30),
+        cumulative_retry_budget: None,
+    }
+    .validate()
+    .expect("valid policy");
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    // A long Retry-After on every transient response. Without deadline
+    // clamping the chain would sleep roughly 30 s between attempts, far
+    // beyond a 250 ms wait deadline.
+    for _ in 0..5 {
+        fixture.on_poll(Step::Status(503, Some(30), None));
+    }
+
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
+        retry,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_millis(400),
+    ));
+    let accepted = analyzer
+        .start(
+            request(SYNTHETIC_TEXT),
+            &StopObserving::new().token().clone(),
+        )
+        .await
+        .expect("acceptance succeeds");
+    let microck_pangram_cli::analysis::Accepted::Task(input) = accepted else {
+        panic!();
+    };
+    let started = std::time::Instant::now();
+    let result = analyzer
+        .running(input)
+        .observe(
+            WaitOptions::with_timeout(Duration::from_millis(250)),
+            |_| {},
+            StopObserving::new(),
+        )
+        .await
+        .expect("no interruption");
+    let elapsed = started.elapsed();
+
+    let error = result.expect_err("a tiny wait deadline must end observation");
+    assert_eq!(error.error().code(), ErrorCode::WaitTimeout);
+    // The wall-clock bound proves interruption was prompt: every sleep is
+    // clamped to the remaining deadline instead of riding out the 30 s
+    // hint. The first poll's real 200 ms pace plus the 250 ms budget leave
+    // generous headroom under one second, while the hint would demand many
+    // seconds.
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "a 30 s Retry-After chain must not delay a 250 ms deadline: {elapsed:?}"
+    );
+    assert!(
+        fixture.get_count() <= 2,
+        "the deadline clamps the first retry sleep to nothing: {}",
+        fixture.get_count()
+    );
+    assert_scrubbed(error.error());
+    fixture.shutdown().await;
+}
+
+/// 8b. Local cancellation interrupts a pending retry sleep: a 503/429
+/// storm with a long Retry-After is abandoned as soon as the stop token
+/// fires, never after the hinted delay.
+#[tokio::test(flavor = "current_thread")]
+async fn cancellation_interrupts_a_pending_retry_sleep() {
+    let fixture = ProtocolFixture::start().await;
+    let retry = RetryPolicy {
+        max_attempts: 5,
+        base_delay: Duration::ZERO,
+        max_delay: Duration::from_secs(30),
+        cumulative_retry_budget: None,
+    }
+    .validate()
+    .expect("valid policy");
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Status(503, Some(30), None));
+
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
+        retry,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_millis(400),
+    ));
+    let accepted = analyzer
+        .start(
+            request(SYNTHETIC_TEXT),
+            &StopObserving::new().token().clone(),
+        )
+        .await
+        .expect("acceptance succeeds");
+    let microck_pangram_cli::analysis::Accepted::Task(input) = accepted else {
+        panic!();
+    };
+
+    let stop = StopObserving::new();
+    let stopper = stop.clone();
+    let observation = tokio::spawn(async move {
+        analyzer
+            .running(input)
+            .observe(WaitOptions::UNBOUNDED, |_| {}, stop)
+            .await
+    });
+
+    // Wait until the first poll reaches the server so we deterministically
+    // cancel inside the 30 s Retry-After sleep, not before the poll fires.
+    fixture.wait_for_gets(1).await;
+    let started = std::time::Instant::now();
+    stopper.stop();
+    let interrupted = observation
+        .await
+        .expect("the observation task completes")
+        .expect_err("cancellation interrupts the retry sleep");
+    assert!(interrupted.identity.task_id.is_some());
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the 30 s hint must not hold the cancelled chain: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        fixture.get_count(),
+        1,
+        "the cancelled retry never issues a second request"
+    );
+    fixture.shutdown().await;
+}
+
+/// 3b. A terminal provider message loaded with terminal control sequences,
+/// non-ASCII bytes, and overlong content is reduced before it can appear in
+/// canonical details: controls gone, non-ASCII scalars removed, hyperlinks
+/// neutralized, and the prefix bounded. The detail surfaces in `Debug` and
+/// serialized output carry only the reduced form, never raw provider text.
+#[tokio::test(flavor = "current_thread")]
+async fn terminal_failure_message_is_sanitized_before_canonical_details() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    let hostile = format!(
+        "\u{1b}[31mFAIL\u{1b}[0m plain\u{7}\u{1b}]8;;https://evil.example\u{7}\\δ\u{2603} {}",
+        "x".repeat(400)
+    );
+    fixture.on_poll(Step::Json(pangram4_failure(&hostile)));
+
+    let analyzer = Analyzer::from_client(fixture.client());
+    let accepted = analyzer
+        .start(
+            request(SYNTHETIC_TEXT),
+            &StopObserving::new().token().clone(),
+        )
+        .await
+        .expect("acceptance succeeds");
+    let microck_pangram_cli::analysis::Accepted::Task(input) = accepted else {
+        panic!();
+    };
+    let outcome = analyzer
+        .running(input)
+        .observe(WaitOptions::UNBOUNDED, |_| {}, StopObserving::new())
+        .await
+        .expect("no interruption")
+        .expect("a failed analysis is still an analysis value");
+
+    let microck_pangram_cli::domain::Check::AiDetection(state) = &outcome.checks()[0] else {
+        panic!("the only check is AI detection");
+    };
+    let microck_pangram_cli::domain::CheckState::Failed { error, .. } = state else {
+        panic!("a terminal provider failure");
+    };
+    assert_eq!(error.code(), ErrorCode::UpstreamAnalysisFailed);
+    let message = match error.details() {
+        Some(microck_pangram_cli::output::CanonicalErrorDetails::Fields(fields)) => fields
+            .get("upstream_message")
+            .and_then(serde_json::Value::as_str)
+            .expect("a sanitized upstream_message survives"),
+        other => panic!("a provider failure carries field details, not {other:?}"),
+    };
+    assert!(
+        message.chars().count() <= 200,
+        "the retained message is bounded: {}",
+        message.chars().count()
+    );
+    assert!(
+        !message.chars().any(|ch| ch.is_ascii_control()),
+        "no control character may survive sanitization"
+    );
+    assert!(
+        message.is_ascii(),
+        "non-ASCII scalars are removed: {message:?}"
+    );
+    assert!(
+        !message.contains("\u{1b}") && !message.contains('δ') && !message.contains('\u{2603}'),
+        "raw provider sequences never cross the boundary"
+    );
+    // The reduced message is the only provider text anywhere in the
+    // canonical error: no raw escape introducer survives into Debug or the
+    // serialized form.
+    for surface in [
+        format!("{error:?}"),
+        serde_json::to_string(error).expect("serializes"),
+    ] {
+        assert!(
+            !surface.contains('\u{1b}'),
+            "no escape introducer may surface: {surface:?}"
+        );
+        assert!(!surface.contains('δ'), "non-ASCII is stripped: {surface:?}");
+    }
+    assert_scrubbed(error);
     fixture.shutdown().await;
 }
 

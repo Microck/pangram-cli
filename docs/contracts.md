@@ -621,9 +621,25 @@ Initial stable codes:
 auth headers, submitted content, segment text, plagiarism matches, or raw
 response bodies.
 
+Upstream-reported messages (for example `upstream_message` on
+`upstream_analysis_failed`) are reduced before they enter `details`: terminal
+control sequences are stripped, non-printable and non-ASCII characters are
+removed, and the retained text is truncated to a short bounded prefix.
+Provider messages are untrusted and can echo submitted content; callers MUST
+NOT surface raw upstream text to the terminal or serialized error output.
+
 `network_timeout` is retryable only when no billable body was sent or the
 operation is a safe read. A timeout after an ambiguous billable send maps to
 `submission_outcome_unknown`.
+
+The client paces every Pangram request with one shared time-based issue gate:
+request issue times are spaced at least `1/network.max_requests_per_second`
+apart, so no burst exceeds the hard 5-requests-per-second ceiling. This is
+enforced on request issue timing (not completion). Safe-GET retry chains are
+bounded by the attempt cap, a cumulative retry-time budget, and the caller's
+wait deadline: a wait-timeout or cancellation interrupts pending retry sleeps
+promptly, and the cumulative budget prevents bounded-but-large `Retry-After`
+hints from delaying interruption indefinitely.
 
 ## 12. Exit codes
 

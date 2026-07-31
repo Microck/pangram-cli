@@ -47,6 +47,11 @@ impl Clock for SystemClock {
 /// values inside `[base, min(cap, 3 * previous)]`; a server `Retry-After`
 /// hint replaces the computed delay and is bounded by `max_delay`.
 ///
+/// A chain also has a cumulative retry-time `budget`: the combined sleep
+/// planned across retry attempts may not exceed it, so large
+/// `Retry-After` hints cannot keep postponing a caller deadline
+/// indefinitely even when each individual hint is bounded.
+///
 /// A zero `base_delay` makes every backoff delay zero, one `max_attempts`
 /// disables retries, and a zero `max_retry_after` ignores server hints; this
 /// is the deterministic policy injected by protocol tests.
@@ -58,23 +63,40 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
     /// The ceiling for computed backoff and honored `Retry-After` hints.
     pub max_delay: Duration,
+    /// Cumulative ceiling on the total sleep planned across the retry chain.
+    /// `None` selects the documented default (`max_delay * max_attempts`).
+    pub cumulative_retry_budget: Option<Duration>,
 }
 
 impl RetryPolicy {
     /// The production policy: five attempts over a bounded 250 ms to 5 s
-    /// decorrelated window.
+    /// decorrelated window, with a cumulative 12 s retry-time budget so an
+    /// adversarial `Retry-After` sequence cannot keep a bounded chain alive
+    /// indefinitely.
     pub const PRODUCTION: Self = Self {
         max_attempts: 5,
         base_delay: Duration::from_millis(250),
         max_delay: Duration::from_secs(5),
+        cumulative_retry_budget: Some(Duration::from_secs(12)),
     };
 
-    /// A deterministic policy for tests: no wait between attempts.
+    /// A deterministic policy for tests: no wait between attempts, no
+    /// cumulative budget (sleep is already zero).
     pub const OFF: Self = Self {
         max_attempts: 1,
         base_delay: Duration::ZERO,
         max_delay: Duration::ZERO,
+        cumulative_retry_budget: None,
     };
+
+    /// The effective cumulative retry-time budget. When unset, the bound is
+    /// `max_delay * max_attempts`, which is the largest legitimate total and
+    /// never under-counts a deterministic chain.
+    #[must_use]
+    pub fn cumulative_retry_budget(&self) -> Duration {
+        self.cumulative_retry_budget
+            .unwrap_or_else(|| self.max_delay.saturating_mul(self.max_attempts))
+    }
 
     /// Validates the bounds that production callers rely on: at least one
     /// attempt, and `max_delay >= base_delay` (clamping `Retry-After`
@@ -284,6 +306,7 @@ mod tests {
             max_attempts: 3,
             base_delay: Duration::from_secs(5),
             max_delay: Duration::from_secs(1),
+            cumulative_retry_budget: None,
         };
         assert!(policy.validate().is_err());
     }

@@ -165,6 +165,24 @@ impl ProtocolFixture {
             .count()
     }
 
+    /// Waits until at least `n` GET requests have reached the fixture, or
+    /// the (real, short) bound elapses. This gives cancellation and pacing
+    /// tests a deterministic synchronization point: they must know a poll
+    /// actually fired (and its scripted response was consumed, placing the
+    /// client inside a retry sleep) before they act, rather than cancel on
+    /// a wall-clock guess.
+    pub async fn wait_for_gets(&self, n: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while self.get_count() < n {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {n} GET(s); saw {}",
+                self.get_count()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     /// Builds a loopback client pinned to this fixture with deterministic
     /// policy (no backoff waits). Per-request timeout is 400 ms so `Hang`
     /// scenarios stay quick and virtual-time-friendly.

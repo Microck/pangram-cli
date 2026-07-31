@@ -10,21 +10,20 @@
 //! and have no protocol surface here yet.
 
 use std::fmt;
-use std::sync::Arc;
 
 use secrecy::SecretString;
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+#[cfg(any(test, feature = "dev-tools", doctest))]
 use url::{Host, Url};
 
 use crate::domain::UpstreamTaskId;
 use crate::output::{CanonicalError, ErrorCode, OutputValidationError};
 
-use super::config::{AnalysisConfig, Clock, Duration};
+use super::config::{AnalysisConfig, Clock, Duration, Instant};
 use super::http::{self, HttpClient, Response, SendOutcome};
-use super::semaphore::slots_for_rate;
+use super::pacemaker::Pacemaker;
 
 /// The fixed production submit URL. Never construct it from configuration.
 const PRODUCTION_SUBMIT_URL: &str = "https://text.external-api.pangram.com/task";
@@ -191,15 +190,14 @@ struct TaskCreatedWire {
     task_id: String,
 }
 
-/// The concrete client. Cloning shares the connection pool and semaphore;
-/// construction is cheap after the first build.
+/// The concrete client. Cloning shares the connection pool and pacing gate.
 #[derive(Clone)]
 pub struct UpstreamClient<C = super::config::SystemClock> {
     http: HttpClient,
     endpoints: UpstreamEndpoints,
     api_key: SecretString,
     config: AnalysisConfig<C>,
-    slots: Arc<Semaphore>,
+    pacemaker: Pacemaker<C>,
 }
 
 impl<C: Clock> fmt::Debug for UpstreamClient<C> {
@@ -210,8 +208,7 @@ impl<C: Clock> fmt::Debug for UpstreamClient<C> {
             .field("endpoints", &self.endpoints)
             .field("api_key", &"[redacted]")
             .field("config", &self.config)
-            .field("slots", &self.slots.available_permits())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -234,15 +231,13 @@ impl<C: Clock> UpstreamClient<C> {
         endpoints: UpstreamEndpoints,
     ) -> Result<Self, AnalysisError> {
         let http = HttpClient::build(config.per_request_timeout())?;
-        let slots = Arc::new(Semaphore::new(slots_for_rate(
-            config.max_requests_per_second(),
-        )));
+        let pacemaker = Pacemaker::new(config.max_requests_per_second(), config.clock());
         Ok(Self {
             http,
             endpoints,
             api_key,
             config,
-            slots,
+            pacemaker,
         })
     }
 
@@ -279,10 +274,15 @@ impl<C: Clock> UpstreamClient<C> {
             "model": "pangram-4",
             "public_dashboard_link": public_dashboard_link,
         });
-        let _permit = match self.acquire(cancel).await {
-            Ok(permit) => permit,
-            Err(_) => return Err(SubmitOutcome::Cancelled),
-        };
+        // There is no caller wait deadline on the submit path; a cancelled
+        // token is the only early release. Distinct deadline semantics live
+        // on the observation path where the caller supplies a wait budget.
+        match self.pacemaker.hurdle(cancel, None).await {
+            super::pacemaker::Gate::Released => {}
+            super::pacemaker::Gate::Cancelled | super::pacemaker::Gate::DeadlinePassed => {
+                return Err(SubmitOutcome::Cancelled);
+            }
+        }
         let outcome = self
             .http
             .post_json(&self.endpoints.submit, &self.api_key, &body, cancel)
@@ -306,25 +306,38 @@ impl<C: Clock> UpstreamClient<C> {
     }
 
     /// One safe GET observation of a task. Transient failures may be retried
-    /// by the internal bounded policy; a server `Retry-After` hint is
-    /// honored and clamped by the configured window. Returns the consumed
-    /// response for the caller to classify (success, failure, in-progress).
+    /// by the internal bounded policy; a server `Retry-After` hint is honored
+    /// and clamped by the configured window. The chain additionally honors the
+    /// caller's wait `deadline` and the policy's cumulative retry-time budget
+    /// so a small wait timeout interrupts promptly even through repeated
+    /// 429/503 responses carrying long hints. Returns the consumed response
+    /// for the caller to classify (success, failure, in-progress).
+    ///
+    /// Every attempt is issued through the shared pacing gate, so even a
+    /// retried chain cannot burst past the configured per-second ceiling.
     pub async fn poll_task(
         &self,
         task_id: &UpstreamTaskId,
         cancel: &CancellationToken,
+        deadline: Option<Instant>,
     ) -> Result<TaskPoll, PollError> {
         let policy = self.config.retry();
         let mut attempt: u32 = 1;
         let mut previous_delay = policy.base_delay;
+        let mut spent = Duration::ZERO;
         let clock = self.config.clock();
 
         loop {
             let url = self.endpoints.poll_url(task_id);
-            let _permit = self.acquire(cancel).await.map_err(|error| match error {
-                PollError::Cancelled => PollError::Cancelled,
-                other => other,
-            })?;
+            match self.pacemaker.hurdle(cancel, deadline).await {
+                super::pacemaker::Gate::Released => {}
+                super::pacemaker::Gate::Cancelled => return Err(PollError::Cancelled),
+                // The caller's wait budget ran out before the next request
+                // could issue: surface the wait timeout, not an interruption.
+                super::pacemaker::Gate::DeadlinePassed => {
+                    return Err(PollError::DeadlineExceeded);
+                }
+            }
             let outcome = self.http.get(&url, &self.api_key, cancel).await;
             let response = match outcome {
                 SendOutcome::Responded(response) => response,
@@ -336,10 +349,15 @@ impl<C: Clock> UpstreamClient<C> {
                         return Err(PollError::Failed(Box::new(transport_poll_error(&error))));
                     }
                     let delay = http::backoff_delay(&policy, previous_delay, attempt + 1);
+                    let delay =
+                        http::clamp_retry_sleep(&policy, delay, spent, clock.now(), deadline);
+                    spent += delay;
                     previous_delay = delay;
                     attempt += 1;
-                    if !sleep_or_cancel(clock, delay, cancel).await {
-                        return Err(PollError::Cancelled);
+                    match sleep_or_cancel(clock, delay, cancel, deadline).await {
+                        RetryWake::Slept => {}
+                        RetryWake::Cancelled => return Err(PollError::Cancelled),
+                        RetryWake::DeadlineReached => return Err(PollError::DeadlineExceeded),
                     }
                     continue;
                 }
@@ -352,15 +370,22 @@ impl<C: Clock> UpstreamClient<C> {
             }
             if (status == 429 || (500..600).contains(&status)) && attempt < policy.max_attempts {
                 // Transient server-side pressure on a safe read: honor
-                // Retry-After when present, else the computed backoff.
+                // Retry-After when present, else the computed backoff. Then
+                // clamp the chosen sleep to the cumulative budget and the
+                // caller's wait deadline so a hint can never stretch a chain
+                // past it.
                 let delay = match http::honor_retry_after(&policy, response.retry_after_ms()) {
                     Some(override_delay) => override_delay,
                     None => http::backoff_delay(&policy, previous_delay, attempt + 1),
                 };
+                let delay = http::clamp_retry_sleep(&policy, delay, spent, clock.now(), deadline);
+                spent += delay;
                 previous_delay = delay;
                 attempt += 1;
-                if !sleep_or_cancel(clock, delay, cancel).await {
-                    return Err(PollError::Cancelled);
+                match sleep_or_cancel(clock, delay, cancel, deadline).await {
+                    RetryWake::Slept => {}
+                    RetryWake::Cancelled => return Err(PollError::Cancelled),
+                    RetryWake::DeadlineReached => return Err(PollError::DeadlineExceeded),
                 }
                 continue;
             }
@@ -371,27 +396,6 @@ impl<C: Clock> UpstreamClient<C> {
                 &response,
                 Some(task_id),
             ))));
-        }
-    }
-
-    /// Acquires one throughput slot. The permit is held across the request
-    /// so concurrent callers never exceed the envelope.
-    async fn acquire(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<tokio::sync::SemaphorePermit<'_>, PollError> {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(PollError::Cancelled),
-            permit = self.slots.acquire() => {
-                permit.map_err(|_| PollError::Failed(Box::new(
-                    CanonicalError::new(
-                        ErrorCode::UpstreamError,
-                        "The request semaphore closed unexpectedly.",
-                    )
-                    .expect("static template"),
-                )))
-            }
         }
     }
 }
@@ -410,7 +414,9 @@ pub enum TaskPoll {
     Terminal(Box<Response>),
     /// The task ID was not found upstream.
     NotFound,
-    /// The provider reported a terminal task failure with a safe message.
+    /// The provider reported a terminal task failure with a sanitized
+    /// message (control sequences stripped, non-ASCII removed, length
+    /// bounded; raw provider text never crosses this boundary).
     AnalysisFailed { message: String, stage: String },
 }
 
@@ -443,11 +449,14 @@ pub enum SubmitOutcome {
 
 /// The failure surface of one safe GET observation. `Failed` is the
 /// canonical, already-classified error (HTTP mapping or unreadable
-/// terminal state); `Cancelled` is the local stop signal.
+/// terminal state); `Cancelled` is the local stop signal; `DeadlineExceeded`
+/// marks the caller's wait budget expiring inside a paced wait or retry
+/// sleep (surfaced by the observe loop as the canonical wait timeout).
 #[derive(Debug)]
 pub enum PollError {
     Failed(Box<CanonicalError>),
     Cancelled,
+    DeadlineExceeded,
 }
 
 /// A safe-read transport exhaustion mapped onto the canonical vocabulary:
@@ -525,9 +534,10 @@ fn classify_poll(response: Response, _task_id: &UpstreamTaskId) -> Result<TaskPo
                 .or_else(|| body.get("headline"))
                 .or_else(|| body.get("detail"))
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("Pangram reported a task failure without detail");
+                .map(super::normalize::sanitize_upstream_message)
+                .unwrap_or_else(|| "Pangram reported a task failure without detail".to_owned());
             Ok(TaskPoll::AnalysisFailed {
-                message: message.to_owned(),
+                message,
                 stage: stage.to_owned(),
             })
         }
@@ -647,15 +657,48 @@ fn map_transport_failure(error: &AnalysisError) -> CanonicalError {
     .expect("the network-unavailable template is statically valid")
 }
 
-async fn sleep_or_cancel(clock: impl Clock, delay: Duration, cancel: &CancellationToken) -> bool {
+/// How one inter-retry wait ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryWake {
+    /// The full planned sleep elapsed; the chain may issue the next attempt.
+    Slept,
+    /// The caller's cancellation token fired during the sleep.
+    Cancelled,
+    /// No cancellation fired, but the caller's wait deadline arrived first:
+    /// the observe loop surfaces the canonical wait timeout, not a stop.
+    DeadlineReached,
+}
+
+/// Sleeps for `delay` or until `cancel` (whichever first), but no later
+/// than `deadline`. A deadline shorter than the planned delay cuts the wait
+/// and reports `DeadlineReached` so the observe loop surfaces the canonical
+/// wait timeout rather than starting another retry sleep or mislabeling a
+/// time-out as a local cancellation.
+async fn sleep_or_cancel(
+    clock: impl Clock,
+    delay: Duration,
+    cancel: &CancellationToken,
+    deadline: Option<Instant>,
+) -> RetryWake {
     if delay.is_zero() {
         // Still yield once so a fully deterministic policy cannot starve a
         // concurrently cancelled token on a single-thread runtime.
         tokio::task::yield_now().await;
-        return !cancel.is_cancelled();
+        return if cancel.is_cancelled() {
+            RetryWake::Cancelled
+        } else {
+            RetryWake::Slept
+        };
     }
-    let deadline = clock.now() + delay;
-    clock.sleep_until(deadline, cancel).await
+    let natural = clock.now() + delay;
+    let wake = deadline.map_or(natural, |deadline| natural.min(deadline));
+    if !clock.sleep_until(wake, cancel).await {
+        return RetryWake::Cancelled;
+    }
+    if wake < natural {
+        return RetryWake::DeadlineReached;
+    }
+    RetryWake::Slept
 }
 
 #[cfg(test)]

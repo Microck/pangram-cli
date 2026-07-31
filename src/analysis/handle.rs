@@ -261,7 +261,11 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
                 }
             }
 
-            match self.client.poll_task(&self.task_id, &cancel).await {
+            match self
+                .client
+                .poll_task(&self.task_id, &cancel, deadline)
+                .await
+            {
                 Ok(TaskPoll::InProgress {
                     last_stage: raw_stage,
                     ..
@@ -323,6 +327,14 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
                         identity: self.identity(),
                     });
                 }
+                // A paced wait or retry sleep crossed the caller's wait
+                // budget: surface the canonical wait timeout with identity.
+                Err(PollError::DeadlineExceeded) => {
+                    return Ok(Err(TaskError::new(
+                        self.request.id(),
+                        wait_timeout_error(&self.identity()),
+                    )));
+                }
                 Err(PollError::Failed(error)) => {
                     return Ok(Err(TaskError::new(self.request.id(), *error)));
                 }
@@ -343,7 +355,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
 }
 
 /// Owns construction of running operations. Clones share the connection
-/// pool and throughput semaphore.
+/// pool and the time-based pacing gate.
 #[derive(Clone)]
 pub struct Analyzer<C = super::config::SystemClock> {
     client: UpstreamClient<C>,

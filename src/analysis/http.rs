@@ -1,11 +1,20 @@
 //! The one HTTP transport used by the analysis module.
 //!
 //! The client is built exactly once per [`crate::analysis::UpstreamClient`]
-//! with rustls through the platform verifier (native TLS is never enabled),
-//! system proxy discovery, decompression for gzip, Brotli, and deflate,
-//! streaming bodies, JSON, and redirect following disabled. A per-request
-//! timeout bounds every call; it is never a billable-ambiguity escape hatch
-//! by itself (callers classify send ambiguity separately).
+//! with the exact feature set pinned in `Cargo.toml`: rustls through the
+//! platform verifier (native TLS is never compiled, so no alternate trust
+//! root can be selected at runtime), `system-proxy` system proxy discovery,
+//! HTTP/2, charset handling, JSON, gzip/Brotli/deflate decompression, and
+//! streaming bodies. Redirect following is disabled. A per-request timeout
+//! bounds every call; it is never a billable-ambiguity escape hatch by
+//! itself (callers classify send ambiguity separately).
+//!
+//! Rustls evidence note: reqwest 0.13.4's `rustls` feature selects the
+//! platform verifier (`rustls-platform-verifier`) rather than webpki roots
+//! or a native TLS stack (`native-tls` / `rustls-tls-native` are not
+//! enabled and not compiled). Certificate verification therefore defers to
+//! the host platform trust store exactly once, with no alternate trust-root
+//! fallback available through any code path this crate enables.
 //!
 //! Responses are consumed through one bounded reader so a malformed or
 //! hostile peer cannot force an unbounded allocation.
@@ -20,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 /// this exists only as a defensive allocation cap before JSON parsing.
 const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
-use super::config::{Duration, RetryPolicy};
+use super::config::{Duration, Instant, RetryPolicy};
 use super::upstream::AnalysisError;
 
 /// A consumed response: the status plus a sanitized body reader. The raw
@@ -154,7 +163,8 @@ impl HttpClient {
     /// Builds the transport. Any construction failure surfaces once at
     /// startup; there is no lazy or insecure fallback. `use_rustls_tls()`
     /// selects the platform-verifier rustls backend explicitly; native TLS
-    /// is not compiled and cannot be selected.
+    /// and webpki roots are not compiled and cannot be selected, so there is
+    /// no alternate trust-root fallback.
     pub fn build(per_request_timeout: Duration) -> Result<Self, AnalysisError> {
         let inner = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -277,25 +287,76 @@ pub fn honor_retry_after(policy: &RetryPolicy, hint_ms: Option<u64>) -> Option<D
     })
 }
 
-/// A per-process jitter draw (xorshift64* over a seeded atomic). Semantics
-/// never depend on its quality; decorrelating retry schedules between peers
-/// is measurably better than every caller waking on the same timetable.
+/// The cumulative retry-time budget for one chain. When the policy leaves
+/// it unset, the bound is `max_delay * max_attempts`, the largest legitimate
+/// deterministic total; a configured budget may only lower that ceiling.
+pub fn cumulative_retry_budget_from(policy: &RetryPolicy) -> Duration {
+    let ceiling = policy.max_delay.saturating_mul(policy.max_attempts);
+    match policy.cumulative_retry_budget {
+        Some(budget) if !budget.is_zero() => budget.min(ceiling),
+        _ => ceiling,
+    }
+}
+
+/// Clamps one planned retry sleep so it can never violate the cumulative
+/// budget left in the chain or the caller's wait deadline. The caller passes
+/// the `spent` sleep already planned by earlier attempts and gets
+/// `min(planned, remaining_budget, remaining_deadline)` with a floor of
+/// zero; a zero result lets the next loop iteration re-check the deadline
+/// and exit promptly through the canonical path rather than sleeping on.
+/// This stops large `Retry-After` hints from postponing interruption
+/// indefinitely while preserving bounded attempts and the hints themselves.
+pub fn clamp_retry_sleep(
+    policy: &RetryPolicy,
+    planned: Duration,
+    spent: Duration,
+    now: Instant,
+    deadline: Option<Instant>,
+) -> Duration {
+    let remaining_budget = cumulative_retry_budget_from(policy).saturating_sub(spent);
+    let bounded = planned.min(remaining_budget);
+    // With no caller deadline the budget is the only ceiling. With one, the
+    // sleep is additionally cut to whatever time remains; a lapsed deadline
+    // collapses the sleep to zero so the loop re-checks promptly.
+    deadline
+        .and_then(|deadline| deadline.checked_duration_since(now))
+        .map_or(bounded, |remaining| bounded.min(remaining))
+}
+
+/// A per-process jitter draw (xorshift64* over a seeded atomic). The state
+/// advance is atomic per caller, so racing callers can never read the same
+/// prior state and produce identical lockstep draws. Semantics never depend
+/// on the draw's quality; decorrelating retry schedules between concurrent
+/// callers is measurably better than every caller waking on one timetable.
 fn jitter_draw() -> u128 {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static STATE: AtomicU64 = AtomicU64::new(0);
-    let seed = STATE.load(Ordering::Relaxed).max(1);
-    let mut next = seed;
-    next ^= next << 13;
-    next ^= next >> 7;
-    next ^= next << 17;
-    STATE.store(next, Ordering::Relaxed);
-    u128::from(next)
+    // The closure is FnMut and runs at least once per CAS attempt; it also
+    // runs on each failed retry, so capture the *winning* draw by letting
+    // the closure store its computed next into `drawn`. After the final
+    // successful CAS, `drawn` holds exactly the state that was published.
+    let mut drawn: u64 = 0;
+    STATE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            let seed = current.max(1);
+            let mut next = seed;
+            next ^= next << 13;
+            next ^= next >> 7;
+            next ^= next << 17;
+            drawn = next;
+            Some(next)
+        })
+        // Two consequences matter for the regression: the published value
+        // is now the computed next state (never the stale prior), and two
+        // racing callers can never both select the same prior state, so
+        // they can never draw identically.
+        .expect("the jitter-advance closure never yields None");
+    u128::from(drawn)
 
     // Seeding note: a fixed initializer is acceptable because jitter only
-    // needs per-call variance, not unpredictability. The first draws of a
-    // xorshift with a non-zero fixed state already decorrelate consecutive
-    // callers within a process.
+    // needs per-call variance, not unpredictability. The atomic advance is
+    // what guarantees uniqueness between callers, not the seed.
 }
 
 fn nanos_u64(value: u128) -> u64 {
@@ -313,6 +374,7 @@ mod tests {
             max_attempts: 4,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_millis(900),
+            cumulative_retry_budget: None,
         }
         .validate()
         .unwrap()
@@ -355,6 +417,24 @@ mod tests {
     fn zero_max_delay_ignores_hints() {
         let policy = RetryPolicy::OFF;
         assert_eq!(honor_retry_after(&policy, Some(5_000)), None);
+    }
+
+    #[test]
+    fn concurrent_jitter_draws_advance_the_shared_state_atomically() {
+        // Regression for the load/modify/store race: two callers that both
+        // load the same prior state used to compute and publish identical
+        // next states, locking their retry schedules together. With the
+        // atomic fetch_update the winner's advance is a single RMW, so a
+        // batch of same-instant draws must all be distinct.
+        const DRAWS: usize = 512;
+        let mut seen = std::collections::HashSet::with_capacity(DRAWS);
+        for _ in 0..DRAWS {
+            let draw = jitter_draw();
+            assert!(
+                seen.insert(draw),
+                "racing callers must never draw identically (old load/store race)"
+            );
+        }
     }
 
     #[test]

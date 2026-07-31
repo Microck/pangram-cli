@@ -23,6 +23,44 @@ const IN_PROGRESS_STAGES: &[&str] = &["STAGE_PREPROCESSING", "STAGE_INFERENCE"];
 const TERMINAL_SUCCESS_STAGE: &str = "STAGE_SUCCESS";
 const TERMINAL_FAILURE_STAGE: &str = "STAGE_FAILED";
 
+/// The retained length ceiling for an upstream failure message. Provider
+/// text is untrusted: it may echo submitted content or carry terminal
+/// control sequences, so it is reduced to a short ASCII-printable prefix
+/// before it can cross into canonical error details.
+pub(crate) const MAX_UPSTREAM_MESSAGE_CHARS: usize = 200;
+
+/// Reduces an upstream failure message to a safe, bounded, printable form.
+///
+/// Upstream text is untrusted: it may echo the submitted content (including
+/// material that looks like an API key) and may embed terminal control
+/// sequences. Before it can appear in a canonical error `details` map we
+///
+/// 1. replace tab/line-feed/carriage-return with spaces (keeping single-line
+///    structure but dropping hard control effects),
+/// 2. drop every other control character (including the CSI/OSC/Oscescape
+///    introducers, C0/C1 ranges, and DEL) and every non-ASCII scalar, and
+/// 3. truncate the result to [`MAX_UPSTREAM_MESSAGE_CHARS`] characters.
+///
+/// The result is never the raw provider text. Empty reductions fall back to
+/// a fixed placeholder so the field stays informative without content.
+pub(crate) fn sanitize_upstream_message(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .filter_map(|ch| match ch {
+            '\t' | '\n' | '\r' => Some(' '),
+            ch if ch.is_ascii() && !ch.is_ascii_control() => Some(ch),
+            _ => None,
+        })
+        .take(MAX_UPSTREAM_MESSAGE_CHARS)
+        .collect();
+    let trimmed = sanitized.trim();
+    if trimmed.is_empty() {
+        "Pangram reported a task failure without readable detail".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 /// A sanitized contract violation. Details carry only the field path, the
 /// offending scalar token or structural shape; never text content.
 fn contract_changed(field: &'static str, token: impl Into<String>) -> CanonicalError {
@@ -107,7 +145,7 @@ pub enum TaskState {
     },
     /// A terminal success document normalized against the Pangram 4 shape.
     Success(Box<NormalizedTask>),
-    /// A terminal provider failure with a safe message.
+    /// A terminal provider failure with a sanitized (never raw) message.
     Failed { message: String, stage: String },
 }
 
@@ -146,8 +184,8 @@ pub fn normalize_task_state(body: &serde_json::Value) -> Result<TaskState, Canon
                 .or_else(|| body.get("headline"))
                 .or_else(|| body.get("detail"))
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("Pangram reported a task failure without detail")
-                .to_owned(),
+                .map(sanitize_upstream_message)
+                .unwrap_or_else(|| "Pangram reported a task failure without detail".to_owned()),
             stage: stage.to_owned(),
         }),
         other => Err(contract_changed("stage", other)),

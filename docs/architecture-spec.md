@@ -337,8 +337,13 @@ Do not provide an insecure TLS option.
 
 ### 8.3 Rate and retry policy
 
-Use one shared rate limiter with a hard maximum of 5 requests per second.
-Configuration may lower but not raise it.
+Use one shared time-based issue gate with a hard maximum of 5 requests per
+second. Every Pangram request (submit and poll) is issued only after the gate
+releases it, so request issue times are spaced at least `1/rate` apart and no
+burst can exceed the pacing. Rate limiting is enforced on request issue
+timing, not request completion. Configuration may lower the rate but never
+raise it above 5. The gate schedule is shared across all callers of one
+client (one owner, not a per-request or per-sender limiter).
 
 Retry policy:
 
@@ -352,6 +357,16 @@ Retry policy:
 
 Honor `Retry-After`. Use bounded exponential backoff with jitter for eligible
 GET requests. Poll intervals and HTTP retry backoff are separate concepts.
+
+Safe-GET retry chains observe the caller's wait deadline and a cumulative
+retry-time budget in addition to the per-attempt cap. The total time spent
+sleeping between retry attempts must not exceed the cumulative budget, and a
+caller wait/cancellation deadline interrupts the retry prompt sleep promptly
+(even through repeated `429`/`503` responses carrying `Retry-After` hints).
+Retry attempts remain bounded; the budget and deadline add interruption
+semantics, they do not extend the attempt count. The jitter used to
+decorrelate backoff schedules advances once per draw (atomically per caller)
+so concurrent callers can never produce identical lockstep retry schedules.
 
 ### 8.4 Error mapping
 
