@@ -33,66 +33,11 @@ pub(super) enum OutputRegistry {
     UnknownSubmission(SubmissionOutcomeUnknownDetails),
 }
 
-#[derive(JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Config {
-    pub config_version: u8,
-    pub history: Option<HistoryConfig>,
-    pub tui: Option<TuiConfig>,
-    pub updates: Option<UpdatesConfig>,
-    pub network: Option<NetworkConfig>,
-}
-
-#[derive(JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct HistoryConfig {
-    #[schemars(default)]
-    pub enabled: Option<bool>,
-}
-
-#[derive(JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct TuiConfig {
-    pub intro: Option<IntroMode>,
-    pub keymap: Option<Keymap>,
-    pub motion: Option<Motion>,
-}
-
-#[derive(JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum IntroMode {
-    Once,
-    Always,
-    Off,
-}
-
-#[derive(JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Keymap {
-    Regular,
-    Vim,
-}
-
-#[derive(JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Motion {
-    Full,
-    Reduced,
-    Off,
-}
-
-#[derive(JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct UpdatesConfig {
-    pub check_on_tui_start: Option<bool>,
-}
-
-#[derive(JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct NetworkConfig {
-    #[schemars(range(min = 0.0, max = 5.0))]
-    pub max_requests_per_second: Option<f64>,
-}
+// The configuration schema is owned by the canonical runtime model in
+// `crate::config`. Aliasing `Config` keeps the generated `$defs` names and
+// the committed `config.schema.json` byte-identical to the Schemars-only
+// predecessors they replaced.
+pub(super) use crate::config::Config;
 
 #[derive(JsonSchema)]
 #[serde(deny_unknown_fields)]

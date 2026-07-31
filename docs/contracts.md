@@ -863,111 +863,10 @@ pangram update --yes
 
 Completions emit only the completion script.
 
-## 15. Configuration contract
+## 15. Local setup contract
 
-Canonical non-secret TOML:
-
-```toml
-config_version = 1
-
-[history]
-enabled = false
-
-[tui]
-intro = "once"
-keymap = "regular"
-motion = "full"
-
-[updates]
-# Omitted until first-launch choice.
-check_on_tui_start = true
-
-[network]
-max_requests_per_second = 5
-```
-
-Closed values:
-
-- `tui.intro`: `once`, `always`, `off`
-- `tui.keymap`: `regular`, `vim`
-- `tui.motion`: `full`, `reduced`, `off`
-
-Rules:
-
-- `tui.intro` controls frequency; `tui.motion` controls presentation
-- `tui.intro = "once"` records completion in local TUI state without rewriting
-  user configuration
-- `tui.intro = "off"` and `tui.motion = "off"` both suppress the intro
-- unknown keys fail validation
-- `config_version` is required
-- `network.max_requests_per_second` is greater than 0 and no greater than 5
-- `updates.check_on_tui_start` may be omitted before onboarding
-- credentials MUST NOT appear in this file or its generated schema
-- no output-format setting
-- no public-link setting
-- no endpoint setting
-- no telemetry setting
-- no project profiles
-
-Environment:
-
-| Variable | Meaning |
-| --- | --- |
-| `PANGRAM_API_KEY` | Ephemeral credential override |
-| `PANGRAM_CONFIG` | Explicit config file |
-| `PANGRAM_DATA_DIR` | Explicit history and state directory |
-| `NO_COLOR` | Disable terminal color |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Standard proxy behavior |
-| `CI` | Disable interactive and automatic-update behavior |
-
-General precedence is flags, environment, explicit config, default config,
-built-ins. Credentials use environment then stored key.
-
-The stored key lives in a dedicated `credentials.toml` in the default platform
-configuration directory. `PANGRAM_CONFIG` never relocates it. The file contains
-only `credentials_version = 1` and `api_key`. It requires mode `0600` on Unix or
-an owner-only ACL on Windows. Creation and every read fail closed when the
-restriction cannot be established.
-
-### 15.1 Intro startup contract
-
-An intro-eligible launch has an interactive TTY, does not run under `CI`, has
-`TERM` other than `dumb`, and has reached the minimum 80x24 terminal size.
-Re-entering the alternate screen within the same process is not a new launch.
-All three standard streams must be TTYs.
-
-The resolved behavior is:
-
-| `tui.intro` | `tui.motion` | Behavior |
-| --- | --- | --- |
-| `off` | any | Open Analyze immediately |
-| `once` | `full` | Play once, then open Analyze |
-| `once` | `reduced` | Show the resolved mark in the first interactive Analyze frame once |
-| `once` | `off` | Open Analyze immediately without consuming the one-time state |
-| `always` | `full` | Play on every eligible launch |
-| `always` | `reduced` | Show the resolved mark in the first interactive Analyze frame |
-| `always` | `off` | Open Analyze immediately |
-
-For `once`, completing the full intro, skipping it, or rendering the reduced
-first frame atomically records `intro_seen = true` in local TUI state under
-`PANGRAM_DATA_DIR`. A suppressed or ineligible launch does not consume the
-one-time state. The marker is state, not configuration, and never changes the
-value returned by `pangram config get tui.intro`.
-
-The marker file is `PANGRAM_DATA_DIR/tui-state.json`:
-
-```json
-{
-  "schema_version": "1",
-  "intro_seen": true
-}
-```
-
-The TUI writes it through a temporary sibling file and atomic rename. A
-missing file means unseen. An unreadable, invalid, or unwritable state file
-produces a non-blocking diagnostic; invalid or unreadable state is treated as
-unseen, and the failure MUST NOT prevent Analyze from opening. Its machine
-contract is [tui-state.schema.json](../contracts/tui-state.schema.json).
+The configuration, credential, and diagnostics contract is normative in
+[local-setup-contract.md](local-setup-contract.md).
 
 ## 16. Update state and receipt
 
@@ -987,6 +886,8 @@ owner.
   [update-contract.md](update-contract.md).
 - The local history interface is normative in
   [history-contract.md](history-contract.md).
+- The local setup interface is normative in
+  [local-setup-contract.md](local-setup-contract.md).
 
 ## 19. Shell contracts
 

@@ -9,22 +9,27 @@ use serde_json::Value;
 const HELP: &str = "\
 Unofficial Pangram terminal client
 
-Usage: pangram
+Usage: pangram [OPTIONS] [COMMAND]
+
+Commands:
+  auth    Manage the locally stored Pangram API key
+  config  Inspect and edit the local Pangram configuration
+  doctor  Run local diagnostics without network access or credential validation
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --config <PATH>    Explicit configuration file path for this invocation
+      --data-dir <PATH>  Explicit history and state directory for this invocation
+  -h, --help             Print help
+  -V, --version          Print version
 ";
 
 const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "agent",
     "analyze",
-    "auth",
     "bulk",
     "completions",
-    "config",
     "detect",
-    "doctor",
     "history",
     "mcp",
     "plagiarism",
@@ -33,15 +38,24 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "update",
 ];
 
-const PHASE_0_RUNTIME_DEPENDENCIES: &[&str] = &[
+// Phase 1 runtime dependencies: the Phase 0 set plus the local-setup core
+// (platform paths, secret handling, TOML, and the masked terminal prompt)
+// plus the Windows credential ACL binding (a target-specific runtime dep).
+const PHASE_1_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
+    "directories",
     "jiff",
+    "rpassword",
     "schemars",
+    "secrecy",
     "serde",
     "serde_json",
     "sha2",
     "thiserror",
+    "toml",
     "uuid",
+    "windows-sys",
+    "zeroize",
 ];
 
 const FORBIDDEN_NETWORK_APIS: &[&str] = &[
@@ -76,9 +90,9 @@ fn pangram() -> Command {
 
 fn planned_command_error(command: &str) -> String {
     format!(
-        "error: unexpected argument '{command}' found\n\
+        "error: unrecognized subcommand '{command}'\n\
          \n\
-         Usage: pangram\n\
+         Usage: pangram [OPTIONS] [COMMAND]\n\
          \n\
          For more information, try '--help'.\n"
     )
@@ -149,7 +163,7 @@ fn code_before_line_comment(line: &str) -> &str {
 }
 
 #[test]
-fn help_lists_no_unimplemented_command_entries() {
+fn help_lists_only_implemented_command_entries() {
     let output = pangram().arg("--help").output().unwrap();
 
     assert!(output.status.success());
@@ -214,7 +228,19 @@ fn every_planned_top_level_command_is_rejected_before_runtime_work() {
             planned_command_error(command),
             "{command}"
         );
-        assert!(!HELP.contains(command), "{command}");
+        // The planned command must not be advertised as an available command
+        // entry. (An arbitrary substring match cannot be used: the `--data-dir`
+        // help legitimately contains the word "history".)
+        let listed_commands = HELP
+            .lines()
+            .skip_while(|line| *line != "Commands:")
+            .skip(1)
+            .take_while(|line| line.starts_with("  "))
+            .map(|line| line.split_whitespace().next().unwrap());
+        assert!(
+            !listed_commands.clone().any(|name| name == command),
+            "{command} must not appear in the help Commands listing"
+        );
     }
 }
 
@@ -313,7 +339,7 @@ fn mcp_file_roots_are_explicit_repeatable_startup_options() {
 }
 
 #[test]
-fn cargo_metadata_reports_the_exact_phase_zero_runtime_dependencies() {
+fn cargo_metadata_reports_the_exact_phase_one_runtime_dependencies() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -341,12 +367,12 @@ fn cargo_metadata_reports_the_exact_phase_zero_runtime_dependencies() {
         .filter(|dependency| dependency["kind"].is_null())
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
-    let expected: BTreeSet<_> = PHASE_0_RUNTIME_DEPENDENCIES.iter().copied().collect();
+    let expected: BTreeSet<_> = PHASE_1_RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
 }
 
 #[test]
-fn phase_zero_runtime_source_contains_no_network_path() {
+fn phase_one_runtime_source_contains_no_network_path() {
     let mut violations = Vec::new();
 
     for path in rust_source_paths() {
