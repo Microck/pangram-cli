@@ -257,8 +257,9 @@ impl<C: Clock> AnalysisConfig<C> {
 }
 
 /// Per-wait options supplied by adapters. A `None` timeout waits until the
-/// operation is terminal or locally cancelled; every CLI analysis command
-/// supplies its documented default at the adapter layer.
+/// operation is terminal or locally cancelled. Each CLI analysis command maps
+/// its `--timeout` flag onto this: an absent flag is `UNBOUNDED` (wait for
+/// terminal), and a supplied duration bounds the local wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WaitOptions {
     pub timeout: Option<Duration>,

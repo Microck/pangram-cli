@@ -487,6 +487,20 @@ impl AnalysisOutput {
     pub fn many(analyses: Vec<Analysis<CanonicalError>>) -> Result<Self, OutputValidationError> {
         NonEmptyAnalyses::new(analyses).map(Self::Many)
     }
+
+    /// One analysis becomes `One`; a non-empty series becomes `Many` in
+    /// submission order. An empty series is the caller's bug and rejected.
+    pub fn from_analyses(
+        analyses: Vec<Analysis<CanonicalError>>,
+    ) -> Result<Self, OutputValidationError> {
+        match analyses.len() {
+            0 => Err(OutputValidationError::EmptyValue("analysis output")),
+            1 => Ok(Self::one(
+                analyses.into_iter().next().expect("one analysis"),
+            )),
+            _ => Self::many(analyses),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for AnalysisOutput {

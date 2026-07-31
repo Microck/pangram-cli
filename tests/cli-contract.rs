@@ -9,19 +9,25 @@ use serde_json::Value;
 const HELP: &str = "\
 Unofficial Pangram terminal client
 
-Usage: pangram [OPTIONS] [COMMAND]
+Usage: pangram [OPTIONS] [TEXT] [COMMAND]
 
 Commands:
   auth    Manage the locally stored Pangram API key
   config  Inspect and edit the local Pangram configuration
   doctor  Run local diagnostics without network access or credential validation
+  detect  Detect AI-generated text through Pangram 4
   help    Print this message or the help of the given subcommand(s)
 
+Arguments:
+  [TEXT]  Bare text analyzes it through AI detection; the literal `-` reads stdin
+
 Options:
-      --config <PATH>    Explicit configuration file path for this invocation
-      --data-dir <PATH>  Explicit history and state directory for this invocation
-  -h, --help             Print help
-  -V, --version          Print version
+      --config <PATH>          Explicit configuration file path for this invocation
+      --data-dir <PATH>        Explicit history and state directory for this invocation
+      --error-format <FORMAT>  Surface failures as a JSON envelope or a text message [possible values: json, text]
+      --no-color               Disable terminal color in pretty output
+  -h, --help                   Print help
+  -V, --version                Print version
 ";
 
 const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
@@ -29,7 +35,6 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "analyze",
     "bulk",
     "completions",
-    "detect",
     "history",
     "mcp",
     "plagiarism",
@@ -53,6 +58,7 @@ const PHASE_2_RUNTIME_DEPENDENCIES: &[&str] = &[
     "serde",
     "serde_json",
     "sha2",
+    "signal-hook",
     "thiserror",
     "toon-format",
     "tokio",
@@ -91,16 +97,6 @@ const FORBIDDEN_NETWORK_ENDPOINTS: &[&str] = &[
 
 fn pangram() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pangram"))
-}
-
-fn planned_command_error(command: &str) -> String {
-    format!(
-        "error: unrecognized subcommand '{command}'\n\
-         \n\
-         Usage: pangram [OPTIONS] [COMMAND]\n\
-         \n\
-         For more information, try '--help'.\n"
-    )
 }
 
 fn command(path: &[&str]) -> &'static CommandSpec {
@@ -213,7 +209,7 @@ fn short_version_reports_the_package_version() {
 }
 
 #[test]
-fn every_planned_top_level_command_is_rejected_before_runtime_work() {
+fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
     let planned_commands: BTreeSet<_> = FULL_GRAMMAR
         .commands
         .iter()
@@ -224,15 +220,17 @@ fn every_planned_top_level_command_is_rejected_before_runtime_work() {
 
     assert_eq!(planned_commands, expected);
     for command in planned_commands {
+        // A bare token spelling a planned command name is literal text for
+        // detection, not a rejected subcommand (contracts.md 14.1). Without a
+        // configured key it reaches the canonical missing-credential failure.
         let output = pangram().arg(command).output().unwrap();
 
-        assert_eq!(output.status.code(), Some(2), "{command}");
-        assert!(output.stdout.is_empty(), "{command}");
-        assert_eq!(
-            String::from_utf8(output.stderr).unwrap(),
-            planned_command_error(command),
-            "{command}"
-        );
+        assert_eq!(output.status.code(), Some(4), "{command}");
+        assert!(output.stderr.is_empty(), "{command}");
+        let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["command"], "detect", "{command}");
+        assert_eq!(body["error"]["code"], "missing_api_key", "{command}");
+
         // The planned command must not be advertised as an available command
         // entry. (An arbitrary substring match cannot be used: the `--data-dir`
         // help legitimately contains the word "history".)
@@ -246,6 +244,22 @@ fn every_planned_top_level_command_is_rejected_before_runtime_work() {
             !listed_commands.clone().any(|name| name == command),
             "{command} must not appear in the help Commands listing"
         );
+    }
+}
+
+#[test]
+fn hyphen_leading_unknown_flags_are_usage_errors() {
+    for output in [
+        pangram().arg("--frobnicate").output().unwrap(),
+        pangram()
+            .args(["detect", "--no-such-flag"])
+            .output()
+            .unwrap(),
+    ] {
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("unexpected argument"), "{stderr}");
     }
 }
 

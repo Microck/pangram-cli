@@ -1,9 +1,12 @@
 use std::ffi::OsString;
 
-use clap::{Arg, ArgAction, ArgGroup, Command};
+use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
 
+pub(crate) mod detect;
 pub mod grammar;
 mod local_setup;
+
+pub(crate) use crate::config::redact_io;
 
 pub use grammar::{
     ArgumentGroupSpec, ArgumentKind, ArgumentSpec, Availability, CommandKind, CommandSpec,
@@ -143,9 +146,89 @@ pub fn runtime_command() -> Command {
                 .help("Render the canonical JSON envelope or a readable check list"),
         );
 
+    let detect = Command::new("detect")
+        .about("Detect AI-generated text through Pangram 4")
+        .arg(
+            Arg::new("TEXT")
+                .value_name("TEXT")
+                .num_args(1)
+                .help("Literal text to analyze; the literal `-` reads stdin"),
+        )
+        .arg(
+            Arg::new("file")
+                .long("file")
+                .value_name("PATH")
+                .num_args(1)
+                .action(ArgAction::Append)
+                .help("Read a UTF-8 text file; may be repeated"),
+        )
+        .arg(
+            Arg::new("detach")
+                .long("detach")
+                .action(ArgAction::SetTrue)
+                .help("Report the accepted task without waiting for the result"),
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .value_parser(["json", "jsonl", "toon", "markdown", "pretty"])
+                .help("Render the canonical envelope in the selected projection"),
+        )
+        .arg(
+            Arg::new("include-input")
+                .long("include-input")
+                .action(ArgAction::SetTrue)
+                .help("Include the submitted text in the canonical input record"),
+        )
+        .arg(
+            Arg::new("save")
+                .long("save")
+                .action(ArgAction::SetTrue)
+                .help("Save to local history (unavailable; history arrives in a later phase)"),
+        )
+        .arg(
+            Arg::new("public-link")
+                .long("public-link")
+                .action(ArgAction::SetTrue)
+                .help("Ask Pangram to create a public dashboard link for this analysis"),
+        )
+        .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .value_name("DURATION")
+                .num_args(1)
+                .help("Bound the wait (seconds, or a value with an s, ms, m, or h suffix)"),
+        )
+        .arg(
+            Arg::new("progress")
+                .long("progress")
+                .value_name("MODE")
+                .value_parser(["auto", "never", "jsonl"])
+                .help("Progress reporting on stderr: auto, never, or canonical jsonl"),
+        )
+        .arg(
+            Arg::new("max-billable-units")
+                .long("max-billable-units")
+                .value_name("N")
+                .num_args(1)
+                .help("Reject the request when the estimated cost exceeds this ceiling"),
+        )
+        .group(
+            ArgGroup::new("source_category")
+                .args(["TEXT", "file"])
+                .multiple(false),
+        );
+
     Command::new(FULL_GRAMMAR.name)
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .version(env!("CARGO_PKG_VERSION"))
+        .arg(
+            Arg::new("TEXT")
+                .value_name("TEXT")
+                .num_args(1)
+                .help("Bare text analyzes it through AI detection; the literal `-` reads stdin"),
+        )
         .arg(
             Arg::new("config")
                 .long("config")
@@ -162,9 +245,26 @@ pub fn runtime_command() -> Command {
                 .global(true)
                 .help("Explicit history and state directory for this invocation"),
         )
+        .arg(
+            Arg::new("error-format")
+                .long("error-format")
+                .value_name("FORMAT")
+                .num_args(1)
+                .global(true)
+                .value_parser(["json", "text"])
+                .help("Surface failures as a JSON envelope or a text message"),
+        )
+        .arg(
+            Arg::new("no-color")
+                .long("no-color")
+                .action(ArgAction::SetTrue)
+                .global(true)
+                .help("Disable terminal color in pretty output"),
+        )
         .subcommand(auth)
         .subcommand(config)
         .subcommand(doctor)
+        .subcommand(detect)
 }
 
 /// Parses a caller-supplied argv without exiting the process.
@@ -224,6 +324,14 @@ where
         arguments.push("--help".into());
     }
 
+    // Bare-input dispatch runs before Clap's errors surface only for the
+    // source-category rules Clap cannot express: `pangram -` (stdin), and a
+    // bare non-TTY launch whose piped stdin is the implicit input. Every other
+    // path stays Clap-owned so usage text and help keep their exact form.
+    if let Some(outcome) = bare_dispatch(&arguments, streams) {
+        return outcome;
+    }
+
     let matches = match runtime_command().try_get_matches_from(arguments) {
         Ok(matches) => matches,
         Err(error) => {
@@ -248,44 +356,239 @@ where
         }
     };
 
-    // A no-subcommand reach (bare, or only global flags such as
-    // `pangram --config PATH`) must display the same help as `--help` with a
-    // successful exit, not fall through to an internal failure. The bare
-    // `--help` injection above already covers `arguments.len() == 1`; this
-    // covers the global-flag-only spelling without changing a bare parse.
-    if matches.subcommand().is_none() {
-        let mut command = runtime_command();
-        let mut buffer = Vec::new();
-        // Help is fixed, renderable text; failure to render cannot honestly be
-        // a 0 and degrades to the general failure exit 1.
-        if command.write_long_help(&mut buffer).is_err() {
+    let global = crate::cli::detect::GlobalFlags::from_matches(&matches);
+    match matches.subcommand() {
+        Some(("detect", sub)) => execute_detect(sub, global, streams),
+        // A bare literal-text reach (`pangram some text`) resolves to implicit
+        // detection; the literal `-` reads stdin. A bare launch with no text
+        // and no subcommand falls through to the successful help surface (the
+        // pre-TUI fallback for the all-TTY case).
+        None if matches.get_one::<String>("TEXT").is_some() => {
+            let text = matches.get_one::<String>("TEXT").unwrap().clone();
+            if text == "-" {
+                execute_detect_bare_source(
+                    crate::cli::detect::Source::Stdin,
+                    &matches,
+                    global,
+                    streams,
+                )
+            } else {
+                execute_detect_bare_source(
+                    crate::cli::detect::Source::Literal(text),
+                    &matches,
+                    global,
+                    streams,
+                )
+            }
+        }
+        // A no-subcommand, no-text reach (`pangram --config PATH`, or a
+        // `pangram --help` that reached the match stage) displays the same
+        // help as `--help` with a successful exit, not an internal failure.
+        None => help_outcome(render_clap),
+        _ => {
+            let config_flag = matches.get_one::<String>("config").map(String::as_str);
+            let data_dir_flag = matches.get_one::<String>("data-dir").map(String::as_str);
+            let outcome = local_setup::dispatch(&matches, config_flag, data_dir_flag, streams);
+            finish(outcome)
+        }
+    }
+}
+
+/// Intercepts the bare-source cases Clap cannot express. Returns `Some` when
+/// it produced the final outcome; `None` falls through to the exact
+/// Clap/help surface for everything else.
+fn bare_dispatch(arguments: &[OsString], streams: &dyn StreamTty) -> Option<RunOutcome> {
+    // `pangram -` exactly: the literal stdin marker. Parse the root grammar
+    // (which accepts it as the `[TEXT]` value) and run detection from stdin.
+    if arguments.len() == 2 && arguments[1] == "-" {
+        let matches = runtime_command().try_get_matches_from(arguments).ok()?;
+        let global = crate::cli::detect::GlobalFlags::from_matches(&matches);
+        return Some(execute_detect_bare_source(
+            crate::cli::detect::Source::Stdin,
+            &matches,
+            global,
+            streams,
+        ));
+    }
+    // Literally bare (`pangram`, no argv beyond the program name): a piped
+    // non-TTY stdin is the detection source. A TTY stdin falls through to
+    // the bare-help/pre-TUI path below; an empty pipe resolves to
+    // input_required inside the detection flow.
+    if arguments.len() == 1 && !streams.stdin() {
+        let matches = runtime_command().try_get_matches_from(arguments).ok()?;
+        let global = crate::cli::detect::GlobalFlags::from_matches(&matches);
+        return Some(execute_detect_bare_source(
+            crate::cli::detect::Source::Stdin,
+            &matches,
+            global,
+            streams,
+        ));
+    }
+    None
+}
+
+/// Builds configuration, credentials, and the analyzer for a detection
+/// request, returning them or (on failure) an already-renderable outcome.
+/// The triple is heavy, so a boxed tuple keeps the error type small.
+#[allow(clippy::type_complexity)]
+fn prepare_detection(
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    streams: &dyn StreamTty,
+) -> Result<crate::analysis::Analyzer, crate::cli::detect::DetectOutcome> {
+    let started = crate::domain::UtcTimestamp::now();
+    let mut flags = crate::config::ConfigOverrides::default();
+    if let Some(config) = root_matches.get_one::<String>("config") {
+        flags = flags.with_config_file(config.clone());
+    }
+    if let Some(data_dir) = root_matches.get_one::<String>("data-dir") {
+        flags = flags.with_data_dir(data_dir.clone());
+    }
+    let overrides = crate::config::ConfigOverrides::merge(
+        flags,
+        crate::config::ConfigOverrides::from_environment(),
+    );
+    let service = crate::config::ConfigService::new(&overrides).map_err(|error| {
+        crate::cli::detect::early_failure(
+            global,
+            streams,
+            started,
+            crate::cli::detect::credential_error(error),
+        )
+    })?;
+    let api_key = crate::cli::detect::resolve_api_key(&service)
+        .map_err(|error| crate::cli::detect::early_failure(global, streams, started, error))?;
+    crate::cli::detect::build_analyzer(&service, api_key)
+        .map_err(|error| crate::cli::detect::early_failure(global, streams, started, error))
+}
+
+/// Runs an explicit `detect [TEXT|--file ...]` invocation. Argument and
+/// source extraction never fail before this point: Clap already enforced the
+/// closed flags and the exclusive source group.
+fn execute_detect(
+    matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    streams: &dyn StreamTty,
+) -> RunOutcome {
+    let started = crate::domain::UtcTimestamp::now();
+    let arguments = match crate::cli::detect::DetectArgs::from_matches(matches) {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            return finish_detect(crate::cli::detect::early_failure(
+                global, streams, started, error,
+            ));
+        }
+    };
+    let source = if let Some(files) = matches.get_many::<String>("file") {
+        crate::cli::detect::Source::Files(files.cloned().collect())
+    } else if let Some(text) = matches.get_one::<String>("TEXT") {
+        if text == "-" {
+            crate::cli::detect::Source::Stdin
+        } else {
+            crate::cli::detect::Source::Literal(text.clone())
+        }
+    } else {
+        crate::cli::detect::Source::Stdin
+    };
+
+    run_detection(source, arguments, matches, global, streams, None)
+}
+
+/// Runs a bare-source detection (literal text, `-`, or piped stdin) using
+/// only defaults; no `detect` flags were supplied.
+fn execute_detect_bare_source(
+    source: crate::cli::detect::Source,
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    streams: &dyn StreamTty,
+) -> RunOutcome {
+    let arguments = crate::cli::detect::DetectArgs::for_bare();
+    run_detection(source, arguments, root_matches, global, streams, None)
+}
+
+/// Plans (validates and prices) the request before any credential work, then
+/// resolves credentials and the analyzer only for a viable plan. Local input
+/// errors therefore surface even when no key is configured.
+fn run_detection(
+    source: crate::cli::detect::Source,
+    arguments: crate::cli::detect::DetectArgs,
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    streams: &dyn StreamTty,
+    stdin_text: Option<String>,
+) -> RunOutcome {
+    let plan = match crate::cli::detect::plan(source, arguments, &global, streams, stdin_text) {
+        Ok(plan) => plan,
+        Err(outcome) => return finish_detect(outcome),
+    };
+    let analyzer = match prepare_detection(root_matches, global, streams) {
+        Ok(analyzer) => analyzer,
+        Err(outcome) => return finish_detect(outcome),
+    };
+    finish_detect(crate::cli::detect::execute(&plan, analyzer, streams))
+}
+
+/// Renders one executed detect command. When the dispatch already streamed a
+/// projection (or a text error), the process layer only reports the exit
+/// code; otherwise it prints the canonical JSON envelope(s) to stdout.
+fn finish_detect(outcome: crate::cli::detect::DetectOutcome) -> RunOutcome {
+    if outcome.rendered {
+        return RunOutcome {
+            exit_code: outcome.exit_code,
+            clap_error: None,
+        };
+    }
+    let mut exit_code = outcome.exit_code;
+    {
+        use std::io::Write as _;
+        let mut stdout = std::io::stdout().lock();
+        for envelope in &outcome.envelopes {
+            match serde_json::to_string(envelope) {
+                Ok(line) => {
+                    if writeln!(stdout, "{line}")
+                        .and_then(|_| stdout.flush())
+                        .is_err()
+                    {
+                        exit_code = 1;
+                    }
+                }
+                Err(_) => {
+                    exit_code = 1;
+                }
+            }
+        }
+    }
+    RunOutcome {
+        exit_code,
+        clap_error: None,
+    }
+}
+
+/// Renders the fixed long-help text with a successful exit, or exit 1 when
+/// the render or write fails.
+fn help_outcome(render_clap: bool) -> RunOutcome {
+    let mut command = runtime_command();
+    let mut buffer = Vec::new();
+    if command.write_long_help(&mut buffer).is_err() {
+        return RunOutcome {
+            exit_code: 1,
+            clap_error: None,
+        };
+    }
+    if render_clap {
+        use std::io::Write as _;
+        let mut stdout = std::io::stdout().lock();
+        if stdout.write_all(&buffer).is_err() {
             return RunOutcome {
                 exit_code: 1,
                 clap_error: None,
             };
         }
-        if render_clap {
-            use std::io::Write as _;
-            let mut stdout = std::io::stdout().lock();
-            if stdout.write_all(&buffer).is_err() {
-                return RunOutcome {
-                    exit_code: 1,
-                    clap_error: None,
-                };
-            }
-        }
-        return RunOutcome {
-            exit_code: 0,
-            clap_error: None,
-        };
     }
-
-    // Matched global values override their environment counterparts; Clap
-    // owns the spelling and value validation of every occurrence.
-    let config_flag = matches.get_one::<String>("config").map(String::as_str);
-    let data_dir_flag = matches.get_one::<String>("data-dir").map(String::as_str);
-    let outcome = local_setup::dispatch(&matches, config_flag, data_dir_flag, streams);
-    finish(outcome)
+    RunOutcome {
+        exit_code: 0,
+        clap_error: None,
+    }
 }
 
 /// Renders one executed Phase 1 command: exactly one trailing newline, empty
@@ -346,9 +649,17 @@ mod tests {
     }
 
     #[test]
-    fn planned_commands_are_rejected_before_runtime_work() {
-        for planned in ["detect", "history", "mcp", "update", "agent"] {
-            try_parse(&[planned]).unwrap_err();
+    fn hyphen_leading_unknowns_are_rejected_before_runtime_work() {
+        // Only a hyphen-leading unknown stays a Clap usage error. A bare
+        // token that spells a planned command name is legitimate literal
+        // text for detection, not a rejected subcommand.
+        for unknown in ["--frobnicate", "-z", "--not-a-real-flag"] {
+            try_parse(&[unknown]).unwrap_err();
+        }
+        for literal in ["history", "mcp", "update", "agent", "plagiarism"] {
+            let parsed = try_parse(&[literal]).unwrap();
+            assert_eq!(parsed.get_one::<String>("TEXT").unwrap(), literal);
+            assert!(parsed.subcommand().is_none());
         }
     }
 
@@ -372,5 +683,52 @@ mod tests {
         try_parse(&["doctor", "--format", "json"]).unwrap();
         try_parse(&["doctor", "--format", "pretty"]).unwrap();
         try_parse(&["doctor", "--format", "yaml"]).unwrap_err();
+    }
+
+    #[test]
+    fn detect_source_category_is_exactly_one() {
+        try_parse(&["detect"]).unwrap();
+        try_parse(&["detect", "some text"]).unwrap();
+        try_parse(&["detect", "-"]).unwrap();
+        try_parse(&["detect", "--file", "a.txt", "--file", "b.txt"]).unwrap();
+        try_parse(&["detect", "text", "--file", "a.txt"]).unwrap_err();
+        try_parse(&["detect", "-", "--file", "a.txt"]).unwrap_err();
+    }
+
+    #[test]
+    fn detect_analysis_flags_are_closed_and_validated() {
+        try_parse(&["detect", "t", "--format", "xml"]).unwrap_err();
+        try_parse(&["detect", "t", "--progress", "sometimes"]).unwrap_err();
+        try_parse(&["detect", "t", "--detach", "extra"]).unwrap_err();
+        try_parse(&["detect", "--file"]).unwrap_err();
+        for format in ["json", "jsonl", "toon", "markdown", "pretty"] {
+            try_parse(&["detect", "t", "--format", format]).unwrap();
+        }
+        for progress in ["auto", "never", "jsonl"] {
+            try_parse(&["detect", "t", "--progress", progress]).unwrap();
+        }
+    }
+
+    #[test]
+    fn detect_help_lists_the_phase_two_surface() {
+        let mut command = runtime_command();
+        let detect = command.find_subcommand_mut("detect").unwrap();
+        let rendered = detect.render_help().to_string();
+        for fragment in [
+            "[TEXT]",
+            "--file",
+            "--detach",
+            "--format",
+            "--include-input",
+            "--public-link",
+            "--timeout",
+            "--progress",
+            "--max-billable-units",
+        ] {
+            assert!(
+                rendered.contains(fragment),
+                "help missing {fragment}:\n{rendered}"
+            );
+        }
     }
 }

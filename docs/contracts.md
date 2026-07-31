@@ -701,11 +701,31 @@ GLOBAL:
 
 Resolution:
 
-- no command, no input, and stdin, stdout, and stderr all TTYs: TUI
-- no command, literal text: detect
+- no command, no input, and stdin, stdout, and stderr all TTYs: TUI (the TUI
+  arrives in Phase 5; before it is compiled, that otherwise-TUI launch falls
+  back to successful help text exactly as bare `pangram --help`)
+- no command, literal text: detect. Every bare token that is not a compiled
+  subcommand and does not begin with `-` is literal text, including tokens
+  that spell planned (not yet compiled) command names; those are analyzed as
+  text. Only a hyphen-leading unknown remains a Clap usage error.
 - no command, non-TTY stdin with content: detect
 - no command, empty stdin or any redirected terminal stream: `input_required`
 - literal `-`: stdin
+
+Source-category and content rules:
+
+- `word_count` is the adapter-computed count of Unicode whitespace-separated
+  tokens (`str::split_whitespace`), the canonical count shown in input
+  summaries and used for the text billing estimate.
+- Empty or whitespace-only literal text and empty or whitespace-only piped
+  stdin are the canonical `input_required` usage error: no content was
+  supplied to detect. An executable stdin (TTY, or a pipe that decodes to
+  nothing) is also `input_required`.
+- `--file` reads UTF-8 text files only in schema major 1. A path that cannot
+  be read is `input_required`; a file whose bytes are not UTF-8, or whose
+  decoded text carries no detectable words, is `unsupported_input`, both
+  before any submission. Binary document (PDF, DOCX, RTF) detection is a
+  later-phase workflow and is not inferred client side.
 
 Defaults:
 
@@ -749,9 +769,21 @@ Rules:
 - binary file plagiarism and combined analysis fail before submission
 - timeout stops waiting, not upstream work
 - `--max-billable-units` rejects a locally estimated request above the ceiling
-  before submission; MCP billable tools require the same field
+  before submission; MCP billable tools require the same field. Each analyzed
+  text contributes its own started-100-word estimate, so repeated `--file`
+  inputs are summed and compared against the single ceiling before any
+  submission.
 - text detection estimates one billable unit per started 100-word block, with
   a minimum of one
+
+Wait and completion:
+
+- `--timeout DURATION` accepts a non-negative decimal count of seconds (`30`,
+  `0.5`), optionally followed by exactly one ASCII unit suffix `s`, `ms`,
+  `m`, or `h` (`500ms`, `2m`, `1h`). A missing unit means seconds.
+- when `--timeout` is not supplied, `detect` waits for the analysis to reach a
+  terminal state without a local wait deadline; there is no hidden wait
+  ceiling. A caller bounds an observation only by passing `--timeout`.
 
 Pangram 4 is the only production text model. The CLI has no model-selection
 flag. The analysis module MUST send Pangram's documented Pangram 4 selector,

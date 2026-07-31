@@ -271,15 +271,15 @@ const fn available_command(
 const GLOBAL_ARGUMENTS: &[ArgumentSpec] = &[
     option("--config", "PATH", &[], false, false, Phase::LocalSetup).available(),
     option("--data-dir", "PATH", &[], false, false, Phase::LocalSetup).available(),
-    option("--error-format", "FORMAT", &["json", "text"], false, false, Phase::TextDetection),
-    flag("--no-color", Phase::TextDetection),
+    option("--error-format", "FORMAT", &["json", "text"], false, false, Phase::TextDetection).available(),
+    flag("--no-color", Phase::TextDetection).available(),
     flag("--version", Phase::Scaffold).with_aliases(&["-V"]).available(),
     flag("--help", Phase::Scaffold).with_aliases(&["-h"]).available(),
 ];
 
 #[rustfmt::skip]
 const ROOT_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("TEXT", &[], false, false, Phase::TextDetection).in_group("source_category").with_stdin_marker("-"),
+    positional("TEXT", &[], false, false, Phase::TextDetection).in_group("source_category").with_stdin_marker("-").available(),
 ];
 
 const SOURCE_CATEGORY_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
@@ -291,16 +291,16 @@ const SOURCE_CATEGORY_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
 
 #[rustfmt::skip]
 const DETECT_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("TEXT", &[], false, false, Phase::TextDetection).in_group("source_category").with_stdin_marker("-"),
-    option("--file", "PATH", &[], false, true, Phase::TextDetection).in_group("source_category"),
-    flag("--detach", Phase::TextDetection),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::TextDetection),
-    flag("--include-input", Phase::TextDetection),
-    flag("--save", Phase::History),
-    flag("--public-link", Phase::TextDetection),
-    option("--timeout", "DURATION", &[], false, false, Phase::TextDetection),
-    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::TextDetection),
-    option("--max-billable-units", "N", &[], false, false, Phase::TextDetection),
+    positional("TEXT", &[], false, false, Phase::TextDetection).in_group("source_category").with_stdin_marker("-").available(),
+    option("--file", "PATH", &[], false, true, Phase::TextDetection).in_group("source_category").available(),
+    flag("--detach", Phase::TextDetection).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::TextDetection).available(),
+    flag("--include-input", Phase::TextDetection).available(),
+    flag("--save", Phase::History).available(),
+    flag("--public-link", Phase::TextDetection).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::TextDetection).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::TextDetection).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::TextDetection).available(),
 ];
 
 #[rustfmt::skip]
@@ -509,7 +509,7 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
             path: &[], kind: CommandKind::Entrypoint, arguments: ROOT_ARGUMENTS,
             argument_groups: SOURCE_CATEGORY_GROUP, phase: Phase::Scaffold, availability: Availability::Available,
         },
-        planned_command(&["detect"], CommandKind::Command, DETECT_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::TextDetection),
+        available_command(&["detect"], CommandKind::Command, DETECT_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::TextDetection),
         planned_command(&["plagiarism"], CommandKind::Command, PLAGIARISM_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
         planned_command(&["analyze"], CommandKind::Command, ANALYZE_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
         planned_command(&["bulk"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),

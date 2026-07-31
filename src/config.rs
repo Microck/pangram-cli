@@ -178,7 +178,9 @@ pub(crate) fn sanitize_toml_de(error: toml::de::Error) -> ConfigError {
     ConfigError::Invalid(format!("could not parse TOML: {message}"))
 }
 
-fn redact_io(error: &std::io::Error) -> String {
+/// Renders an I/O error by kind and OS code only, never carrying paths or
+/// caller-supplied/strings into adapter-facing messages.
+pub(crate) fn redact_io(error: &std::io::Error) -> String {
     format!(
         "{} ({})",
         error.kind(),

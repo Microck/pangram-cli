@@ -41,7 +41,10 @@ mod task;
 mod upstream;
 
 pub use config::{AnalysisConfig, PollPolicy, RetryPolicy, WaitOptions};
-pub use handle::{AnalysisProgress, Analyzer, InterruptedAnalysis, RunningAnalysis, StopObserving};
+pub use handle::{
+    AnalysisProgress, Analyzer, InterruptedAnalysis, OperationIdentity, RunningAnalysis,
+    StopObserving,
+};
 pub use task::{Accepted, AcceptedInput, AnalysisRequest, AnalysisResult, TaskError};
 pub use upstream::{AnalysisError, UpstreamClient, UpstreamEndpoints};
 

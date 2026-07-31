@@ -29,6 +29,16 @@ use super::normalize::{self, NormalizedTask, TaskState};
 use super::task::{Accepted, AcceptedInput, AnalysisRequest, TaskError};
 use super::upstream::{PollError, SubmitOutcome, TaskPoll, UpstreamClient};
 
+/// The identity tuple reported on wait timeouts and interruptions. It is
+/// the payload the final adapter output prints so the caller can reconcile
+/// without a hidden task ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationIdentity {
+    pub analysis_id: AnalysisId,
+    pub task_id: Option<UpstreamTaskId>,
+    pub last_stage: Option<NonEmptyString>,
+}
+
 /// The progress snapshot emitted on each non-terminal observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisProgress {
@@ -57,16 +67,6 @@ impl StopObserving {
     pub const fn token(&self) -> &CancellationToken {
         &self.0
     }
-}
-
-/// The identity tuple reported on wait timeouts and interruptions. It is
-/// the payload the final adapter output prints so the caller can reconcile
-/// without a hidden task ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OperationIdentity {
-    pub analysis_id: AnalysisId,
-    pub task_id: Option<UpstreamTaskId>,
-    pub last_stage: Option<NonEmptyString>,
 }
 
 /// A locally stopped observation. `Interrupted` always maps to exit 130.

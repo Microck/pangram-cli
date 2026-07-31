@@ -88,6 +88,13 @@ impl CredentialResolution {
     pub const fn is_configured(&self) -> bool {
         self.key.is_some()
     }
+
+    /// Clones the resolved secret material for one client construction. The
+    /// value stays inside the `secrecy` wrapper; the caller moves it into the
+    /// endpoint-bearing client and never exposes it.
+    pub fn key_for_client(&self) -> Option<SecretString> {
+        self.key.clone()
+    }
 }
 
 impl std::fmt::Debug for CredentialResolution {
