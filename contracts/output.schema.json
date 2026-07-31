@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pangram.micr.dev/schemas/output-v1.json",
-  "x-contract-owner": "specification-seed",
+  "x-contract-owner": "rust:microck_pangram_cli::contracts",
   "title": "Pangram CLI output envelope v1",
   "oneOf": [
     {
@@ -12,409 +12,414 @@
     }
   ],
   "$defs": {
-    "successEnvelope": {
+    "Analysis": {
       "type": "object",
-      "required": [
-        "schema_version",
-        "command",
-        "data",
-        "meta"
-      ],
       "properties": {
-        "schema_version": {
-          "const": "1"
+        "id": {
+          "$ref": "#/$defs/AnalysisId"
         },
-        "command": {
-          "$ref": "#/$defs/jsonCommand"
+        "status": {
+          "$ref": "#/$defs/AnalysisStatus"
         },
-        "data": {
-          "oneOf": [
+        "submission_outcome": {
+          "$ref": "#/$defs/SubmissionOutcome"
+        },
+        "input": {
+          "$ref": "#/$defs/AnalysisInput"
+        },
+        "checks": {
+          "$ref": "#/$defs/OrderedChecks"
+        },
+        "save_state": {
+          "$ref": "#/$defs/SaveState"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "retry_of": {
+          "anyOf": [
             {
-              "type": "object"
-            },
-            {
-              "type": "array"
+              "$ref": "#/$defs/AnalysisId"
             }
           ]
         },
-        "meta": {
-          "$ref": "#/$defs/meta"
+        "rerun_of": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisId"
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
+          ]
         }
+      },
+      "required": [
+        "id",
+        "status",
+        "submission_outcome",
+        "input",
+        "checks",
+        "save_state",
+        "provenance",
+        "created_at",
+        "updated_at"
+      ],
+      "not": {
+        "required": [
+          "retry_of",
+          "rerun_of"
+        ]
       },
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "command": {
-                "enum": [
-                  "detect",
-                  "plagiarism",
-                  "analyze"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "oneOf": [
-                  {
-                    "$ref": "#/$defs/analysis"
-                  },
-                  {
-                    "$ref": "#/$defs/analysisArray"
+          "type": "object"
+        },
+        {
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "running"
                   }
+                },
+                "required": [
+                  "status"
                 ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "contains": {
+                      "properties": {
+                        "status": {
+                          "const": "running"
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    }
+                  }
+                }
               }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "enum": [
-                  "task_status",
-                  "task_wait",
-                  "history_show",
-                  "history_rerun"
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "queued"
+                  }
+                },
+                "required": [
+                  "status"
                 ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "status": {
+                              "const": "queued"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
               }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/analysis"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "enum": [
-                  "bulk_submit",
-                  "bulk_status",
-                  "bulk_wait"
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "succeeded"
+                  }
+                },
+                "required": [
+                  "status"
                 ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "queued"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "items": {
+                          "properties": {
+                            "status": {
+                              "enum": [
+                                "succeeded"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/bulkCollection"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "const": "bulk_results"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/bulkPage"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "enum": [
-                  "history_list",
-                  "history_search"
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "failed"
+                  }
+                },
+                "required": [
+                  "status"
                 ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "queued"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "items": {
+                          "properties": {
+                            "status": {
+                              "enum": [
+                                "failed"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/analysisPage"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "enum": [
-                  "history_delete",
-                  "history_clear",
-                  "auth_set",
-                  "auth_logout",
-                  "config_set",
-                  "mcp_install",
-                  "mcp_uninstall"
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "partial"
+                  }
+                },
+                "required": [
+                  "status"
                 ]
+              },
+              "then": {
+                "properties": {
+                  "checks": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "running"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "not": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "queued"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "status": {
+                              "const": "succeeded"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "status": {
+                              "const": "failed"
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
               }
             }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/mutationAcknowledgement"
-              }
-            }
-          }
+          ]
         },
         {
           "if": {
             "properties": {
-              "command": {
-                "const": "config_list"
+              "submission_outcome": {
+                "const": "not_submitted"
               }
-            }
+            },
+            "required": [
+              "submission_outcome"
+            ]
           },
           "then": {
             "properties": {
-              "data": {
-                "$ref": "#/$defs/configListStatus"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "const": "config_get"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/configGetStatus"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "const": "config_path"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/configPathStatus"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "const": "auth_status"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/authStatus"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "const": "doctor"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/doctorStatus"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "const": "mcp_status"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/mcpStatus"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "command": {
-                "enum": [
-                  "update_check",
-                  "update_install"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "data": {
-                "$ref": "#/$defs/updateStatus"
+              "checks": {
+                "not": {
+                  "contains": {
+                    "properties": {
+                      "upstream": {
+                        "type": "object",
+                        "required": [
+                          "task_id"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "upstream"
+                    ]
+                  }
+                }
+              },
+              "provenance": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "upstream_task_ids"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "upstream_bulk_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "submitted_at"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "completed_at"
+                      ]
+                    }
+                  ]
+                }
               }
             }
           }
         }
-      ],
-      "additionalProperties": true
-    },
-    "errorEnvelope": {
-      "type": "object",
-      "required": [
-        "schema_version",
-        "command",
-        "error",
-        "meta"
-      ],
-      "properties": {
-        "schema_version": {
-          "const": "1"
-        },
-        "command": {
-          "$ref": "#/$defs/resolvedCommand"
-        },
-        "error": {
-          "$ref": "#/$defs/error"
-        },
-        "meta": {
-          "$ref": "#/$defs/meta"
-        }
-      },
-      "additionalProperties": true
-    },
-    "jsonCommand": {
-      "enum": [
-        "detect",
-        "plagiarism",
-        "analyze",
-        "bulk_submit",
-        "bulk_status",
-        "bulk_wait",
-        "bulk_results",
-        "task_status",
-        "task_wait",
-        "history_list",
-        "history_search",
-        "history_show",
-        "history_rerun",
-        "history_delete",
-        "history_clear",
-        "auth_set",
-        "auth_status",
-        "auth_logout",
-        "config_list",
-        "config_get",
-        "config_set",
-        "config_path",
-        "doctor",
-        "mcp_install",
-        "mcp_uninstall",
-        "mcp_status",
-        "update_check",
-        "update_install"
       ]
     },
-    "resolvedCommand": {
-      "enum": [
-        "detect",
-        "plagiarism",
-        "analyze",
-        "bulk_submit",
-        "bulk_status",
-        "bulk_wait",
-        "bulk_results",
-        "task_status",
-        "task_wait",
-        "history_list",
-        "history_search",
-        "history_show",
-        "history_rerun",
-        "history_delete",
-        "history_clear",
-        "history_export",
-        "auth_set",
-        "auth_status",
-        "auth_logout",
-        "config_list",
-        "config_get",
-        "config_set",
-        "config_path",
-        "doctor",
-        "mcp_serve",
-        "mcp_install",
-        "mcp_uninstall",
-        "mcp_status",
-        "agent",
-        "skills_list",
-        "skills_get",
-        "skills_path",
-        "completions",
-        "update_check",
-        "update_install"
-      ]
-    },
-    "meta": {
-      "type": "object",
-      "properties": {
-        "started_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "completed_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "failed_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "duration_ms": {
-          "type": "integer",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": true
-    },
-    "timestamp": {
-      "type": "string",
-      "format": "date-time",
-      "pattern": "Z$"
-    },
-    "analysisId": {
+    "AnalysisId": {
       "type": "string",
       "pattern": "^anl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
-    "bulkId": {
+    "AnalysisStatus": {
       "type": "string",
-      "pattern": "^bulk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
-    "status": {
       "enum": [
         "queued",
         "running",
@@ -423,14 +428,8 @@
         "partial"
       ]
     },
-    "saveState": {
-      "enum": [
-        "ephemeral",
-        "saved_manual",
-        "saved_history"
-      ]
-    },
-    "submissionOutcome": {
+    "SubmissionOutcome": {
+      "type": "string",
       "enum": [
         "not_submitted",
         "accepted",
@@ -438,109 +437,629 @@
         "acceptance_unknown"
       ]
     },
-    "recovery": {
-      "type": "object",
-      "required": [
-        "message"
-      ],
-      "properties": {
-        "message": {
-          "type": "string",
-          "minLength": 1
+    "AnalysisInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "$ref": "#/$defs/TextInput",
+          "required": [
+            "type"
+          ]
         },
-        "command": {
-          "type": "string",
-          "minLength": 1
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "$ref": "#/$defs/FileInput",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "TextOrigin": {
+      "type": "string",
+      "enum": [
+        "literal",
+        "stdin",
+        "file"
+      ]
+    },
+    "Sha256Hash": {
+      "description": "A lowercase SHA-256 digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "TextInput": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/TextOrigin"
+        },
+        "name": {
+          "type": [
+            "string"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hash"
+        },
+        "byte_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "word_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "text": {
+          "type": [
+            "string"
+          ]
         }
       },
-      "additionalProperties": true
-    },
-    "error": {
-      "type": "object",
       "required": [
-        "code",
-        "category",
-        "message",
-        "retryable"
-      ],
+        "origin",
+        "sha256",
+        "byte_count",
+        "word_count"
+      ]
+    },
+    "NonEmptyString": {
+      "description": "A non-empty provider-authored identifier or state string.",
+      "type": "string",
+      "minLength": 1
+    },
+    "FileInput": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "media_type": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hash"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "type": [
+            "string"
+          ]
+        },
+        "extracted_text": {
+          "type": [
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "filename",
+        "media_type",
+        "sha256",
+        "size_bytes"
+      ]
+    },
+    "OrderedChecks": {
+      "description": "One or two unique checks in canonical display and serialization order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Check"
+      },
+      "minItems": 1,
+      "maxItems": 2,
+      "allOf": [
+        {
+          "if": {
+            "minItems": 2
+          },
+          "then": {
+            "prefixItems": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "ai_detection"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "plagiarism"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Check": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ai_detection"
+            }
+          },
+          "$ref": "#/$defs/CheckState",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "plagiarism"
+            }
+          },
+          "$ref": "#/$defs/CheckState2",
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "UpstreamIdentity": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpstreamTaskId"
+            }
+          ]
+        },
+        "last_stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          ]
+        }
+      }
+    },
+    "UpstreamTaskId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "AiDetectionResult": {
+      "type": "object",
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/AiClassification"
+        },
+        "headline": {
+          "type": "string"
+        },
+        "prediction": {
+          "type": "string"
+        },
+        "fraction_ai": {
+          "$ref": "#/$defs/Fraction"
+        },
+        "fraction_ai_assisted": {
+          "$ref": "#/$defs/Fraction"
+        },
+        "fraction_human": {
+          "$ref": "#/$defs/Fraction"
+        },
+        "num_ai_segments": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "num_ai_assisted_segments": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "num_human_segments": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        },
+        "dashboard_link": {
+          "type": [
+            "string"
+          ],
+          "format": "uri"
+        }
+      },
+      "required": [
+        "classification",
+        "headline",
+        "prediction",
+        "fraction_ai",
+        "fraction_ai_assisted",
+        "fraction_human",
+        "num_ai_segments",
+        "num_ai_assisted_segments",
+        "num_human_segments",
+        "segments"
+      ]
+    },
+    "AiClassification": {
+      "type": "string",
+      "enum": [
+        "ai",
+        "human",
+        "mixed"
+      ]
+    },
+    "Fraction": {
+      "description": "A finite value from 0.0 through 1.0.",
+      "type": "number",
+      "format": "double",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "Segment": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "ai_assistance_score": {
+          "$ref": "#/$defs/Fraction"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "start_index": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "end_index": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "word_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "token_length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "humanizer_score": {
+          "description": "Pangram's per-segment estimate that a humanizer modified the text.",
+          "$ref": "#/$defs/Fraction"
+        },
+        "is_humanized": {
+          "description": "Pangram's thresholded humanizer decision, preserved without local derivation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "label",
+        "ai_assistance_score",
+        "confidence",
+        "start_index",
+        "end_index",
+        "word_count",
+        "token_length",
+        "humanizer_score",
+        "is_humanized"
+      ]
+    },
+    "Confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "CanonicalError": {
+      "description": "The adapter-independent error object used by CLI, TUI, and MCP output.",
+      "type": "object",
       "properties": {
         "code": {
-          "enum": [
-            "input_required",
-            "input_conflict",
-            "unsupported_input",
-            "unsupported_combination",
-            "bulk_limit_exceeded",
-            "missing_api_key",
-            "invalid_api_key",
-            "permission_denied",
-            "payment_required",
-            "rate_limited",
-            "network_unavailable",
-            "network_timeout",
-            "wait_timeout",
-            "submission_outcome_unknown",
-            "upstream_error",
-            "upstream_analysis_failed",
-            "upstream_not_found",
-            "upstream_contract_changed",
-            "invalid_config",
-            "insecure_config_permissions",
-            "insecure_history_permissions",
-            "history_disabled",
-            "history_unavailable",
-            "history_corrupt",
-            "history_write_failed",
-            "local_task_unresolvable",
-            "mcp_capability_required",
-            "mcp_root_required",
-            "mcp_path_outside_root",
-            "update_unavailable",
-            "update_not_owned",
-            "update_verification_failed",
-            "update_replace_failed"
-          ]
+          "$ref": "#/$defs/ErrorCode"
         },
         "category": {
-          "enum": [
-            "usage",
-            "authentication",
-            "permission",
-            "payment",
-            "rate_limit",
-            "network",
-            "upstream",
-            "upstream_contract",
-            "local_config",
-            "local_history",
-            "update"
-          ]
+          "$ref": "#/$defs/ErrorCategory"
         },
         "message": {
-          "type": "string",
+          "$ref": "#/$defs/NonEmptyString",
           "minLength": 1
         },
         "retryable": {
           "type": "boolean"
         },
         "retry_after_ms": {
-          "type": "integer",
+          "type": [
+            "integer"
+          ],
+          "format": "uint64",
           "minimum": 0
         },
         "recovery": {
-          "$ref": "#/$defs/recovery"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Recovery"
+            }
+          ]
         },
         "details": {
-          "type": "object",
+          "description": "Callers must remove credentials, submitted text, matches, and raw responses first.",
+          "type": [
+            "object"
+          ],
           "additionalProperties": true
         }
       },
+      "required": [
+        "code",
+        "category",
+        "message",
+        "retryable"
+      ],
       "allOf": [
         {
-          "$ref": "#/$defs/errorCategoryInvariant"
+          "oneOf": [
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "missing_api_key",
+                    "invalid_api_key"
+                  ]
+                },
+                "category": {
+                  "const": "authentication"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "invalid_config",
+                    "insecure_config_permissions"
+                  ]
+                },
+                "category": {
+                  "const": "local_config"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "insecure_history_permissions",
+                    "history_disabled",
+                    "history_unavailable",
+                    "history_corrupt",
+                    "history_write_failed",
+                    "local_task_unresolvable"
+                  ]
+                },
+                "category": {
+                  "const": "local_history"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "network_unavailable",
+                    "network_timeout",
+                    "wait_timeout",
+                    "submission_outcome_unknown"
+                  ]
+                },
+                "category": {
+                  "const": "network"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "payment_required"
+                  ]
+                },
+                "category": {
+                  "const": "payment"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "permission_denied",
+                    "mcp_capability_required",
+                    "mcp_root_required",
+                    "mcp_path_outside_root"
+                  ]
+                },
+                "category": {
+                  "const": "permission"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "rate_limited"
+                  ]
+                },
+                "category": {
+                  "const": "rate_limit"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "update_unavailable",
+                    "update_not_owned",
+                    "update_verification_failed",
+                    "update_replace_failed"
+                  ]
+                },
+                "category": {
+                  "const": "update"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "upstream_error",
+                    "upstream_analysis_failed",
+                    "upstream_not_found"
+                  ]
+                },
+                "category": {
+                  "const": "upstream"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "upstream_contract_changed"
+                  ]
+                },
+                "category": {
+                  "const": "upstream_contract"
+                }
+              }
+            },
+            {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "input_required",
+                    "input_conflict",
+                    "unsupported_input",
+                    "unsupported_combination",
+                    "bulk_limit_exceeded"
+                  ]
+                },
+                "category": {
+                  "const": "usage"
+                }
+              }
+            }
+          ]
         },
         {
-          "$ref": "#/$defs/errorRetryInvariant"
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "rate_limited",
+                      "network_unavailable",
+                      "wait_timeout"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "retryable": {
+                    "const": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "input_required",
+                      "input_conflict",
+                      "unsupported_input",
+                      "unsupported_combination",
+                      "bulk_limit_exceeded",
+                      "missing_api_key",
+                      "invalid_api_key",
+                      "permission_denied",
+                      "payment_required",
+                      "submission_outcome_unknown",
+                      "upstream_not_found",
+                      "upstream_contract_changed",
+                      "invalid_config",
+                      "insecure_config_permissions",
+                      "insecure_history_permissions",
+                      "history_disabled",
+                      "history_corrupt",
+                      "local_task_unresolvable",
+                      "mcp_capability_required",
+                      "mcp_root_required",
+                      "mcp_path_outside_root",
+                      "update_unavailable",
+                      "update_not_owned",
+                      "update_verification_failed"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "retryable": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          ]
         },
         {
           "if": {
@@ -556,484 +1075,296 @@
                 "const": false
               },
               "details": {
-                "$ref": "#/$defs/submissionOutcomeUnknownDetails"
+                "$ref": "#/$defs/SubmissionOutcomeUnknownDetails"
+              },
+              "recovery": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "const": "A manual retry may create a second billable operation."
+                  }
+                },
+                "required": [
+                  "message"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
-              "details"
+              "details",
+              "recovery"
             ]
           }
         }
-      ],
-      "additionalProperties": true
-    },
-    "errorCategoryInvariant": {
-      "oneOf": [
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "input_required",
-                "input_conflict",
-                "unsupported_input",
-                "unsupported_combination",
-                "bulk_limit_exceeded"
-              ]
-            },
-            "category": {
-              "const": "usage"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "missing_api_key",
-                "invalid_api_key"
-              ]
-            },
-            "category": {
-              "const": "authentication"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "permission_denied",
-                "mcp_capability_required",
-                "mcp_root_required",
-                "mcp_path_outside_root"
-              ]
-            },
-            "category": {
-              "const": "permission"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "const": "payment_required"
-            },
-            "category": {
-              "const": "payment"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "const": "rate_limited"
-            },
-            "category": {
-              "const": "rate_limit"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "network_unavailable",
-                "network_timeout",
-                "wait_timeout",
-                "submission_outcome_unknown"
-              ]
-            },
-            "category": {
-              "const": "network"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "upstream_error",
-                "upstream_analysis_failed",
-                "upstream_not_found"
-              ]
-            },
-            "category": {
-              "const": "upstream"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "const": "upstream_contract_changed"
-            },
-            "category": {
-              "const": "upstream_contract"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "invalid_config",
-                "insecure_config_permissions"
-              ]
-            },
-            "category": {
-              "const": "local_config"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "insecure_history_permissions",
-                "history_disabled",
-                "history_unavailable",
-                "history_corrupt",
-                "history_write_failed",
-                "local_task_unresolvable"
-              ]
-            },
-            "category": {
-              "const": "local_history"
-            }
-          }
-        },
-        {
-          "properties": {
-            "code": {
-              "enum": [
-                "update_unavailable",
-                "update_not_owned",
-                "update_verification_failed",
-                "update_replace_failed"
-              ]
-            },
-            "category": {
-              "const": "update"
-            }
-          }
-        }
       ]
     },
-    "errorRetryInvariant": {
+    "ErrorCode": {
+      "description": "Stable machine-readable error codes in contract order.",
+      "type": "string",
+      "enum": [
+        "input_required",
+        "input_conflict",
+        "unsupported_input",
+        "unsupported_combination",
+        "bulk_limit_exceeded",
+        "missing_api_key",
+        "invalid_api_key",
+        "permission_denied",
+        "payment_required",
+        "rate_limited",
+        "network_unavailable",
+        "network_timeout",
+        "wait_timeout",
+        "submission_outcome_unknown",
+        "upstream_error",
+        "upstream_analysis_failed",
+        "upstream_not_found",
+        "upstream_contract_changed",
+        "invalid_config",
+        "insecure_config_permissions",
+        "insecure_history_permissions",
+        "history_disabled",
+        "history_unavailable",
+        "history_corrupt",
+        "history_write_failed",
+        "local_task_unresolvable",
+        "mcp_capability_required",
+        "mcp_root_required",
+        "mcp_path_outside_root",
+        "update_unavailable",
+        "update_not_owned",
+        "update_verification_failed",
+        "update_replace_failed"
+      ]
+    },
+    "ErrorCategory": {
+      "description": "The closed error categories exposed by every adapter.",
+      "type": "string",
+      "enum": [
+        "usage",
+        "authentication",
+        "permission",
+        "payment",
+        "rate_limit",
+        "network",
+        "upstream",
+        "upstream_contract",
+        "local_config",
+        "local_history",
+        "update"
+      ]
+    },
+    "Recovery": {
+      "description": "A safe next step which can be rendered without interpreting shell syntax.",
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "CheckState": {
+      "description": "State variants encode the result/error exclusivity contract directly.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
+            "status": {
+              "type": "string",
+              "const": "queued"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
+            "status": {
+              "type": "string",
+              "const": "running"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/$defs/AiDetectionResult"
+            },
+            "status": {
+              "type": "string",
+              "const": "succeeded"
+            }
+          },
+          "required": [
+            "status",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
+            "error": {
+              "$ref": "#/$defs/CanonicalError"
+            },
+            "status": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "error"
+          ]
+        }
+      ],
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "code": {
-                "enum": [
-                  "rate_limited",
-                  "network_unavailable",
-                  "wait_timeout"
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "queued",
+                    "running"
+                  ]
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "result"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "error"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "succeeded"
+                }
+              },
+              "required": [
+                "result"
+              ],
+              "not": {
+                "required": [
+                  "error"
+                ]
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "failed"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "not": {
+                "required": [
+                  "result"
                 ]
               }
             }
-          },
-          "then": {
-            "properties": {
-              "retryable": {
-                "const": true
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "code": {
-                "enum": [
-                  "input_required",
-                  "input_conflict",
-                  "unsupported_input",
-                  "unsupported_combination",
-                  "bulk_limit_exceeded",
-                  "missing_api_key",
-                  "invalid_api_key",
-                  "permission_denied",
-                  "payment_required",
-                  "submission_outcome_unknown",
-                  "upstream_not_found",
-                  "upstream_contract_changed",
-                  "invalid_config",
-                  "insecure_config_permissions",
-                  "insecure_history_permissions",
-                  "history_disabled",
-                  "history_corrupt",
-                  "local_task_unresolvable",
-                  "mcp_capability_required",
-                  "mcp_root_required",
-                  "mcp_path_outside_root",
-                  "update_unavailable",
-                  "update_not_owned",
-                  "update_verification_failed"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "retryable": {
-                "const": false
-              }
-            }
-          }
+          ]
         }
       ]
     },
-    "submissionOutcomeUnknownDetails": {
+    "PlagiarismResult": {
       "type": "object",
-      "required": [
-        "request_sha256",
-        "last_status"
-      ],
-      "oneOf": [
-        {
-          "required": [
-            "analysis_id"
-          ]
-        },
-        {
-          "required": [
-            "bulk_id"
-          ]
-        }
-      ],
       "properties": {
-        "analysis_id": {
-          "$ref": "#/$defs/analysisId"
+        "plagiarism_detected": {
+          "type": "boolean"
         },
-        "bulk_id": {
-          "$ref": "#/$defs/bulkId"
-        },
-        "request_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "upstream_task_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "upstream_bulk_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "last_status": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "additionalProperties": false
-    },
-    "textInput": {
-      "type": "object",
-      "required": [
-        "type",
-        "origin",
-        "sha256",
-        "byte_count",
-        "word_count"
-      ],
-      "properties": {
-        "type": {
-          "const": "text"
-        },
-        "origin": {
-          "enum": [
-            "literal",
-            "stdin",
-            "file"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "byte_count": {
+        "total_sentences": {
           "type": "integer",
+          "format": "uint64",
           "minimum": 0
         },
-        "word_count": {
+        "plagiarized_sentence_count": {
           "type": "integer",
+          "format": "uint64",
           "minimum": 0
         },
-        "text": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": true
-    },
-    "fileInput": {
-      "type": "object",
-      "required": [
-        "type",
-        "filename",
-        "media_type",
-        "sha256",
-        "size_bytes"
-      ],
-      "properties": {
-        "type": {
-          "const": "file"
+        "percent_plagiarized": {
+          "$ref": "#/$defs/Percentage"
         },
-        "filename": {
-          "type": "string",
-          "minLength": 1
-        },
-        "media_type": {
-          "type": "string",
-          "minLength": 1
-        },
-        "sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "size_bytes": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "path": {
-          "type": "string"
-        },
-        "extracted_text": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": true
-    },
-    "segment": {
-      "type": "object",
-      "required": [
-        "text",
-        "label",
-        "ai_assistance_score",
-        "confidence",
-        "start_index",
-        "end_index",
-        "word_count",
-        "token_length"
-      ],
-      "properties": {
-        "text": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string",
-          "minLength": 1
-        },
-        "ai_assistance_score": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "confidence": {
-          "enum": [
-            "high",
-            "medium",
-            "low"
-          ]
-        },
-        "start_index": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "end_index": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "word_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "token_length": {
-          "type": "integer",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": true
-    },
-    "aiDetectionResult": {
-      "type": "object",
-      "required": [
-        "classification",
-        "headline",
-        "prediction",
-        "fraction_ai",
-        "fraction_ai_assisted",
-        "fraction_human",
-        "num_ai_segments",
-        "num_ai_assisted_segments",
-        "num_human_segments",
-        "segments"
-      ],
-      "properties": {
-        "classification": {
-          "enum": [
-            "ai",
-            "ai_assisted",
-            "human",
-            "mixed"
-          ]
-        },
-        "headline": {
-          "type": "string"
-        },
-        "prediction": {
-          "type": "string"
-        },
-        "fraction_ai": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "fraction_ai_assisted": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "fraction_human": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "num_ai_segments": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "num_ai_assisted_segments": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "num_human_segments": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "segments": {
+        "matches": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/segment"
+            "$ref": "#/$defs/PlagiarismMatch"
           }
-        },
-        "dashboard_link": {
-          "type": "string",
-          "format": "uri"
         }
       },
-      "additionalProperties": true
-    },
-    "plagiarismMatch": {
-      "type": "object",
       "required": [
-        "source_url",
-        "matched_text",
-        "similarity_score"
-      ],
+        "plagiarism_detected",
+        "total_sentences",
+        "plagiarized_sentence_count",
+        "percent_plagiarized",
+        "matches"
+      ]
+    },
+    "Percentage": {
+      "description": "A finite percentage from 0.0 through 100.0.",
+      "type": "number",
+      "format": "double",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "PlagiarismMatch": {
+      "type": "object",
       "properties": {
         "source_url": {
           "type": "string"
@@ -1042,334 +1373,292 @@
           "type": "string"
         },
         "similarity_score": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
+          "$ref": "#/$defs/Fraction"
         }
       },
-      "additionalProperties": true
-    },
-    "plagiarismResult": {
-      "type": "object",
       "required": [
-        "plagiarism_detected",
-        "total_sentences",
-        "plagiarized_sentence_count",
-        "percent_plagiarized",
-        "matches"
-      ],
-      "properties": {
-        "plagiarism_detected": {
-          "type": "boolean"
-        },
-        "total_sentences": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "plagiarized_sentence_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "percent_plagiarized": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "matches": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/plagiarismMatch"
-          }
-        }
-      },
-      "additionalProperties": true
-    },
-    "upstream": {
-      "type": "object",
-      "properties": {
-        "task_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "last_stage": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "additionalProperties": true
-    },
-    "check": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/aiDetectionCheck"
-        },
-        {
-          "$ref": "#/$defs/plagiarismCheck"
-        }
+        "source_url",
+        "matched_text",
+        "similarity_score"
       ]
     },
-    "aiDetectionCheck": {
-      "type": "object",
-      "required": [
-        "kind",
-        "status"
-      ],
-      "properties": {
-        "kind": {
-          "const": "ai_detection"
-        },
-        "status": {
-          "$ref": "#/$defs/status"
-        },
-        "upstream": {
-          "$ref": "#/$defs/upstream"
-        },
-        "result": {
-          "$ref": "#/$defs/aiDetectionResult"
-        },
-        "error": {
-          "$ref": "#/$defs/error"
-        }
-      },
-      "allOf": [
-        {
-          "$ref": "#/$defs/checkStateInvariant"
-        }
-      ],
-      "additionalProperties": true
-    },
-    "plagiarismCheck": {
-      "type": "object",
-      "required": [
-        "kind",
-        "status"
-      ],
-      "properties": {
-        "kind": {
-          "const": "plagiarism"
-        },
-        "status": {
-          "$ref": "#/$defs/status"
-        },
-        "upstream": {
-          "$ref": "#/$defs/upstream"
-        },
-        "result": {
-          "$ref": "#/$defs/plagiarismResult"
-        },
-        "error": {
-          "$ref": "#/$defs/error"
-        }
-      },
-      "allOf": [
-        {
-          "$ref": "#/$defs/checkStateInvariant"
-        }
-      ],
-      "additionalProperties": true
-    },
-    "checkStateInvariant": {
+    "CheckState2": {
+      "description": "State variants encode the result/error exclusivity contract directly.",
       "oneOf": [
         {
+          "type": "object",
           "properties": {
-            "status": {
-              "enum": [
-                "queued",
-                "running"
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
               ]
+            },
+            "status": {
+              "type": "string",
+              "const": "queued"
             }
           },
-          "not": {
-            "anyOf": [
-              {
-                "required": [
-                  "result"
-                ]
-              },
-              {
-                "required": [
-                  "error"
-                ]
-              }
-            ]
-          }
+          "required": [
+            "status"
+          ]
         },
         {
+          "type": "object",
           "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
             "status": {
+              "type": "string",
+              "const": "running"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/$defs/PlagiarismResult"
+            },
+            "status": {
+              "type": "string",
               "const": "succeeded"
             }
           },
           "required": [
+            "status",
             "result"
-          ],
-          "not": {
-            "required": [
-              "error"
-            ]
-          }
+          ]
         },
         {
+          "type": "object",
           "properties": {
+            "upstream": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UpstreamIdentity"
+                }
+              ]
+            },
+            "error": {
+              "$ref": "#/$defs/CanonicalError"
+            },
             "status": {
+              "type": "string",
               "const": "failed"
             }
           },
           "required": [
+            "status",
             "error"
-          ],
-          "not": {
-            "required": [
-              "result"
-            ]
-          }
+          ]
         }
-      ]
-    },
-    "provenance": {
-      "type": "object",
-      "required": [
-        "provider"
       ],
-      "properties": {
-        "provider": {
-          "const": "pangram"
-        },
-        "api_version": {
-          "type": "string"
-        },
-        "upstream_task_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
-        },
-        "upstream_bulk_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "submitted_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "completed_at": {
-          "$ref": "#/$defs/timestamp"
-        }
-      },
-      "additionalProperties": true
-    },
-    "analysis": {
-      "type": "object",
-      "required": [
-        "id",
-        "status",
-        "submission_outcome",
-        "input",
-        "checks",
-        "save_state",
-        "provenance",
-        "created_at",
-        "updated_at"
-      ],
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/analysisId"
-        },
-        "status": {
-          "$ref": "#/$defs/status"
-        },
-        "submission_outcome": {
-          "$ref": "#/$defs/submissionOutcome"
-        },
-        "input": {
+      "allOf": [
+        {
           "oneOf": [
             {
-              "$ref": "#/$defs/textInput"
-            },
-            {
-              "$ref": "#/$defs/fileInput"
-            }
-          ]
-        },
-        "checks": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 2,
-          "items": {
-            "$ref": "#/$defs/check"
-          },
-          "allOf": [
-            {
-              "if": {
-                "minItems": 2
+              "properties": {
+                "status": {
+                  "enum": [
+                    "queued",
+                    "running"
+                  ]
+                }
               },
-              "then": {
-                "prefixItems": [
+              "not": {
+                "anyOf": [
                   {
-                    "properties": {
-                      "kind": {
-                        "const": "ai_detection"
-                      }
-                    },
                     "required": [
-                      "kind"
+                      "result"
                     ]
                   },
                   {
-                    "properties": {
-                      "kind": {
-                        "const": "plagiarism"
-                      }
-                    },
                     "required": [
-                      "kind"
+                      "error"
                     ]
                   }
                 ]
               }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "succeeded"
+                }
+              },
+              "required": [
+                "result"
+              ],
+              "not": {
+                "required": [
+                  "error"
+                ]
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "failed"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "not": {
+                "required": [
+                  "result"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "SaveState": {
+      "type": "string",
+      "enum": [
+        "ephemeral",
+        "saved_manual",
+        "saved_history"
+      ]
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/Provider"
+        },
+        "upstream_version": {
+          "type": [
+            "string"
+          ]
+        },
+        "upstream_task_ids": {
+          "type": [
+            "array"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/UpstreamTaskId"
+          }
+        },
+        "upstream_bulk_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpstreamBulkId"
             }
           ]
         },
-        "save_state": {
-          "$ref": "#/$defs/saveState"
-        },
-        "provenance": {
-          "$ref": "#/$defs/provenance"
-        },
-        "retry_of": {
-          "$ref": "#/$defs/analysisId"
-        },
-        "rerun_of": {
-          "$ref": "#/$defs/analysisId"
-        },
-        "created_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "updated_at": {
-          "$ref": "#/$defs/timestamp"
+        "submitted_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
+          ]
         },
         "completed_at": {
-          "$ref": "#/$defs/timestamp"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
+          ]
         }
       },
-      "not": {
-        "required": [
-          "retry_of",
-          "rerun_of"
-        ]
-      },
-      "additionalProperties": true
+      "required": [
+        "provider"
+      ]
     },
-    "analysisArray": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/analysis"
-      }
+    "Provider": {
+      "type": "string",
+      "enum": [
+        "pangram"
+      ]
     },
-    "bulkCollection": {
+    "UpstreamBulkId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "UtcTimestamp": {
+      "description": "An absolute UTC timestamp in the canonical `Z` form.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "BulkCollection": {
       "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/BulkId"
+        },
+        "upstream_bulk_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpstreamBulkId"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/AnalysisStatus"
+        },
+        "submission_outcome": {
+          "$ref": "#/$defs/SubmissionOutcome"
+        },
+        "total_items": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        },
+        "accepted": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "succeeded": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "estimated_billable_units": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        },
+        "created_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
+          ]
+        }
+      },
       "required": [
         "id",
         "status",
@@ -1382,72 +1671,209 @@
         "created_at",
         "updated_at"
       ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "succeeded"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "failed": {
+                "const": 0
+              },
+              "succeeded": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "succeeded": {
+                "const": 0
+              },
+              "failed": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "succeeded": {
+                "minimum": 1
+              },
+              "failed": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "submission_outcome": {
+                "const": "not_submitted"
+              }
+            },
+            "required": [
+              "submission_outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "accepted": {
+                "const": 0
+              },
+              "succeeded": {
+                "const": 0
+              },
+              "failed": {
+                "const": 0
+              }
+            },
+            "not": {
+              "required": [
+                "upstream_bulk_id"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "submission_outcome": {
+                "const": "accepted"
+              }
+            },
+            "required": [
+              "submission_outcome"
+            ]
+          },
+          "then": {
+            "required": [
+              "upstream_bulk_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "submission_outcome": {
+                "const": "terminal"
+              }
+            },
+            "required": [
+              "submission_outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "succeeded",
+                  "failed",
+                  "partial"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "BulkId": {
+      "type": "string",
+      "pattern": "^bulk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "BulkPage": {
+      "type": "object",
       "properties": {
-        "id": {
-          "$ref": "#/$defs/bulkId"
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BulkItem"
+          }
         },
-        "upstream_bulk_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "$ref": "#/$defs/status"
-        },
-        "submission_outcome": {
-          "$ref": "#/$defs/submissionOutcome"
-        },
-        "total_items": {
+        "offset": {
           "type": "integer",
-          "minimum": 1
-        },
-        "accepted": {
-          "type": "integer",
+          "format": "uint64",
           "minimum": 0
         },
-        "succeeded": {
+        "limit": {
           "type": "integer",
+          "format": "uint64",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "next_offset": {
+          "type": [
+            "integer"
+          ],
+          "format": "uint64",
           "minimum": 0
-        },
-        "failed": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "estimated_billable_units": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "created_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "updated_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "completed_at": {
-          "$ref": "#/$defs/timestamp"
         }
       },
-      "additionalProperties": true
-    },
-    "bulkItem": {
-      "type": "object",
       "required": [
-        "index",
-        "status"
-      ],
+        "items",
+        "offset",
+        "limit"
+      ]
+    },
+    "BulkItem": {
+      "type": "object",
       "properties": {
         "index": {
           "type": "integer",
+          "format": "uint64",
           "minimum": 0
         },
         "caller_id": {
-          "type": "string"
+          "type": [
+            "string"
+          ]
         },
         "analysis_id": {
-          "$ref": "#/$defs/analysisId"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisId"
+            }
+          ]
         },
         "upstream_task_id": {
-          "type": "string",
-          "minLength": 1
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpstreamTaskId"
+            }
+          ]
         },
         "status": {
           "enum": [
@@ -1455,15 +1881,20 @@
             "running",
             "succeeded",
             "failed"
-          ]
+          ],
+          "type": "string"
         },
         "analysis": {
-          "$ref": "#/$defs/analysis"
+          "$ref": "#/$defs/Analysis"
         },
         "error": {
-          "$ref": "#/$defs/error"
+          "$ref": "#/$defs/CanonicalError"
         }
       },
+      "required": [
+        "index",
+        "status"
+      ],
       "oneOf": [
         {
           "properties": {
@@ -1519,223 +1950,728 @@
             ]
           }
         }
-      ],
-      "additionalProperties": true
+      ]
     },
-    "bulkPage": {
+    "AnalysisPage": {
       "type": "object",
-      "required": [
-        "items",
-        "offset",
-        "limit"
-      ],
       "properties": {
         "items": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/bulkItem"
+            "$ref": "#/$defs/Analysis"
           }
-        },
-        "offset": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000
-        },
-        "next_offset": {
-          "type": "integer",
-          "minimum": 0
         }
       },
-      "additionalProperties": true
-    },
-    "analysisPage": {
-      "type": "object",
       "required": [
         "items"
-      ],
-      "properties": {
-        "items": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/analysis"
-          }
-        }
-      },
-      "additionalProperties": true
+      ]
     },
-    "mutationAcknowledgement": {
+    "MutationAcknowledgement": {
+      "description": "A successful command which mutates local state.",
       "type": "object",
-      "required": [
-        "ok"
-      ],
       "properties": {
         "ok": {
+          "type": "boolean",
           "const": true
         }
       },
-      "additionalProperties": true
-    },
-    "authStatus": {
-      "type": "object",
       "required": [
-        "configured",
-        "source"
-      ],
+        "ok"
+      ]
+    },
+    "AuthStatus": {
+      "type": "object",
       "properties": {
         "configured": {
           "type": "boolean"
         },
         "source": {
-          "enum": [
-            "none",
-            "environment",
-            "stored"
-          ]
+          "$ref": "#/$defs/AuthSource"
         },
         "masked_suffix": {
-          "type": "string",
-          "maxLength": 8
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthSuffix"
+            }
+          ]
         }
       },
-      "additionalProperties": true
-    },
-    "configListStatus": {
-      "type": "object",
       "required": [
-        "config"
-      ],
+        "configured",
+        "source"
+      ]
+    },
+    "AuthSource": {
+      "type": "string",
+      "enum": [
+        "none",
+        "environment",
+        "stored"
+      ]
+    },
+    "AuthSuffix": {
+      "type": "string",
+      "maxLength": 8
+    },
+    "ConfigListStatus": {
+      "type": "object",
       "properties": {
         "config": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": true
         }
       },
-      "additionalProperties": true
+      "required": [
+        "config"
+      ]
     },
-    "configGetStatus": {
+    "ConfigGetStatus": {
       "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "value": true
+      },
       "required": [
         "key",
         "value"
-      ],
-      "properties": {
-        "key": {
-          "type": "string",
-          "minLength": 1
-        },
-        "value": {}
-      },
-      "additionalProperties": true
+      ]
     },
-    "configPathStatus": {
+    "ConfigPathStatus": {
       "type": "object",
-      "required": [
-        "path"
-      ],
       "properties": {
         "path": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/NonEmptyString"
         }
       },
-      "additionalProperties": true
-    },
-    "doctorStatus": {
-      "type": "object",
       "required": [
-        "checks"
-      ],
+        "path"
+      ]
+    },
+    "DoctorStatus": {
+      "type": "object",
       "properties": {
         "checks": {
           "type": "array",
           "items": {
-            "type": "object",
-            "required": [
-              "name",
-              "status"
-            ],
-            "properties": {
-              "name": {
-                "type": "string",
-                "minLength": 1
-              },
-              "status": {
-                "enum": [
-                  "pass",
-                  "warn",
-                  "fail"
-                ]
-              },
-              "message": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": true
+            "$ref": "#/$defs/DoctorCheck"
           }
         }
       },
-      "additionalProperties": true
-    },
-    "mcpStatus": {
-      "type": "object",
       "required": [
-        "clients"
-      ],
+        "checks"
+      ]
+    },
+    "DoctorCheck": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "status": {
+          "$ref": "#/$defs/DoctorCheckStatus"
+        },
+        "message": {
+          "type": [
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ]
+    },
+    "DoctorCheckStatus": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    },
+    "McpStatus": {
+      "type": "object",
       "properties": {
         "clients": {
           "type": "array",
           "items": {
-            "type": "object",
-            "required": [
-              "client",
-              "installed"
-            ],
-            "properties": {
-              "client": {
-                "type": "string",
-                "minLength": 1
-              },
-              "installed": {
-                "type": "boolean"
-              },
-              "path": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": true
+            "$ref": "#/$defs/McpClientStatus"
           }
         }
       },
-      "additionalProperties": true
+      "required": [
+        "clients"
+      ]
     },
-    "updateStatus": {
+    "McpClientStatus": {
       "type": "object",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": [
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "client",
+        "installed"
+      ]
+    },
+    "UpdateStatus": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/UpdateStatusKind"
+        },
+        "current_version": {
+          "$ref": "#/$defs/ContractVersion"
+        },
+        "available_version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractVersion"
+            }
+          ]
+        },
+        "manager_command": {
+          "type": [
+            "string"
+          ]
+        }
+      },
       "required": [
         "status",
         "current_version"
-      ],
+      ]
+    },
+    "UpdateStatusKind": {
+      "type": "string",
+      "enum": [
+        "no_update",
+        "update_available",
+        "updated"
+      ]
+    },
+    "ContractVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "EnvelopeMeta": {
+      "description": "Timing metadata shared by success and failure envelopes.",
+      "type": "object",
       "properties": {
-        "status": {
-          "enum": [
-            "no_update",
-            "update_available",
-            "updated"
+        "started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
           ]
         },
-        "current_version": {
-          "type": "string",
-          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        "completed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
+          ]
         },
-        "available_version": {
-          "type": "string",
-          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        "failed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            }
+          ]
         },
-        "manager_command": {
-          "type": "string"
+        "duration_ms": {
+          "type": [
+            "integer"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
+      }
+    },
+    "SubmissionOutcomeUnknownDetails": {
+      "type": "object",
+      "properties": {
+        "request_sha256": {
+          "$ref": "#/$defs/Sha256Hash"
+        },
+        "upstream_task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpstreamTaskId"
+            }
+          ]
+        },
+        "upstream_bulk_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpstreamBulkId"
+            }
+          ]
+        },
+        "last_status": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "analysis_id": {
+          "$ref": "#/$defs/AnalysisId"
+        },
+        "bulk_id": {
+          "$ref": "#/$defs/BulkId"
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "analysis_id": {
+              "$ref": "#/$defs/AnalysisId"
+            }
+          },
+          "required": [
+            "analysis_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bulk_id": {
+              "$ref": "#/$defs/BulkId"
+            }
+          },
+          "required": [
+            "bulk_id"
+          ]
+        }
+      ],
+      "required": [
+        "request_sha256",
+        "last_status"
+      ],
+      "additionalProperties": false
+    },
+    "successEnvelope": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "command",
+        "data",
+        "meta"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "command": {
+          "enum": [
+            "detect",
+            "plagiarism",
+            "analyze",
+            "bulk_submit",
+            "bulk_status",
+            "bulk_wait",
+            "bulk_results",
+            "task_status",
+            "task_wait",
+            "history_list",
+            "history_search",
+            "history_show",
+            "history_rerun",
+            "history_delete",
+            "history_clear",
+            "auth_set",
+            "auth_status",
+            "auth_logout",
+            "config_list",
+            "config_get",
+            "config_set",
+            "config_path",
+            "doctor",
+            "mcp_install",
+            "mcp_uninstall",
+            "mcp_status",
+            "update_check",
+            "update_install"
+          ]
+        },
+        "data": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array"
+            }
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/EnvelopeMeta"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
+                  "detect",
+                  "plagiarism",
+                  "analyze"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Analysis"
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "$ref": "#/$defs/Analysis"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
+                  "task_status",
+                  "task_wait",
+                  "history_show",
+                  "history_rerun"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/Analysis"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
+                  "bulk_submit",
+                  "bulk_status",
+                  "bulk_wait"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/BulkCollection"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "bulk_results"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/BulkPage"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
+                  "history_list",
+                  "history_search"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/AnalysisPage"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
+                  "history_delete",
+                  "history_clear",
+                  "auth_set",
+                  "auth_logout",
+                  "config_set",
+                  "mcp_install",
+                  "mcp_uninstall"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/MutationAcknowledgement"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "auth_status"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/AuthStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "config_list"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ConfigListStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "config_get"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ConfigGetStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "config_path"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ConfigPathStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "doctor"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/DoctorStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "const": "mcp_status"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/McpStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
+                  "update_check",
+                  "update_install"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/UpdateStatus"
+              }
+            }
+          }
+        }
+      ],
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "additionalProperties": true
+    },
+    "errorEnvelope": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "command",
+        "error",
+        "meta"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "command": {
+          "enum": [
+            "detect",
+            "plagiarism",
+            "analyze",
+            "bulk_submit",
+            "bulk_status",
+            "bulk_wait",
+            "bulk_results",
+            "task_status",
+            "task_wait",
+            "history_list",
+            "history_search",
+            "history_show",
+            "history_rerun",
+            "history_delete",
+            "history_clear",
+            "history_export",
+            "auth_set",
+            "auth_status",
+            "auth_logout",
+            "config_list",
+            "config_get",
+            "config_set",
+            "config_path",
+            "doctor",
+            "mcp_serve",
+            "mcp_install",
+            "mcp_uninstall",
+            "mcp_status",
+            "agent",
+            "skills_list",
+            "skills_get",
+            "skills_path",
+            "completions",
+            "update_check",
+            "update_install"
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/CanonicalError"
+        },
+        "meta": {
+          "$ref": "#/$defs/EnvelopeMeta"
+        }
+      },
+      "not": {
+        "required": [
+          "data"
+        ]
       },
       "additionalProperties": true
     }

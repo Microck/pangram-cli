@@ -1,0 +1,289 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use jsonschema::Draft;
+use microck_pangram_cli::contracts::{
+    GeneratedArtifact, generated_artifacts, write_generated_artifacts,
+};
+use microck_pangram_cli::domain::{AnalysisStatus, CheckStatus, derive_parent_status};
+use serde_json::{Value, json};
+
+const EXPECTED_ARTIFACTS: &[&str] = &[
+    "contracts/config.schema.json",
+    "contracts/install-receipt.schema.json",
+    "contracts/manifest-signature.schema.json",
+    "contracts/output.schema.json",
+    "contracts/tui-state.schema.json",
+    "contracts/update-manifest.schema.json",
+    "contracts/update-state.schema.json",
+    "generated/cli-help.txt",
+    "generated/cli-reference.json",
+    "generated/error-reference.json",
+];
+
+fn repository_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn collect_files(root: &Path, directory: &Path, files: &mut BTreeSet<String>) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        let file_type = entry.file_type().unwrap();
+        if file_type.is_dir() {
+            collect_files(root, &entry.path(), files);
+        } else {
+            assert!(
+                file_type.is_file(),
+                "{} is not a regular file",
+                entry.path().display()
+            );
+            let relative = entry.path().strip_prefix(root).unwrap().to_path_buf();
+            files.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
+#[test]
+fn generated_artifact_inventory_is_complete_and_unique() {
+    let artifacts = generated_artifacts().unwrap();
+    let actual: BTreeSet<_> = artifacts
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .collect();
+    let expected: BTreeSet<_> = EXPECTED_ARTIFACTS.iter().copied().collect();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn owned_directories_contain_exactly_the_generated_inventory() {
+    let root = repository_root();
+    let mut actual = BTreeSet::new();
+    collect_files(&root, &root.join("contracts"), &mut actual);
+    collect_files(&root, &root.join("generated"), &mut actual);
+    let expected = generated_artifacts()
+        .unwrap()
+        .into_iter()
+        .map(|artifact| artifact.path)
+        .collect();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn staging_failure_does_not_replace_earlier_artifacts() {
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = generated_artifacts().unwrap();
+    for artifact in artifacts
+        .iter()
+        .filter(|artifact| artifact.path.starts_with("contracts/"))
+    {
+        let path = root.path().join(&artifact.path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"previous contract").unwrap();
+    }
+    fs::write(root.path().join("generated"), b"blocks directory creation").unwrap();
+
+    assert!(write_generated_artifacts(root.path()).is_err());
+    for artifact in artifacts
+        .iter()
+        .filter(|artifact| artifact.path.starts_with("contracts/"))
+    {
+        assert_eq!(
+            fs::read(root.path().join(&artifact.path)).unwrap(),
+            b"previous contract"
+        );
+    }
+}
+
+#[test]
+fn committed_contracts_match_rust_owned_generation() {
+    let root = repository_root();
+
+    for GeneratedArtifact { path, bytes } in generated_artifacts().unwrap() {
+        let committed = fs::read(root.join(&path))
+            .unwrap_or_else(|error| panic!("failed to read {path}: {error}"));
+        assert_eq!(
+            committed, bytes,
+            "{path} differs from its Rust-owned generator"
+        );
+    }
+}
+
+#[test]
+fn every_json_artifact_declares_generated_rust_ownership() {
+    for GeneratedArtifact { path, bytes } in generated_artifacts().unwrap() {
+        if Path::new(&path)
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("json")
+        {
+            continue;
+        }
+
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value
+                .get("x-contract-owner")
+                .and_then(|owner| owner.as_str()),
+            Some("rust:microck_pangram_cli::contracts")
+        );
+    }
+}
+
+fn output_schema_value() -> Value {
+    let GeneratedArtifact { bytes, .. } = generated_artifacts()
+        .unwrap()
+        .into_iter()
+        .find(|artifact| artifact.path == "contracts/output.schema.json")
+        .expect("the output schema is a generated artifact");
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn check_status_name(status: CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Queued => "queued",
+        CheckStatus::Running => "running",
+        CheckStatus::Succeeded => "succeeded",
+        CheckStatus::Failed => "failed",
+    }
+}
+
+fn analysis_status_name(status: AnalysisStatus) -> &'static str {
+    match status {
+        AnalysisStatus::Queued => "queued",
+        AnalysisStatus::Running => "running",
+        AnalysisStatus::Succeeded => "succeeded",
+        AnalysisStatus::Failed => "failed",
+        AnalysisStatus::Partial => "partial",
+    }
+}
+
+// The generated output schema's parent-status constraint must accept exactly
+// the declared status that `derive_parent_status` computes for every non-empty
+// set of one or two check statuses, and reject every other status (PR #14
+// review d). This exercises the real emitted schema, not a rebuilt copy, so it
+// pins the order-independent set-based encoding against the canonical
+// derivation.
+// Extracts the parent-status derivation clause (the five `if status ... then
+// checks ...` implications) from the generated `Analysis` definition so the
+// invariant can be validated against minimal status/check objects without
+// tripping the unrelated required-field and check-state constraints of a full
+// analysis envelope.
+fn parent_status_clause(schema: &Value) -> Value {
+    let analysis = &schema["$defs"]["Analysis"];
+    analysis["allOf"]
+        .as_array()
+        .expect("analysis has an allOf")
+        .iter()
+        .find(|clause| {
+            clause
+                .get("allOf")
+                .and_then(Value::as_array)
+                .is_some_and(|cases| {
+                    cases.len() == 5
+                        && cases
+                            .iter()
+                            .all(|case| case.get("if").is_some() && case.get("then").is_some())
+                })
+        })
+        .expect("analysis contains the parent-status allOf clause")
+        .clone()
+}
+
+#[test]
+fn output_schema_parent_status_matches_the_canonical_derivation() {
+    let clause = parent_status_clause(&output_schema_value());
+    // Wrap the extracted clause in a minimal object schema carrying only the
+    // fields the invariant reads, so the canonical derivation is checked
+    // directly and independently of the full envelope shape.
+    let isolated = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "status": {"enum": ["queued", "running", "succeeded", "failed", "partial"]},
+            "checks": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"enum": ["queued", "running", "succeeded", "failed"]}
+                    },
+                    "required": ["status"]
+                }
+            }
+        },
+        "required": ["status", "checks"],
+        "allOf": [clause]
+    });
+    let validator = jsonschema::options()
+        .with_draft(Draft::Draft202012)
+        .build(&isolated)
+        .expect("parent-status clause is a valid Draft 2020-12 schema");
+
+    let statuses = [
+        CheckStatus::Queued,
+        CheckStatus::Running,
+        CheckStatus::Succeeded,
+        CheckStatus::Failed,
+    ];
+    let parents = [
+        AnalysisStatus::Queued,
+        AnalysisStatus::Running,
+        AnalysisStatus::Succeeded,
+        AnalysisStatus::Failed,
+        AnalysisStatus::Partial,
+    ];
+
+    let mut combos: Vec<Vec<CheckStatus>> = statuses.iter().map(|status| vec![*status]).collect();
+    for first in statuses {
+        for second in statuses {
+            combos.push(vec![first, second]);
+        }
+    }
+
+    for combo in combos {
+        let expected = derive_parent_status(&combo).unwrap();
+        for parent in parents {
+            let analysis: Value = json!({
+                "status": analysis_status_name(parent),
+                "checks": combo
+                    .iter()
+                    .map(|status| json!({"status": check_status_name(*status)}))
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(
+                validator.is_valid(&analysis),
+                parent == expected,
+                "checks {:?} derive {:?}; schema must {} status {:?}",
+                combo,
+                expected,
+                if parent == expected {
+                    "accept"
+                } else {
+                    "reject"
+                },
+                parent
+            );
+        }
+    }
+}
+
+// The generated output schema must use only standard Draft 2020-12 keywords;
+// any invented cross-field arithmetic keyword would be silently ignored by
+// validators and must never appear (PR #14 review d). Cross-field arithmetic
+// bounds remain constructor-owned (see contracts.md section 9).
+#[test]
+fn output_schema_declares_no_nonstandard_keywords() {
+    let schema = output_schema_value();
+    let text = serde_json::to_string(&schema).unwrap();
+    for keyword in ["maximum_field", "minimum_field"] {
+        assert!(
+            !text.contains(keyword),
+            "non-standard keyword {keyword} must not appear in the generated output schema"
+        );
+    }
+}

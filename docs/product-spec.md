@@ -113,8 +113,8 @@ of analysis result.
 ### Local and upstream identity
 
 Local analysis and bulk identifiers are distinct from Pangram task and bulk
-identifiers. MCP task identity is also distinct. Presentation MUST label each
-identity rather than calling every identifier a task ID.
+identifiers. Presentation MUST label each identity rather than calling every
+identifier a task ID.
 
 ## 5. Analysis capabilities
 
@@ -122,17 +122,29 @@ identity rather than calling every identifier a task ID.
 
 AI detection MUST preserve:
 
-- overall short classification: AI, AI-assisted, human, or mixed
+- overall short classification: AI, human, or mixed
 - Pangram headline and long prediction
 - AI, AI-assisted, and human fractions
 - AI, AI-assisted, and human segment counts
 - ordered segment evidence
-- Pangram model or API version
+- segment humanizer score and thresholded humanized decision
+- Pangram's upstream version value
 - upstream task identity and timing
 - public dashboard link when explicitly requested
 
 Unknown upstream stages, classifications, confidence values, or required field
 shapes MUST fail with `upstream_contract_changed`.
+
+Pangram 4 is the only production text model. The product does not expose model
+selection and does not retain a Pangram 3 compatibility path. Requests MUST
+include Pangram's documented Pangram 4 selector rather than relying on
+temporary default routing. Text submission remains blocked until Pangram
+publishes that request field.
+
+Pangram 4 is intended for long-form natural-language writing of at least 50
+words. The product documents that limitation and may warn for shorter input,
+but it does not reject an otherwise valid request unless the upstream contract
+defines a hard minimum.
 
 ### 5.2 Plagiarism
 
@@ -173,11 +185,16 @@ Submission accepts items with optional caller-provided IDs. The product MUST:
 - validate the entire local JSONL input before submission
 - estimate billable units before submission
 - require a maximum billable-unit ceiling
-- reject requests above Pangram's 1,000-unit limit
+- reject requests above Pangram's documented current limit
 - page upstream item and result endpoints at no more than 1,000 entries
 - expose queued, running, succeeded, failed, and partial state
 - warn that upstream bulk metadata and results expire 48 hours after terminal
   completion
+
+Pangram 4 bulk submission remains blocked until Pangram documents how to select
+the model, calculate billable units, and cap a request. The 1,000-entry page
+limit is a response-pagination contract and is independent of the unresolved
+billable-unit ceiling.
 
 ### 5.5 Files
 
@@ -547,10 +564,14 @@ content so it cannot restructure the report unexpectedly.
 Pangram's documented research snapshot states:
 
 - realtime detection limit: 5 requests per second
-- realtime price: USD 0.05 per started 1,000 words
-- bulk price: USD 0.04 per started 1,000 words
-- bulk request maximum: 1,000 billable units
-- each valid item costs at least one unit
+- Pangram 4 text API price: USD 0.05 per started 100 words
+- each valid Pangram 4 text request costs at least one unit
+
+Pangram's Pangram 4 launch does not publish the exact model-selection request
+field, an updated bulk billing rule, or confirmation that the earlier
+1,000-unit bulk maximum remains valid. The product MUST NOT reuse the Pangram 3
+default or old bulk estimator as a fallback. Text and bulk submission remain
+blocked until their current request and billing contracts are documented.
 
 Pricing is documentation, not a hard-coded monetary promise. The product
 estimates word counts and units but MUST NOT report an exact charged amount
@@ -585,8 +606,10 @@ Before public release, update networking is disabled.
 
 ## 14. Agent behavior
 
-The MCP server is stdio-only in v1. It exposes typed tools for analysis,
-waiting, bulk retrieval, optional history, and update checks.
+The MCP server is stdio-only in v1 and implements MCP `2026-07-28`. It exposes
+typed tools for analysis, waiting, bulk retrieval, optional history, and update
+checks. It does not implement the experimental Tasks extension, MCP Apps, or a
+legacy protocol path.
 
 Default MCP behavior:
 
@@ -595,11 +618,14 @@ Default MCP behavior:
 - no destructive tools
 - no configuration mutation
 - no public links
-- file access only within current declared roots
+- no file tools without explicit startup-approved roots
+- file access only within directories approved by repeated
+  `--allow-file-root PATH`
 - no API key arguments
 
-History, history mutation, configuration mutation, and public links require
-separate server flags.
+History, history mutation, configuration mutation, public links, and file roots
+require separate server flags. Installers do not enable any optional capability
+or approve file roots automatically.
 
 MCP installation is explicit. Authentication and TUI onboarding do not prompt
 users to install it.
@@ -612,17 +638,17 @@ The embedded skill tells agents to:
 - use canonical structured output
 - treat mutations as explicit user actions
 
-The complete MCP tool contract is in [contracts.md](contracts.md).
+The complete MCP tool contract is in [mcp-contract.md](mcp-contract.md).
 
 ## 15. Supported and unsupported parity
 
 | Pangram capability | Product status |
 | --- | --- |
-| Single text AI detection | Supported |
-| AI-assistance fractions and segments | Supported |
-| Multilingual model behavior | Supported through the same API |
-| Text public dashboard link | Supported, opt-in |
-| Bulk AI detection | Supported |
+| Single text AI detection | Blocked pending the documented Pangram 4 request selector |
+| AI-assistance fractions, segments, and humanizer evidence | Blocked pending Pangram 4 REST conformance |
+| Multilingual model behavior | Blocked pending Pangram 4 REST conformance |
+| Text public dashboard link | Blocked with text submission, then opt-in |
+| Bulk AI detection | Blocked pending Pangram 4 selection, billing, and limit documentation |
 | PDF, DOCX, and RTF AI detection | Blocked pending live response conformance |
 | Plagiarism text check | Blocked from public conformance pending field validation |
 | Combined AI and plagiarism report | Local composition of supported checks |
@@ -635,6 +661,7 @@ The complete MCP tool contract is in [contracts.md](contracts.md).
 | Feed Scanner | Unavailable through documented APIs |
 | Browser-extension workflows | Unavailable through documented APIs |
 | LMS administration and grading | Unavailable through documented APIs |
+| AI image detection | Blocked until Pangram publishes and generally opens a documented Image API |
 
 The public parity page MUST use the categories Supported, Local substitution,
 Blocked by upstream contract, and Unavailable through documented APIs.
@@ -670,15 +697,16 @@ Public v1 requires:
 
 1. written Pangram confirmation that a third-party CLI and MCP server may use
    the documented APIs and the fox logo in terminal artwork
-2. live authorized file-response conformance
-3. live authorized plagiarism-response conformance
-4. passing CLI, TUI, MCP, storage, update, and release contracts
-5. artifacts bound by the signed manifest and verified installers for every
+2. a documented Pangram 4 request selector and current bulk billing contract
+3. live authorized Pangram 4 text, bulk, and file-response conformance
+4. live authorized plagiarism-response conformance
+5. passing CLI, TUI, MCP, storage, update, and release contracts
+6. artifacts bound by the signed manifest and verified installers for every
    required target
-6. complete Fumadocs deployment at `pangram.micr.dev`
-7. owned registry and package-manager names
-8. accepted generated intro frame art
-9. no unresolved P0 or P1 test, security, or maintainability findings
+7. complete Fumadocs deployment at `pangram.micr.dev`
+8. owned registry and package-manager names
+9. accepted generated intro frame art
+10. no unresolved P0 or P1 test, security, or maintainability findings
 
 Private `0.x` development milestones perform no public distribution or update
 networking.
@@ -701,6 +729,7 @@ v1 does not include:
 - endpoint overrides or insecure TLS
 - telemetry
 - undocumented web parity
+- invitation-only or reverse-engineered image detection
 - compatibility shims for pre-release local state
 
 ## 19. Remaining blockers
@@ -713,5 +742,8 @@ reviews only final product quality.
 The following are external release blockers rather than unresolved design:
 
 - Pangram distribution permission
+- documented Pangram 4 request selection
+- documented Pangram 4 bulk billing and request limit
+- Pangram 4 text and bulk response conformance
 - file response conformance
 - plagiarism response conformance

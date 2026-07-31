@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pangram.micr.dev/generated/error-reference-v1.json",
+  "x-contract-owner": "rust:microck_pangram_cli::contracts",
+  "title": "Pangram CLI error and exit-code reference v1",
+  "schema_version": "1",
+  "errors": [
+    {
+      "code": "input_required",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "input_conflict",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "unsupported_input",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "unsupported_combination",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "bulk_limit_exceeded",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "missing_api_key",
+      "category": "authentication",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "invalid_api_key",
+      "category": "authentication",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "permission_denied",
+      "category": "permission",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "payment_required",
+      "category": "payment",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "rate_limited",
+      "category": "rate_limit",
+      "default_retryable": true,
+      "contextual_retryability": false
+    },
+    {
+      "code": "network_unavailable",
+      "category": "network",
+      "default_retryable": true,
+      "contextual_retryability": false
+    },
+    {
+      "code": "network_timeout",
+      "category": "network",
+      "default_retryable": false,
+      "contextual_retryability": true
+    },
+    {
+      "code": "wait_timeout",
+      "category": "network",
+      "default_retryable": true,
+      "contextual_retryability": false
+    },
+    {
+      "code": "submission_outcome_unknown",
+      "category": "network",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "upstream_error",
+      "category": "upstream",
+      "default_retryable": false,
+      "contextual_retryability": true
+    },
+    {
+      "code": "upstream_analysis_failed",
+      "category": "upstream",
+      "default_retryable": false,
+      "contextual_retryability": true
+    },
+    {
+      "code": "upstream_not_found",
+      "category": "upstream",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "upstream_contract_changed",
+      "category": "upstream_contract",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "invalid_config",
+      "category": "local_config",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "insecure_config_permissions",
+      "category": "local_config",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "insecure_history_permissions",
+      "category": "local_history",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "history_disabled",
+      "category": "local_history",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "history_unavailable",
+      "category": "local_history",
+      "default_retryable": false,
+      "contextual_retryability": true
+    },
+    {
+      "code": "history_corrupt",
+      "category": "local_history",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "history_write_failed",
+      "category": "local_history",
+      "default_retryable": false,
+      "contextual_retryability": true
+    },
+    {
+      "code": "local_task_unresolvable",
+      "category": "local_history",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "mcp_capability_required",
+      "category": "permission",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "mcp_root_required",
+      "category": "permission",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "mcp_path_outside_root",
+      "category": "permission",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "update_unavailable",
+      "category": "update",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "update_not_owned",
+      "category": "update",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "update_verification_failed",
+      "category": "update",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "update_replace_failed",
+      "category": "update",
+      "default_retryable": false,
+      "contextual_retryability": true
+    }
+  ],
+  "exit_codes": [
+    {
+      "code": 0
+    },
+    {
+      "code": 1
+    },
+    {
+      "code": 2
+    },
+    {
+      "code": 3
+    },
+    {
+      "code": 4
+    },
+    {
+      "code": 5
+    },
+    {
+      "code": 6
+    },
+    {
+      "code": 7
+    },
+    {
+      "code": 130
+    }
+  ]
+}

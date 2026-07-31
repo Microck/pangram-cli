@@ -5,8 +5,9 @@ checking. It is designed for interactive TUI use, shell pipelines, and AI
 agents that need stable JSON and MCP contracts.
 
 > [!NOTE]
-> This repository is in the specification phase. The commands below define the
-> approved product contract, but the runtime has not been implemented yet.
+> This repository has a Phase 0 executable contract scaffold. The compiled
+> binary currently exposes only `--help` and `--version`. The analysis, TUI, and
+> MCP commands below remain planned and are not available yet.
 
 The project will use Pangram's documented API-key-authenticated REST endpoints.
 It will not use browser sessions, private dashboard routes, or scraping.
@@ -109,11 +110,15 @@ terminal decoration:
 - JSON is canonical and remains the default outside the TUI.
 - stdout contains primary results; stderr contains progress and diagnostics.
 - errors include stable codes, categories, retryability, and recovery actions.
+- the stdio MCP server targets protocol version `2026-07-28`.
 - MCP tools map directly to analysis operations rather than spawning the CLI.
 - billable MCP tools are marked non-idempotent and require explicit bulk limits.
-- filesystem access is limited to declared MCP roots.
+- file tools are absent by default and use only directories approved through
+  repeated `--allow-file-root PATH` startup options.
 - history, public links, configuration changes, and destructive operations are
   separately gated.
+- long-running Pangram work uses ordinary typed tools, not the experimental MCP
+  Tasks extension.
 - an embedded, version-matched skill explains safe command and tool selection.
 
 ## Local history and privacy

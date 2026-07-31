@@ -142,7 +142,7 @@ release artifacts.
 | `output` | canonical envelopes and projections | command execution |
 | `cli` | Clap grammar, input resolution, dispatch, exit mapping | HTTP and SQL |
 | `tui` | reducer, event loop, screens, keymaps, terminal lifecycle | HTTP and SQL internals |
-| `mcp` | RMCP protocol, tools, roots, capability gates, installers | subprocess CLI execution |
+| `mcp` | RMCP protocol, tools, file scopes, capability gates, installers | subprocess CLI execution |
 | `update` | manifest signature, receipts, atomic replacement | release production |
 | `diagnostics` | sanitized local checks and environment reporting | billable validation |
 
@@ -233,6 +233,11 @@ bulk_results(reference: BulkReference, page: Page) -> BulkResultPage
 choice, and persistence choice. It represents detection, plagiarism, and
 combined analysis without separate orchestration methods.
 
+The request does not carry a user-selectable Pangram model. The production
+analyzer is fixed to Pangram 4 and must serialize Pangram's documented model
+selector. It must not depend on the temporary Pangram 3 default or retain a
+second model path.
+
 `BulkRequest` carries validated ordered items and the mandatory billable-unit
 ceiling. Reference enums represent local and upstream identities without
 nullable ID pairs.
@@ -305,6 +310,13 @@ All requests use `x-api-key`.
 
 Production configuration cannot override these values. Test-only constructors
 accept loopback endpoint sets.
+
+Pangram's Pangram 4 launch did not publish the exact request selector and the
+current REST reference still describes Pangram 3-era request and bulk billing
+contracts. Production text and bulk submission remain unimplemented until the
+Pangram 4 fields are documented and represented in exact loopback request
+fixtures. Do not infer the selector from dashboard traffic or rely on default
+routing.
 
 ### 8.2 Reqwest configuration
 
@@ -655,7 +667,20 @@ surface that could pass while the visible terminal is broken.
 
 ## 14. MCP adapter
 
-### 14.1 In-process execution
+### 14.1 Protocol lifecycle
+
+The stdio adapter implements MCP `2026-07-28` only. `server/discover` reports
+the server identity, protocol version, and immutable capabilities. Each request
+carries protocol version, client identity, and client capabilities in `_meta`.
+The adapter does not implement the removed initialization handshake or a legacy
+protocol fallback.
+
+RMCP owns wire-level protocol types. Pangram-owned types begin at tool
+arguments, canonical command envelopes, and startup capability configuration.
+Every ordinary result has `resultType: "complete"`. Tool and resource list
+results are deterministic, private, and non-cacheable with `ttlMs: 0`.
+
+### 14.2 In-process execution
 
 The RMCP server constructs and calls the same `Analyzer`,
 `HistoryStore`, `ConfigStore`, and `UpdateChecker` used by other adapters.
@@ -663,7 +688,7 @@ The RMCP server constructs and calls the same `Analyzer`,
 It MUST NOT spawn `pangram` as a subprocess and MUST NOT expose a generic CLI
 tool.
 
-### 14.2 Capability gates
+### 14.3 Capability gates
 
 Server startup resolves immutable capabilities:
 
@@ -671,40 +696,45 @@ Server startup resolves immutable capabilities:
 - history mutations
 - configuration mutations
 - public links
+- approved file roots
 
 Tools consult the resolved capability set. Installers never enable optional
 capabilities automatically.
 
-`--allow-history-mutations` requires `--history`. Invalid capability
-combinations fail before the server begins reading JSON-RPC messages.
+`--allow-history-mutations` requires `--history`. Each
+`--allow-file-root PATH` must name an absolute, existing directory that can be
+pre-opened safely. Invalid capability combinations or file roots fail before
+the server begins reading JSON-RPC messages. Installers never configure file
+roots.
 
-### 14.3 Roots
+### 14.4 File roots
 
-MCP roots are a versioned runtime snapshot, refreshed through the protocol's
-root-change event. Each tool call captures one immutable snapshot.
+Approved roots are fixed startup configuration, not the deprecated MCP Roots
+feature. With no approved roots, the adapter omits `detect_files`.
 
 The adapter pre-opens approved root directories and delegates root-relative,
 handle-based file opening to one concrete filesystem module. That module uses
 no-follow semantics, rejects symlink and Windows reparse-point traversal, and
-verifies the opened object. It MUST NOT authorize a canonicalized path string
-and reopen that path later.
+verifies the opened object. For each absolute tool path, it selects the matching
+pre-opened root and resolves only the relative segments beneath that handle. It
+MUST NOT authorize a canonicalized path string and reopen that path later.
 
-### 14.4 MCP Tasks
+### 14.5 Long-running Pangram work
 
-Long-running detection and wait tools support MCP Tasks. A non-task tool call
-awaits the same underlying handle.
+The adapter exposes ordinary typed `get_task` and `wait_task` tools over the
+same underlying analysis handles used by the CLI and TUI. It does not implement
+the experimental `io.modelcontextprotocol/tasks` extension.
 
-MCP task IDs, local analysis IDs, and Pangram task IDs remain separate fields.
-The adapter uses the MCP 2025-11-25 Task object and generated task schema.
-`tasks/result` returns the same tool result as a non-task call. Cancelling an
-MCP task stops local observation only.
+Local analysis IDs and Pangram task IDs remain separate fields. JSON-RPC
+cancellation stops local observation only.
 
-### 14.5 Errors
+### 14.6 Errors
 
 Schema-invalid calls use protocol validation errors. Domain-valid operations
 that fail return `isError: true` with one canonical failure envelope in
-`structuredContent`. Success returns one canonical success envelope. Generated
-per-tool schemas fix the command and `data` root.
+`structuredContent` and `resultType: "complete"`. Success returns one canonical
+success envelope with `resultType: "complete"`. Generated per-tool schemas fix
+the command and `data` root.
 
 All logs go to stderr to preserve JSON-RPC framing.
 
@@ -759,7 +789,6 @@ The Rust domain and CLI definitions own:
 - command reference
 - error and exit-code reference
 - MCP tool schemas
-- MCP task schema
 - TUI shortcut reference
 - update manifest, signature, state, and receipt schemas
 - embedded skill inputs
@@ -779,15 +808,22 @@ the specification-seed bootstrap.
 
 ## 17. Dependency baseline
 
-Phase 0 revalidates and pins exact versions for the already selected roles:
-Clap, Tokio, Reqwest with rustls, Serde, Schemars, RMCP, Ratatui, Crossterm,
-thiserror, tracing, TOON, platform directories, TOML, secrecy, rusqlite with
-bundled SQLite and FTS5, UUIDv7, SHA-256, and Ed25519.
+Phase 0 revalidates and pins exact versions only for the roles used by the
+network-free scaffold: Clap, Serde and JSON, Schemars, Jiff, thiserror, UUIDv7,
+SHA-256, JSON Schema validation, property tests, and temporary directories.
+Each later phase revalidates and pins its newly introduced roles before first
+use. Future roles such as Tokio, Reqwest, RMCP, Ratatui, SQLite, and Ed25519 do
+not become dependencies before their owning phase.
 
-Tests use a real Axum loopback server, compiled-binary assertions, snapshots,
-temporary directories, property tests, PTYs, and the pinned Terminal Control
-harness. Exact research snapshots live in
-[evidence-ledger.md](evidence-ledger.md), not in this normative architecture.
+RMCP must support MCP `2026-07-28` and the official conformance suite before it
+enters Phase 6. Its dependency-compatible Rust version becomes the package
+`rust-version` in that phase. The 2026-07-28-capable RMCP 3 prerelease requires
+Rust 1.88, but a prerelease is evidence, not an approved dependency pin.
+
+Later tests add real Axum loopback servers, snapshots, PTYs, and the pinned
+Terminal Control harness when the corresponding behavior exists. Exact
+research snapshots live in [evidence-ledger.md](evidence-ledger.md), not in
+this normative architecture.
 
 The workspace pins current stable Rust for development and records the lowest
 dependency-compatible Rust 2024 toolchain as `rust-version`. Phase 0 MUST prove

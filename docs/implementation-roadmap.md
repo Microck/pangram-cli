@@ -72,8 +72,9 @@ make contract drift visible.
 4. Build only the visible command entries implemented in this phase. Keep the
    complete grammar in generator input without advertising unsupported runtime
    commands as available.
-5. Generate JSON Schema from Rust-owned contract types behind `dev-tools`,
-   prove semantic equivalence with every seed schema, add generated ownership
+5. Generate JSON Schema from Rust-owned contract types behind `dev-tools`, run
+   a locked differential transfer corpus against every seed and generated
+   schema, document each intentional correction, add generated ownership
    headers, and transfer artifact ownership to the generator.
 6. Add CI checks for formatting, lint, tests, contract regeneration, forbidden
    Unicode, file-size thresholds, and secret scanning.
@@ -143,6 +144,10 @@ before adding billable operations.
 Goal: ship the first complete behavior through the shared analysis module and
 CLI before expanding breadth.
 
+Entry gate: Pangram must document the Pangram 4 request selector. The exact
+field and selected upstream version must be captured in the evidence ledger
+before protocol implementation starts.
+
 ### Files
 
 - `src/analysis.rs`
@@ -156,7 +161,7 @@ CLI before expanding breadth.
 ### Work
 
 1. Build a real loopback Pangram fixture server.
-2. Implement text submission and task polling in `Analyzer`.
+2. Implement explicit Pangram 4 text submission and task polling in `Analyzer`.
 3. Normalize documented responses into the canonical result.
 4. Centralize rate limiting, safe retries, timeout, and local cancellation.
 5. Implement bare-command dispatch and `detect`.
@@ -167,6 +172,8 @@ CLI before expanding breadth.
 ### Tests
 
 - exact methods, paths, headers, and bodies
+- explicit Pangram 4 selection with no default-model path
+- required humanizer fields and zero-based half-open segment offsets
 - all documented HTTP status categories
 - malformed and additive responses
 - `Retry-After` and ambiguous POST failure
@@ -184,6 +191,10 @@ CLI before expanding breadth.
 
 Goal: add long-running and batch behavior without creating a second polling
 path.
+
+Entry gate: Pangram must document Pangram 4 bulk selection, billable-unit
+calculation, and the current request ceiling. Do not reuse the Pangram 3-era
+1,000-word unit or 1,000-unit maximum.
 
 ### Files
 
@@ -340,24 +351,33 @@ signals.
 
 ### Work
 
-1. Implement stdio MCP with typed tools and `additionalProperties: false`.
+1. Implement MCP `2026-07-28` over stdio with `server/discover`, per-request
+   protocol metadata, typed tools, and `additionalProperties: false`.
 2. Publish exact canonical success and failure envelopes as
-   `structuredContent` through generated per-tool output schemas.
-3. Add versioned root snapshots and handle-relative, no-follow file opening.
+   `structuredContent` through generated per-tool output schemas, with
+   `resultType: "complete"`.
+3. Add repeated `--allow-file-root PATH` startup configuration and
+   handle-relative, no-follow file opening; omit file tools when no root is
+   configured.
 4. Apply separate history, history-mutation, config-mutation, and public-link
    startup gates; reject history mutation without history read capability.
 5. Add correct read-only, destructive, idempotent, and open-world annotations.
 6. Implement safe, idempotent client install and uninstall plans.
-7. Implement MCP 2025-11-25 Tasks without inventing a second task object.
-8. Embed the Pangram skill and compact agent reference in the binary.
+7. Expose ordinary `get_task` and `wait_task` tools without implementing the
+   experimental Tasks extension or owning MCP protocol types.
+8. Emit deterministic private list and resource results with `ttlMs: 0`.
+9. Embed the Pangram skill and compact agent reference in the binary.
 
 ### Tests
 
-- MCP initialization and conformance
+- `server/discover`, per-request metadata, protocol-version rejection, and
+  MCP 2026-07-28 conformance
 - every tool schema and annotation
-- root snapshot, traversal, symlink, reparse-point, and path-race cases
+- file-root startup validation, traversal, symlink, reparse-point, and path-race
+  cases
 - capability combinations
 - no billable retry hidden behind idempotent metadata
+- required result type, cache metadata, and deterministic inventory ordering
 - installer dry-run, idempotency, preservation, and conflict behavior
 
 ### Exit criteria
