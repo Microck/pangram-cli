@@ -17,6 +17,21 @@ dev-tools = []
 clap = { version = "=4.6.4", features = ["derive"] }
 directories = "=6.0.0"
 jiff = { version = "=0.2.35", features = ["serde"] }
+# rustls-only TLS through the platform verifier; native TLS is never
+# compiled. `system-proxy` keeps the documented system proxy discovery,
+# `charset` and `http2` match the documented HTTP profile. Verified against
+# the reqwest 0.13.4 manifest (evidence-ledger).
+reqwest = { version = "=0.13.4", default-features = false, features = [
+    "rustls",
+    "system-proxy",
+    "http2",
+    "charset",
+    "json",
+    "gzip",
+    "brotli",
+    "deflate",
+    "stream",
+] }
 rpassword = "=7.5.4"
 schemars = { version = "=1.2.2", features = ["jiff02", "preserve_order", "uuid1"] }
 secrecy = "=0.10.3"
@@ -24,7 +39,15 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.11.0"
 thiserror = "=2.0.19"
+tokio = { version = "=1.53.1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+] }
+tokio-util = { version = "=0.7.19", features = ["rt"] }
 toml = "=1.0.7"
+url = "=2.5.8"
 uuid = { version = "=1.24.0", features = ["serde", "v7"] }
 zeroize = "=1.8.2"
 
@@ -38,9 +61,17 @@ windows-sys = { version = "=0.61.2", features = [
 ] }
 
 [dev-dependencies]
+axum = { version = "=0.8.9", default-features = false, features = [
+    "http1",
+    "tokio",
+    "json",
+] }
 jsonschema = { version = "=0.49.2", default-features = false }
 proptest = "=1.11.0"
 tempfile = "=3.27.0"
+# Paused-time deterministic protocol tests. `test-util` stays out of every
+# shipped build; it is additive for the dev target only.
+tokio = { version = "=1.53.1", features = ["test-util"] }
 
 [target."cfg(windows)".dev-dependencies]
 windows-sys = { version = "=0.61.2", features = [
@@ -57,6 +88,13 @@ path = "src/main.rs"
 [[bin]]
 name = "generate-contracts"
 path = "tools/generate-contracts.rs"
+required-features = ["dev-tools"]
+
+# The Pangram protocol fixture reaches loopback-only client constructors and
+# does not ship in release artifacts.
+[[test]]
+name = "analysis-protocol"
+path = "tests/analysis-protocol.rs"
 required-features = ["dev-tools"]
 
 [profile.release]

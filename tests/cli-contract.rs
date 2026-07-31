@@ -38,13 +38,14 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "update",
 ];
 
-// Phase 1 runtime dependencies: the Phase 0 set plus the local-setup core
-// (platform paths, secret handling, TOML, and the masked terminal prompt)
-// plus the Windows credential ACL binding (a target-specific runtime dep).
-const PHASE_1_RUNTIME_DEPENDENCIES: &[&str] = &[
+// Phase 2 runtime dependencies: the Phase 1 set plus the async analysis core
+// (Tokio runtime utilities, the rustls-only Reqwest client, and
+// CancellationToken support). The analysis module owns every network path.
+const PHASE_2_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
     "directories",
     "jiff",
+    "reqwest",
     "rpassword",
     "schemars",
     "secrecy",
@@ -52,14 +53,16 @@ const PHASE_1_RUNTIME_DEPENDENCIES: &[&str] = &[
     "serde_json",
     "sha2",
     "thiserror",
+    "tokio",
+    "tokio-util",
     "toml",
+    "url",
     "uuid",
     "windows-sys",
     "zeroize",
 ];
 
 const FORBIDDEN_NETWORK_APIS: &[&str] = &[
-    "reqwest::",
     "hyper::",
     "ureq::",
     "curl::",
@@ -367,22 +370,27 @@ fn cargo_metadata_reports_the_exact_phase_one_runtime_dependencies() {
         .filter(|dependency| dependency["kind"].is_null())
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
-    let expected: BTreeSet<_> = PHASE_1_RUNTIME_DEPENDENCIES.iter().copied().collect();
+    let expected: BTreeSet<_> = PHASE_2_RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
 }
 
+/// HTTP client construction is allowed only inside the analysis module, the
+/// sole owner of Pangram protocol behavior.
 #[test]
-fn phase_one_runtime_source_contains_no_network_path() {
+fn http_client_paths_live_in_the_analysis_module_only() {
     let mut violations = Vec::new();
 
     for path in rust_source_paths() {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "analysis")
+        {
+            continue;
+        }
         let source = fs::read_to_string(&path).unwrap();
         for (line_index, line) in source.lines().enumerate() {
             let code = code_before_line_comment(line);
-            for forbidden in FORBIDDEN_NETWORK_APIS
-                .iter()
-                .chain(FORBIDDEN_NETWORK_ENDPOINTS)
-            {
+            for forbidden in ["reqwest::"] {
                 if code.contains(forbidden) {
                     violations.push(format!(
                         "{}:{} contains {forbidden:?}",
@@ -396,7 +404,80 @@ fn phase_one_runtime_source_contains_no_network_path() {
 
     assert!(
         violations.is_empty(),
-        "Phase 0 runtime source contains network paths:\n{}",
+        "HTTP client paths outside src/analysis:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn source_uses_no_bypassing_network_path() {
+    let mut violations = Vec::new();
+
+    for path in rust_source_paths() {
+        let source = fs::read_to_string(&path).unwrap();
+        for (line_index, line) in source.lines().enumerate() {
+            let code = code_before_line_comment(line);
+            for forbidden in FORBIDDEN_NETWORK_APIS {
+                if code.contains(forbidden) {
+                    violations.push(format!(
+                        "{}:{} contains {forbidden:?}",
+                        path.display(),
+                        line_index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "runtime source contains bypassing network paths:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// Production endpoints are owned by the analysis module as compile-time
+/// constants. No environment, flag, or configuration path may select them.
+#[test]
+fn production_endpoints_are_analysis_owned_constants() {
+    let analysis_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("analysis");
+    let mut endpoint_sites = Vec::new();
+    let mut override_violations = Vec::new();
+
+    for entry in fs::read_dir(&analysis_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        for endpoint in FORBIDDEN_NETWORK_ENDPOINTS {
+            if source.contains(endpoint) {
+                endpoint_sites.push(format!("{}: {endpoint}", path.display()));
+            }
+        }
+        for (line_index, line) in source.lines().enumerate() {
+            let code = code_before_line_comment(line);
+            for forbidden in ["PANGRAM_ENDPOINT", "PANGRAM_API_URL", "endpoint_override"] {
+                if code.contains(forbidden) {
+                    override_violations.push(format!(
+                        "{}:{} contains {forbidden:?}",
+                        path.display(),
+                        line_index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        !endpoint_sites.is_empty(),
+        "the analysis module must own the production endpoint constants"
+    );
+    assert!(
+        override_violations.is_empty(),
+        "endpoint override paths are forbidden:\n{}",
+        override_violations.join("\n")
     );
 }
