@@ -271,6 +271,24 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
     let mut not_submitted_bulk_with_failed_item = not_submitted_bulk.clone();
     not_submitted_bulk_with_failed_item["failed"] = json!(1);
 
+    // An accepted submission must carry the upstream bulk identifier (PR #14
+    // review: encode the expressible BulkCollection invariants).
+    let mut accepted_bulk_without_upstream_id = bulk_collection();
+    accepted_bulk_without_upstream_id
+        .as_object_mut()
+        .unwrap()
+        .remove("upstream_bulk_id");
+
+    // A terminally resolved submission cannot still report an active status.
+    let mut terminal_bulk_still_running = bulk_collection();
+    terminal_bulk_still_running["submission_outcome"] = json!("terminal");
+    terminal_bulk_still_running["status"] = json!("running");
+
+    let mut terminal_bulk_still_queued = bulk_collection();
+    terminal_bulk_still_queued["submission_outcome"] = json!("terminal");
+    terminal_bulk_still_queued["status"] = json!("queued");
+    terminal_bulk_still_queued["accepted"] = json!(0);
+
     // A `succeeded` collection must not carry failures and must record at
     // least one succeeded item; the base running fixture has both terminal
     // counters at zero.
@@ -540,6 +558,21 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "not-submitted bulk collections reject failed items",
                 instance: success("bulk_status", not_submitted_bulk_with_failed_item),
+                valid: false,
+            },
+            Case {
+                name: "accepted bulk collections require an upstream bulk id",
+                instance: success("bulk_status", accepted_bulk_without_upstream_id),
+                valid: false,
+            },
+            Case {
+                name: "terminal bulk collections cannot still be running",
+                instance: success("bulk_status", terminal_bulk_still_running),
+                valid: false,
+            },
+            Case {
+                name: "terminal bulk collections cannot still be queued",
+                instance: success("bulk_status", terminal_bulk_still_queued),
                 valid: false,
             },
             Case {

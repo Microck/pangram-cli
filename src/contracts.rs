@@ -537,18 +537,26 @@ fn definition_mut<T: JsonSchema>(definitions: &mut Value) -> &mut Value {
 }
 
 fn patch_output_definitions(definitions: &mut Value) {
-    if let Some(timestamp) = definitions.get_mut("Timestamp") {
+    if let Some(timestamp) = definitions.get_mut("UtcTimestamp") {
         object_mut(timestamp).insert("pattern".into(), "Z$".into());
     }
 
     // Internally tagged Serde enums ignore known fields from other variants.
     // Keep the schema strict even though those variants share open objects.
+    // Fail loudly if schemars renames the generic instantiations so a silent
+    // no-op cannot drop the exclusivity constraint from the emitted schema.
     let check_state_invariant = json!({"oneOf": state_payload_invariant("result")});
+    let mut patched = 0_usize;
     for (name, definition) in object_mut(definitions).iter_mut() {
         if name.starts_with("CheckState") {
             object_mut(definition).insert("allOf".into(), json!([check_state_invariant]));
+            patched += 1;
         }
     }
+    assert_eq!(
+        patched, 2,
+        "expected the AI-detection and plagiarism check-state definitions to be patched"
+    );
 
     let checks = definition_mut::<OrderedChecks<Check<CanonicalError>>>(definitions);
     object_mut(checks).insert(
@@ -622,6 +630,28 @@ fn patch_output_definitions(definitions: &mut Value) {
             },
             "not": {"required": ["upstream_bulk_id"]}
         })),
+    );
+    // An accepted submission must have returned an upstream bulk identifier.
+    push_all_of(
+        bulk_collection,
+        json!({
+            "if": {
+                "properties": {"submission_outcome": {"const": "accepted"}},
+                "required": ["submission_outcome"]
+            },
+            "then": {"required": ["upstream_bulk_id"]}
+        }),
+    );
+    // A terminally resolved submission cannot still report active statuses.
+    push_all_of(
+        bulk_collection,
+        json!({
+            "if": {
+                "properties": {"submission_outcome": {"const": "terminal"}},
+                "required": ["submission_outcome"]
+            },
+            "then": {"properties": {"status": {"enum": ["succeeded", "failed", "partial"]}}}
+        }),
     );
     let bulk_item = definition_mut::<BulkItem<CanonicalError>>(definitions);
     let properties = object_mut(&mut bulk_item["properties"]);

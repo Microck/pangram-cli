@@ -1767,6 +1767,46 @@
               ]
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "submission_outcome": {
+                "const": "accepted"
+              }
+            },
+            "required": [
+              "submission_outcome"
+            ]
+          },
+          "then": {
+            "required": [
+              "upstream_bulk_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "submission_outcome": {
+                "const": "terminal"
+              }
+            },
+            "required": [
+              "submission_outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "succeeded",
+                  "failed",
+                  "partial"
+                ]
+              }
+            }
+          }
         }
       ]
     },
