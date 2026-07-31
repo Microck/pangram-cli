@@ -587,3 +587,38 @@ fn production_endpoints_are_analysis_owned_constants() {
         override_violations.join("\n")
     );
 }
+
+/// The CLI interruption path must compile on every supported target.
+/// `signal_hook::iterator` (the `Signals` blocking driver) is gated
+/// `#[cfg(all(not(windows), feature = "iterator"))]`, so referencing it from
+/// shared source fails the Windows build with E0433 even though it compiles
+/// on Unix. The Phase 2 SIGINT flow must use the cross-platform
+/// `signal_hook::low_level::register` handler instead. This guard asserts the
+/// Unix-only API is never written in non-comment source so the native Windows
+/// CI leg never regresses on it again.
+#[test]
+fn source_avoids_unix_only_signal_hook_iterator() {
+    let mut violations = Vec::new();
+
+    for path in rust_source_paths() {
+        let source = fs::read_to_string(&path).unwrap();
+        for (line_index, line) in source.lines().enumerate() {
+            let code = code_before_line_comment(line);
+            for forbidden in ["signal_hook::iterator", "Signals::new", "signals.forever("] {
+                if code.contains(forbidden) {
+                    violations.push(format!(
+                        "{}:{} contains Unix-only signal API {forbidden:?}",
+                        path.display(),
+                        line_index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "shared source must use the cross-platform signal_hook::low_level::register, not the Unix-only iterator driver:\n{}",
+        violations.join("\n")
+    );
+}

@@ -145,18 +145,25 @@ fn cancel_slot() -> &'static std::sync::Mutex<Option<CancellationToken>> {
 pub(super) fn set_active_cancel(token: &CancellationToken) -> CancelGuard {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        std::thread::spawn(|| {
-            let Ok(mut signals) =
-                signal_hook::iterator::Signals::new([signal_hook::consts::SIGINT])
-            else {
-                return;
-            };
-            for _signal in signals.forever() {
+        // Register a single cross-platform low-level SIGINT handler. On Unix
+        // this is the signal action; on Windows it is a console control
+        // handler for CTRL_C_EVENT. The handler body only reads the slot and
+        // cancels the current token, so it never touches shared mutable
+        // application state beyond a mutex-guarded read. Registering maps
+        // every target the signal-hook crate supports, unlike the
+        // Unix-only `iterator`/`Signals` driver.
+        unsafe {
+            if signal_hook::low_level::register(signal_hook::consts::SIGINT, || {
                 if let Some(token) = cancel_slot().lock().expect("cancel slot").clone() {
                     token.cancel();
                 }
+            })
+            .is_err()
+            {
+                // A registration failure is non-fatal: without it no SIGINT
+                // is trapped and the interruption path is simply unexercised.
             }
-        });
+        }
     });
     *cancel_slot().lock().expect("cancel slot") = Some(token.clone());
     CancelGuard
