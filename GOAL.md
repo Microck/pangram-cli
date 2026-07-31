@@ -162,8 +162,8 @@ approved contracts.
 | --- | --- |
 | 0 | Complete |
 | 1 | Complete |
-| 2 | In progress |
-| 3 | Not started |
+| 2 | Complete |
+| 3 | Not started (blocked: Pangram 4 bulk billing and request ceiling are undocumented) |
 | 4 | Not started |
 | 5 | Not started |
 | 6 | Not started |
@@ -445,6 +445,17 @@ behavior enters this queue before implementation continues through that seam.
   hygiene threshold. Remote Yoga smoke, MSRV (1.87), and gate (fmt, full
   tests, strict clippy) passes are green together with drift, hygiene,
   audit/deny, gitleaks, and tegami-shape checks.
+- 2026-07-31: Phase 2 moves to Complete. The compiled CLI completes Pangram 4
+  text detection against the real loopback fixture server through `detect`
+  and bare input, every adapter-visible result renders from the canonical
+  typed envelope (JSON, JSONL, TOON, Markdown, pretty), and no adapter
+  contains Pangram protocol logic, proving the roadmap's Phase 2 exit
+  criteria. Independent review returned READY with no P0, P1, or P2 findings;
+  remote Yoga current/MSRV/gate, generated drift, hygiene, supply-chain,
+  gitleaks, and the no-network policy are green, and the native Windows ACL
+  and generated/supply-chain CI gates are exercised on the delivery pull
+  request. Phase 3 bulk submission remains blocked on Pangram's undocumented
+  bulk billing unit and request ceiling rather than on any Phase 2 gap.
 
 ## Out of scope
 
