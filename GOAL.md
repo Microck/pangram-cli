@@ -426,6 +426,25 @@ behavior enters this queue before implementation continues through that seam.
   rows. The domain gained the canonical `text_billable_units` rule with
   property and overflow-boundary tests. Phase 3 bulk submission and the bulk
   billing unknown remain open, so Phase 2 stays In progress.
+- 2026-07-31: Phase 2 independent-review remediation landed contract-first
+  and test-first. Bare piped stdin now detects (the `--help` fallback moved
+  behind bare dispatch; empty or whitespace-only pipes return
+  `input_required`), the undocumented 300-second default wait ceiling was
+  removed in favor of the documented unbounded wait, and cancellation of an
+  issued billable POST now reports the canonical `submission_outcome_unknown`
+  reconciliation outcome instead of a false definite no-remote-action claim
+  while SIGINT still exits 130. Repeated files under an explicit
+  single-document format render one ordered array envelope instead of failing
+  after billable work; an upstream terminal `STAGE_FAILED` exits 6 per its
+  upstream category; explicit `--format pretty` failures surface as sanitized
+  stderr text with empty stdout; the `--timeout` grammar rejects whitespace,
+  exponent, non-finite, zero, and out-of-range forms; `--save` is planned in
+  the generated reference and rejected by the runtime until Phase 4 history;
+  the README reflects the compiled surface; and the protocol suite was
+  decomposed into submission/observation/contract-matrix modules below the
+  hygiene threshold. Remote Yoga smoke, MSRV (1.87), and gate (fmt, full
+  tests, strict clippy) passes are green together with drift, hygiene,
+  audit/deny, gitleaks, and tegami-shape checks.
 
 ## Out of scope
 

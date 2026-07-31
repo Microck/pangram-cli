@@ -139,7 +139,11 @@ pub enum SendOutcome {
         error: AnalysisError,
     },
     /// The caller's local cancellation fired; no observation stop is sent.
-    Cancelled,
+    /// `issued` records whether the request had already been handed to the
+    /// transport when cancellation landed: once issued, the send is ambiguous
+    /// (the body may have reached the peer), which is the distinction the
+    /// billable-submission boundary (F3) needs.
+    Cancelled { issued: bool },
 }
 
 /// One built client. Cheap to clone (shared connection pool); construction
@@ -219,10 +223,33 @@ impl HttpClient {
         request: reqwest::RequestBuilder,
         cancel: &CancellationToken,
     ) -> SendOutcome {
-        let outcome = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return SendOutcome::Cancelled,
-            outcome = request.send() => outcome,
+        // Fast path: an already-cancelled token means the request is never
+        // issued, so the local stop is unambiguous (pre-issue, F3).
+        if cancel.is_cancelled() {
+            return SendOutcome::Cancelled { issued: false };
+        }
+        let send = request.send();
+        tokio::pin!(send);
+        // Bias the select toward cancellation so a token already tripped wins
+        // before `send` is ever polled (pre-issue). `send` is only polled once
+        // cancellation was not ready in the same pass, so reaching the send
+        // branch at all means the request was handed to the transport
+        // (post-issue, ambiguous). A shared flag records the hand-off.
+        let issued_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let outcome = {
+            let issued = std::sync::Arc::clone(&issued_flag);
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    return SendOutcome::Cancelled {
+                        issued: issued_flag.load(std::sync::atomic::Ordering::Acquire),
+                    };
+                }
+                outcome = async {
+                    issued.store(true, std::sync::atomic::Ordering::Release);
+                    send.await
+                } => outcome,
+            }
         };
         match outcome {
             Ok(response) => match Response::collect(response).await {

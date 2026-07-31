@@ -183,6 +183,22 @@ impl ProtocolFixture {
         }
     }
 
+    /// Waits until at least `n` POST requests have reached the fixture. This
+    /// is the deterministic "the billable send was issued" signal a
+    /// cancellation test needs before it interrupts: the request bytes are at
+    /// the peer, so the outcome is genuinely ambiguous.
+    pub async fn wait_for_posts(&self, n: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while self.post_count() < n {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {n} POST(s); saw {}",
+                self.post_count()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     /// Builds a loopback client pinned to this fixture with deterministic
     /// policy (no backoff waits). Per-request timeout is 400 ms so `Hang`
     /// scenarios stay quick and virtual-time-friendly.

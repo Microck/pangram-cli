@@ -182,12 +182,6 @@ pub fn runtime_command() -> Command {
                 .help("Include the submitted text in the canonical input record"),
         )
         .arg(
-            Arg::new("save")
-                .long("save")
-                .action(ArgAction::SetTrue)
-                .help("Save to local history (unavailable; history arrives in a later phase)"),
-        )
-        .arg(
             Arg::new("public-link")
                 .long("public-link")
                 .action(ArgAction::SetTrue)
@@ -318,18 +312,24 @@ where
     if arguments.is_empty() {
         arguments.push(FULL_GRAMMAR.name.into());
     }
-    // Only a literally bare invocation behaves like `--help`. Explicit help
-    // anywhere else is Clap-owned, including after a subcommand.
-    if arguments.len() == 1 {
-        arguments.push("--help".into());
-    }
 
-    // Bare-input dispatch runs before Clap's errors surface only for the
-    // source-category rules Clap cannot express: `pangram -` (stdin), and a
-    // bare non-TTY launch whose piped stdin is the implicit input. Every other
-    // path stays Clap-owned so usage text and help keep their exact form.
+    // Bare-input dispatch runs before Clap's errors surface (and before the
+    // bare `--help` fallback below) for the source-category rules Clap cannot
+    // express: `pangram -` (stdin), and a bare non-TTY launch whose piped
+    // stdin is the implicit input. Evaluating this first is what lets
+    // `printf text | pangram` detect instead of printing help, and an empty
+    // pipe return input_required. Every other path stays Clap-owned so usage
+    // text and help keep their exact form.
     if let Some(outcome) = bare_dispatch(&arguments, streams) {
         return outcome;
+    }
+
+    // Only a literally bare invocation behaves like `--help`. Explicit help
+    // anywhere else is Clap-owned, including after a subcommand. This is the
+    // pre-TUI fallback for the all-TTY bare launch (piped stdin was already
+    // claimed by bare_dispatch above).
+    if arguments.len() == 1 {
+        arguments.push("--help".into());
     }
 
     let matches = match runtime_command().try_get_matches_from(arguments) {
@@ -430,13 +430,18 @@ fn bare_dispatch(arguments: &[OsString], streams: &dyn StreamTty) -> Option<RunO
 /// Builds configuration, credentials, and the analyzer for a detection
 /// request, returning them or (on failure) an already-renderable outcome.
 /// The triple is heavy, so a boxed tuple keeps the error type small.
+///
+/// `output` is the fully resolved rendering policy from the already-planned
+/// request: prepare/credential/client failures surface through that exact
+/// format and error surface (F6), so explicit `--format pretty` emits a
+/// sanitized text error on stderr with empty stdout and its category exit
+/// unless `--error-format json` overrides it.
 #[allow(clippy::type_complexity)]
 fn prepare_detection(
     root_matches: &ArgMatches,
-    global: crate::cli::detect::GlobalFlags,
-    streams: &dyn StreamTty,
+    output: crate::cli::detect::ResolvedOutput,
+    started: crate::domain::UtcTimestamp,
 ) -> Result<crate::analysis::Analyzer, crate::cli::detect::DetectOutcome> {
-    let started = crate::domain::UtcTimestamp::now();
     let mut flags = crate::config::ConfigOverrides::default();
     if let Some(config) = root_matches.get_one::<String>("config") {
         flags = flags.with_config_file(config.clone());
@@ -449,17 +454,16 @@ fn prepare_detection(
         crate::config::ConfigOverrides::from_environment(),
     );
     let service = crate::config::ConfigService::new(&overrides).map_err(|error| {
-        crate::cli::detect::early_failure(
-            global,
-            streams,
+        crate::cli::detect::failure_outcome(
+            output,
             started,
             crate::cli::detect::credential_error(error),
         )
     })?;
     let api_key = crate::cli::detect::resolve_api_key(&service)
-        .map_err(|error| crate::cli::detect::early_failure(global, streams, started, error))?;
+        .map_err(|error| crate::cli::detect::failure_outcome(output, started, error))?;
     crate::cli::detect::build_analyzer(&service, api_key)
-        .map_err(|error| crate::cli::detect::early_failure(global, streams, started, error))
+        .map_err(|error| crate::cli::detect::failure_outcome(output, started, error))
 }
 
 /// Runs an explicit `detect [TEXT|--file ...]` invocation. Argument and
@@ -521,7 +525,9 @@ fn run_detection(
         Ok(plan) => plan,
         Err(outcome) => return finish_detect(outcome),
     };
-    let analyzer = match prepare_detection(root_matches, global, streams) {
+    let output = plan.resolved_output();
+    let analyzer = match prepare_detection(root_matches, output, crate::domain::UtcTimestamp::now())
+    {
         Ok(analyzer) => analyzer,
         Err(outcome) => return finish_detect(outcome),
     };

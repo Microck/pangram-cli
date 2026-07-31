@@ -26,7 +26,7 @@ mod inputs;
 mod render;
 
 pub(crate) use client::{build_analyzer, credential_error, resolve_api_key};
-pub(crate) use render::{DetectOutcome, early_failure};
+pub(crate) use render::{DetectOutcome, early_failure, failure_outcome};
 
 use clap::ArgMatches;
 
@@ -35,8 +35,12 @@ use crate::output::{CanonicalError, ColorPolicy, ErrorCode, OutputFormat, Progre
 
 use super::StreamTty;
 
-/// The default AI-detection wait deadline when `--timeout` is absent.
-const DEFAULT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+use client::set_active_cancel;
+use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
+use render::{
+    DETACH_NOTE, identity_note, internal_error, interrupted_outcome, note_stderr, success_outcome,
+    usage_error,
+};
 
 // The submodules hold the cohesive halves of the adapter:
 // - `inputs`: source resolution, word counting, and billing preflight
@@ -45,12 +49,6 @@ const DEFAULT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 //
 // This file keeps the argument-and-flow core: flag parsing, plan/execute,
 // and per-observation progress emission.
-use client::set_active_cancel;
-use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
-use render::{
-    DETACH_NOTE, failure_outcome, identity_note, internal_error, interrupted_outcome, note_stderr,
-    success_outcome, usage_error,
-};
 
 /// The resolved rendering policy shared by primary output and errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +88,6 @@ pub(crate) struct DetectArgs {
     detach: bool,
     include_input: bool,
     public_link: bool,
-    save: bool,
     format: Option<OutputFormat>,
     progress: ProgressMode,
     timeout: Option<std::time::Duration>,
@@ -105,7 +102,6 @@ impl DetectArgs {
             detach: false,
             include_input: false,
             public_link: false,
-            save: false,
             format: None,
             progress: ProgressMode::Auto,
             timeout: None,
@@ -158,7 +154,6 @@ impl DetectArgs {
             detach: matches.get_flag("detach"),
             include_input: matches.get_flag("include-input"),
             public_link: matches.get_flag("public-link"),
-            save: matches.get_flag("save"),
             format,
             progress,
             timeout,
@@ -189,17 +184,6 @@ pub(crate) fn plan(
     let started_at = crate::domain::UtcTimestamp::now();
     let output = resolve_output(&arguments, &source, global, streams);
 
-    if arguments.save {
-        return Err(failure_outcome(
-            output,
-            started_at,
-            usage_error(
-                ErrorCode::UnsupportedCombination,
-                "--save is unavailable: local history arrives in a later phase",
-            ),
-        ));
-    }
-
     let inputs = match resolve_inputs(source, streams, stdin_text) {
         Ok(inputs) => inputs,
         Err(error) => return Err(failure_outcome(output, started_at, error)),
@@ -216,6 +200,15 @@ pub(crate) fn plan(
         progress,
         inputs,
     })
+}
+
+impl DetectionPlan {
+    /// The resolved rendering/policy for this plan, handed to credential and
+    /// client construction so prepare failures surface through the exact
+    /// selected format and error surface.
+    pub(crate) fn resolved_output(&self) -> ResolvedOutput {
+        self.output
+    }
 }
 
 /// Runs a priced plan against the analyzer. By this point credentials and the
@@ -268,7 +261,7 @@ pub(crate) fn execute(
     match analyses {
         Ok(analyses) => success_outcome(output, started_at, analyses),
         Err(Flow::Failed(error)) => failure_outcome(output, started_at, error),
-        Err(Flow::Interrupted(note)) => interrupted_outcome(output, started_at, note),
+        Err(Flow::Interrupted(error, note)) => interrupted_outcome(output, started_at, error, note),
     }
 }
 
@@ -300,8 +293,13 @@ impl GlobalFlags {
 enum Flow {
     /// A canonical failure to surface and map to an exit code.
     Failed(CanonicalError),
-    /// Ctrl+C / SIGINT stopped local observation; identity is reported.
-    Interrupted(String),
+    /// Ctrl+C / SIGINT stopped the flow. The carried error is the honest
+    /// canonical outcome: a pre-issue local stop (`network_unavailable`) when
+    /// no billable send was issued, or `submission_outcome_unknown` when the
+    /// billable POST was already issued and the send became ambiguous (F3).
+    /// The process still exits 130 as locked; only the reported outcome
+    /// differs.
+    Interrupted(CanonicalError, String),
 }
 
 /// Runs one input end to end: request construction, submit, optional wait,
@@ -326,7 +324,18 @@ async fn analyze_one(
     let cancel = stop.token().child_token();
     let accepted = match analyzer.start(request, &cancel).await {
         Ok(accepted) => accepted,
-        Err(error) => return Err(Flow::Failed(error.into_error())),
+        Err(error) => {
+            let error = error.into_error();
+            // A SIGINT landing during submission still exits 130; the carried
+            // error is the honest canonical outcome the analysis module
+            // already classified (pre-issue local stop, or
+            // submission_outcome_unknown once the POST was issued).
+            if cancel.is_cancelled() {
+                let note = identity_note_for_error(&error);
+                return Err(Flow::Interrupted(error, note));
+            }
+            return Err(Flow::Failed(error));
+        }
     };
 
     match accepted {
@@ -341,8 +350,13 @@ async fn analyze_one(
                 return Ok(running.snapshot());
             }
 
-            let timeout = arguments.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT);
-            let wait = WaitOptions::with_timeout(timeout);
+            // No `--timeout` is the documented unbounded wait: the caller
+            // supplies no local ceiling and the observation runs until the
+            // task is terminal or locally cancelled.
+            let wait = arguments
+                .timeout
+                .map(WaitOptions::with_timeout)
+                .unwrap_or(WaitOptions::UNBOUNDED);
             let progress_sink = ProgressSink::new(progress, analysis_id);
             match running
                 .observe(wait, |event| progress_sink.on_progress(event), stop.clone())
@@ -350,11 +364,46 @@ async fn analyze_one(
             {
                 Ok(Ok(analysis)) => Ok(analysis),
                 Ok(Err(error)) => Err(Flow::Failed(error.into_error())),
-                Err(interrupted_analysis) => Err(Flow::Interrupted(identity_note(
-                    &interrupted_analysis.identity,
-                ))),
+                Err(interrupted_analysis) => Err(Flow::Interrupted(
+                    stopped_observation_error(),
+                    identity_note(&interrupted_analysis.identity),
+                )),
             }
         }
+    }
+}
+
+/// The canonical local-stop error for a wait-phase cancellation: the task
+/// was accepted (the billable send is concluded), but local observation was
+/// stopped without any remote cancellation, so the honest outcome is the
+/// network-unavailable local stop.
+fn stopped_observation_error() -> CanonicalError {
+    CanonicalError::new(
+        ErrorCode::NetworkUnavailable,
+        "observation was interrupted locally; no remote cancellation was sent",
+    )
+    .expect("static template")
+}
+
+/// The stderr identity note for a submission-phase interruption, derived from
+/// the canonical error's own reconciliation details (local analysis ID,
+/// request hash, last observed state) where present.
+fn identity_note_for_error(error: &CanonicalError) -> String {
+    match error.details() {
+        Some(crate::output::CanonicalErrorDetails::SubmissionOutcomeUnknown(details)) => {
+            let mut note = "interrupted; local analysis id ".to_owned();
+            note.push_str(&match details.operation_id() {
+                crate::domain::LocalOperationId::AnalysisId(id) => id.to_string(),
+                crate::domain::LocalOperationId::BulkId(id) => id.to_string(),
+            });
+            note.push_str(&format!("; request sha256 {}", details.request_sha256));
+            if let Some(task) = &details.upstream_task_id {
+                note.push_str(&format!("; upstream task id {task}"));
+            }
+            note.push_str(&format!("; last status {}", details.last_status.as_str()));
+            note
+        }
+        _ => "interrupted during submission; no remote action was completed".to_owned(),
     }
 }
 
@@ -431,29 +480,54 @@ fn resolve_progress(
     }
 }
 
+/// Parses one `--timeout` value against the locked grammar (contracts.md
+/// 14.2): a non-negative ASCII decimal count, optionally followed by exactly
+/// one ASCII unit suffix `s`, `ms`, `m`, or `h`; a missing suffix means
+/// seconds. No whitespace is allowed anywhere in the token (so there is no
+/// "space before the suffix" form). Exponent and non-finite forms, signed
+/// counts, zero (and any value truncating to zero), unknown suffixes, and
+/// out-of-range scaled values are all rejected.
 fn parse_duration(raw: &str) -> Option<std::time::Duration> {
-    let raw = raw.trim();
-    if raw.is_empty() {
+    if raw.is_empty() || !raw.is_ascii() || raw.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return None;
     }
-    let (number, multiplier) = if let Some(prefix) = raw.strip_suffix("ms") {
-        (prefix, 1_f64)
-    } else if let Some(prefix) = raw.strip_suffix('s') {
-        (prefix, 1_000_f64)
-    } else if let Some(prefix) = raw.strip_suffix('m') {
-        (prefix, 60_000_f64)
-    } else if let Some(prefix) = raw.strip_suffix('h') {
-        (prefix, 3_600_000_f64)
-    } else {
-        (raw, 1_000_f64)
+    // Split the strictly-numeric ASCII decimal count from an optional single
+    // unit suffix. Only ASCII digits and at most one `.` form the count.
+    let split_at = raw
+        .find(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .unwrap_or(raw.len());
+    let (number, suffix) = raw.split_at(split_at);
+    let multiplier_ms: u64 = match suffix {
+        "" | "s" => 1_000,
+        "ms" => 1,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        _ => return None,
     };
-    let value: f64 = number.trim().parse().ok()?;
-    if !(value.is_finite() && value >= 0.0) {
+    // The count is digits with at most one dot, no sign, no exponent.
+    let mut dots = 0_u8;
+    if number.is_empty()
+        || !number.bytes().all(|byte| {
+            if byte == b'.' {
+                dots += 1;
+                dots == 1
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+    {
         return None;
     }
-    Some(std::time::Duration::from_secs_f64(
-        value * multiplier / 1_000.0,
-    ))
+    let value: f64 = number.parse().ok()?;
+    if !(value.is_finite() && value > 0.0) {
+        return None;
+    }
+    // Compute the bounded whole-millisecond duration without overflow.
+    let millis = value * multiplier_ms as f64;
+    if !(millis.is_finite() && millis >= 1.0 && millis <= u64::MAX as f64) {
+        return None;
+    }
+    Some(std::time::Duration::from_millis(millis as u64))
 }
 
 /// Chooses color only when pretty output is selected for a TTY, color is not
@@ -511,6 +585,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn absent_timeout_is_the_unbounded_wait_not_a_hidden_ceiling() {
+        // F2: there is no hidden default wait timeout. The plan/option
+        // construction proves it without sleeping: a bare invocation and a
+        // `detect` invocation without `--timeout` both carry `timeout: None`,
+        // which `analyze_one` maps to `WaitOptions::UNBOUNDED`.
+        assert!(DetectArgs::for_bare().timeout.is_none());
+        let matches = crate::cli::runtime_command()
+            .try_get_matches_from(["pangram", "detect", "some words"])
+            .expect("parses");
+        let (_, sub) = matches.subcommand().expect("a subcommand was given");
+        let args = DetectArgs::from_matches(sub).expect("valid args");
+        assert!(args.timeout.is_none());
+        let wait = args
+            .timeout
+            .map(WaitOptions::with_timeout)
+            .unwrap_or(WaitOptions::UNBOUNDED);
+        assert_eq!(wait, WaitOptions::UNBOUNDED);
+        assert_eq!(wait.timeout, None);
+    }
+
+    #[test]
     fn duration_parsing_accepts_the_locked_grammar() {
         assert_eq!(
             parse_duration("30").unwrap(),
@@ -532,8 +627,55 @@ mod tests {
             parse_duration("0.5").unwrap(),
             std::time::Duration::from_millis(500)
         );
-        assert!(parse_duration("--3").is_none());
-        assert!(parse_duration("abc").is_none());
-        assert!(parse_duration("").is_none());
+        assert_eq!(
+            parse_duration("1.5h").unwrap(),
+            std::time::Duration::from_secs(5400)
+        );
+        // Bare fractional seconds and a leading-dot decimal are valid counts.
+        assert_eq!(
+            parse_duration(".5").unwrap(),
+            std::time::Duration::from_millis(500)
+        );
+    }
+
+    #[test]
+    fn duration_parsing_rejects_out_of_grammar_forms() {
+        // No whitespace anywhere in the token, including before the suffix.
+        for rejected in ["1 s", "1s ", " 1s", "1 ms", "1\ts", "1\ts", "1\u{00a0}s"] {
+            assert!(
+                parse_duration(rejected).is_none(),
+                "whitespace: {rejected:?}"
+            );
+        }
+        // Exponent and non-finite forms.
+        for rejected in [
+            "1e2", "1E2", "1e-1", "inf", "-inf", "nan", "NaN", "Infinity",
+        ] {
+            assert!(
+                parse_duration(rejected).is_none(),
+                "exponent/non-finite: {rejected:?}"
+            );
+        }
+        // Negative, empty, pure-suffix, and sign-prefixed counts.
+        for rejected in ["-1", "-1s", "+1", "--3", "s", "ms", "m", "h", "", "."] {
+            assert!(
+                parse_duration(rejected).is_none(),
+                "bad count: {rejected:?}"
+            );
+        }
+        // Zero (and any value truncating to zero) bounds no wait.
+        for rejected in ["0", "0s", "0ms", "0m", "0h", "0.0", "0.0001ms", ".0"] {
+            assert!(parse_duration(rejected).is_none(), "zero: {rejected:?}");
+        }
+        // Unknown or doubled suffixes.
+        for rejected in ["1d", "1w", "1ss", "1sms", "1mhz", "1mss"] {
+            assert!(
+                parse_duration(rejected).is_none(),
+                "bad suffix: {rejected:?}"
+            );
+        }
+        // Out-of-range: a count that scaled overflows the duration range.
+        assert!(parse_duration("1e30").is_none(), "exponent overflow");
+        assert!(parse_duration("999999999999999999999999h").is_none());
     }
 }

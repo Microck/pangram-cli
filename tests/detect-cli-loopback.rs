@@ -21,6 +21,34 @@ use tempfile::TempDir;
 
 use fixture::{ProtocolFixture, SYNTHETIC_KEY, Step, TASK_ID, pangram4_success};
 
+/// Sends SIGINT to a running child by PID. Signal-driven interruption is a
+/// POSIX-only behavior; the compiled-binary SIGINT coverage is cfg-gated to
+/// unix and skipped where raising a signal is not available.
+#[cfg(unix)]
+fn interrupt(child: &mut std::process::Child) {
+    let pid = nix_pid(child);
+    // SAFETY: `pid` is a live child of this process and `SIGINT` is a valid
+    // signal number; the call has no memory-safety surface.
+    let result = unsafe { libc_kill(pid, 2) };
+    assert_eq!(result, 0, "raise(SIGINT) on the child must succeed");
+}
+
+#[cfg(unix)]
+fn nix_pid(child: &std::process::Child) -> i32 {
+    i32::try_from(child.id()).expect("child PID fits i32")
+}
+
+#[cfg(unix)]
+unsafe fn libc_kill(pid: i32, signal: i32) -> i32 {
+    // Resolved through the C veneer so no extra crate enters the dev graph.
+    unsafe { kill(pid, signal) }
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
 /// Various lengths of the synthetic key that would prove a leak if printed.
 const KEY_FRAGMENT: &str = "synthetic_key_0000";
 
@@ -69,6 +97,36 @@ impl Isolated {
         }
         command
     }
+
+    fn command_without_key(&self) -> Command {
+        let mut command = pangram();
+        command.env_remove("PANGRAM_API_KEY");
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
+        command
+    }
+}
+
+/// Spawns `pangram` with piped stdin/stdout/stderr and writes `input` to
+/// stdin, returning the finished output. Used by bare-dispatch and
+/// interruption tests that drive a real pipe.
+fn spawn_with_stdin(mut command: Command, input: &[u8]) -> std::process::Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn pangram");
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(input) {
+        // A child that exits before reading closes its end of the pipe.
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "stdin: {error}"
+        );
+    }
+    child.wait_with_output().expect("await pangram")
 }
 
 fn stdout_envelope(output: &std::process::Output) -> Value {
@@ -283,8 +341,10 @@ async fn detect_repeated_files_default_to_jsonl_lines_in_order() {
     fixture.shutdown().await;
 }
 
-/// An upstream terminal failure yields a failed analysis (exit 1) with a
+/// An upstream terminal failure yields a failed analysis (exit 6) with a
 /// canonical upstream_analysis_failed check error and sanitized message.
+/// The exit derives from the check error's upstream category, locked in
+/// contracts.md section 12, not the general-failure default.
 #[tokio::test(flavor = "multi_thread")]
 async fn detect_upstream_failure_maps_to_failed_analysis_exit() {
     let fixture = ProtocolFixture::start().await;
@@ -301,12 +361,20 @@ async fn detect_upstream_failure_maps_to_failed_analysis_exit() {
         .output()
         .expect("run pangram detect");
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        output.status.code(),
+        Some(6),
+        "upstream analysis failure exits 6"
+    );
     let envelope = stdout_envelope(&output);
     assert_eq!(envelope["data"]["status"], "failed");
     assert_eq!(
         envelope["data"]["checks"][0]["error"]["code"],
         "upstream_analysis_failed"
+    );
+    assert_eq!(
+        envelope["data"]["checks"][0]["error"]["category"],
+        "upstream"
     );
     assert_no_leak(&output);
     fixture.shutdown().await;
@@ -331,4 +399,383 @@ async fn detect_rejected_key_maps_to_invalid_api_key_and_scrubs() {
     assert_eq!(envelope["error"]["code"], "invalid_api_key");
     assert_no_leak(&output);
     fixture.shutdown().await;
+}
+
+/// F1: a bare launch with piped stdin detects; it must not print help.
+#[tokio::test(flavor = "multi_thread")]
+async fn bare_piped_stdin_detects_instead_of_printing_help() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    let text = "Bare piped content analyzes through the implicit detect path";
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+
+    let isolated = Isolated::new();
+    let output = spawn_with_stdin(isolated.command(fixture.base_url()), text.as_bytes());
+
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], "detect");
+    assert_eq!(envelope["data"]["input"]["origin"], "stdin");
+    assert_eq!(envelope["data"]["status"], "succeeded");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("Usage:"),
+        "bare piped stdin must not print help: {stdout}"
+    );
+    assert_no_leak(&output);
+    assert_eq!(fixture.post_count(), 1);
+    fixture.shutdown().await;
+}
+
+/// F1: a bare launch over an empty pipe is the canonical input_required
+/// usage error (exit 2), not help and not a billable call.
+#[tokio::test(flavor = "multi_thread")]
+async fn bare_empty_pipe_is_input_required_without_billing() {
+    let fixture = ProtocolFixture::start().await;
+
+    let isolated = Isolated::new();
+    let output = spawn_with_stdin(isolated.command(fixture.base_url()), b"");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stderr, b"");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("Usage:"),
+        "empty pipe must not print help: {stdout}"
+    );
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "input_required");
+    assert_eq!(fixture.post_count(), 0, "no billable POST for empty input");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// F1: a bare launch over a whitespace-only pipe is input_required (exit 2).
+#[tokio::test(flavor = "multi_thread")]
+async fn bare_whitespace_pipe_is_input_required() {
+    let fixture = ProtocolFixture::start().await;
+
+    let isolated = Isolated::new();
+    let output = spawn_with_stdin(isolated.command(fixture.base_url()), b"   \n\t  ");
+
+    assert_eq!(output.status.code(), Some(2));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "input_required");
+    assert_eq!(fixture.post_count(), 0);
+    fixture.shutdown().await;
+}
+
+/// F2: when no --timeout is supplied there is no hidden local wait ceiling.
+/// The observation waits for the terminal poll with `WaitOptions::UNBOUNDED`;
+/// the loopback proves the long-running task still reaches success.
+#[tokio::test(flavor = "multi_thread")]
+async fn detect_without_timeout_waits_unbounded_for_terminal() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    let text = "A task that stays in progress across several observation cycles";
+    fixture.on_poll(Step::Json(
+        serde_json::json!({"stage": "STAGE_PREPROCESSING"}),
+    ));
+    fixture.on_poll(Step::Json(serde_json::json!({"stage": "STAGE_INFERENCE"})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["detect", text])
+        .output()
+        .expect("run pangram detect");
+
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["data"]["status"], "succeeded");
+    // Multiple in-progress polls were consumed, proving the wait was not cut
+    // by a local ceiling before the terminal response.
+    assert!(
+        fixture.get_count() >= 3,
+        "expected >=3 polls, got {}",
+        fixture.get_count()
+    );
+    fixture.shutdown().await;
+}
+
+/// F3: Ctrl+C during an in-flight billable POST reports the ambiguous
+/// acceptance (submission_outcome_unknown) and exits 130, never the false
+/// definite "no remote action" claim, and never replays the POST.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn sigint_during_in_flight_post_reports_ambiguous_acceptance() {
+    let fixture = ProtocolFixture::start().await;
+    // The submit POST hangs: it reaches the fixture and is recorded, but no
+    // acceptance response is ever produced.
+    fixture.on_submit(Step::Hang);
+
+    let isolated = Isolated::new();
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args(["detect", "text whose submission is interrupted mid-flight"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn pangram detect");
+
+    // Wait until the POST actually reaches the fixture so the send is
+    // unambiguously issued, then interrupt.
+    fixture.wait_for_posts(1).await;
+    interrupt(&mut child);
+    let output = child.wait_with_output().expect("await pangram");
+
+    assert_eq!(output.status.code(), Some(130), "interrupted by the user");
+    // Exactly one POST was issued and never replayed.
+    assert_eq!(
+        fixture.post_count(),
+        1,
+        "the ambiguous send is never replayed"
+    );
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "submission_outcome_unknown");
+    assert_eq!(envelope["error"]["retryable"], false);
+    assert_eq!(
+        envelope["error"]["recovery"]["message"],
+        "A manual retry may create a second billable operation."
+    );
+    // The reported identity carries the local analysis id and request hash.
+    assert!(envelope["error"]["details"]["analysis_id"].is_string());
+    assert!(envelope["error"]["details"]["request_sha256"].is_string());
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// F3: SIGINT after acceptance (during wait) still exits 130 with identity.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn sigint_during_wait_exits_130_with_identity() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(serde_json::json!({"stage": "STAGE_INFERENCE"})));
+    fixture.on_poll(Step::Hang);
+
+    let isolated = Isolated::new();
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args(["detect", "text that stays running until interrupted"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn pangram detect");
+
+    fixture.wait_for_posts(1).await;
+    fixture.wait_for_gets(1).await;
+    interrupt(&mut child);
+    let output = child.wait_with_output().expect("await pangram");
+
+    assert_eq!(output.status.code(), Some(130));
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("interrupted") || stderr.contains("local analysis id"),
+        "interruption reports identity: {stderr}"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// F4: explicit --format json with repeated files wraps the ordered series in
+/// one envelope with an ordered analysis array, and never bills then fails
+/// rendering.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_files_explicit_json_wraps_ordered_array() {
+    let fixture = ProtocolFixture::start().await;
+    let first_text = "First ordered file content for the array envelope";
+    let second_text = "Second ordered file content for the array envelope";
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-aaa"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-bbb"})));
+    fixture.on_poll(Step::Json(pangram4_success(second_text)));
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--format",
+            "json",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run detect --format json with two files");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "no post-billing render failure"
+    );
+    let envelope = stdout_envelope(&output);
+    assert!(envelope.get("error").is_none());
+    let data = &envelope["data"];
+    assert!(data.is_array(), "json data is the ordered analysis array");
+    let analyses = data.as_array().unwrap();
+    assert_eq!(analyses.len(), 2);
+    assert_eq!(analyses[0]["input"]["name"], "first.txt");
+    assert_eq!(analyses[1]["input"]["name"], "second.txt");
+    assert_eq!(analyses[0]["status"], "succeeded");
+    assert_eq!(analyses[1]["status"], "succeeded");
+    assert_eq!(fixture.post_count(), 2, "both files were analyzed");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// F4: explicit --format toon with repeated files renders the ordered series
+/// through the single-document TOON projection without a billing/render split.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_files_explicit_toon_wraps_ordered_series() {
+    let fixture = ProtocolFixture::start().await;
+    let first_text = "First toon projected file content here";
+    let second_text = "Second toon projected file content here";
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-aaa"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-bbb"})));
+    fixture.on_poll(Step::Json(pangram4_success(second_text)));
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--format",
+            "toon",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run detect --format toon with two files");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "toon must render the ordered series"
+    );
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(!stdout.trim().is_empty(), "toon output is non-empty");
+    // TOON is a projection of one envelope; the series travels as data.
+    assert!(stdout.contains("data"), "{stdout}");
+    assert_eq!(fixture.post_count(), 2);
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// F4: explicit --format pretty with repeated files renders the human
+/// projection of the whole ordered series without a billing/render split.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_files_explicit_pretty_renders_series() {
+    let fixture = ProtocolFixture::start().await;
+    let first_text = "First pretty projected file content here";
+    let second_text = "Second pretty projected file content here";
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-aaa"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-bbb"})));
+    fixture.on_poll(Step::Json(pangram4_success(second_text)));
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--format",
+            "pretty",
+            "--no-color",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run detect --format pretty with two files");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "pretty must render the ordered series"
+    );
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("Analyses"),
+        "pretty lists the ordered series: {stdout}"
+    );
+    assert_eq!(fixture.post_count(), 2);
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// F6: explicit --format pretty with no configured key emits a sanitized text
+/// message on stderr, empty stdout, exit 4.
+#[tokio::test(flavor = "multi_thread")]
+async fn pretty_format_missing_key_emits_text_error_exit_4() {
+    let isolated = Isolated::new();
+    let output = isolated
+        .command_without_key()
+        .args(["detect", "--format", "pretty", "--no-color", "some text"])
+        .output()
+        .expect("run detect --format pretty without a key");
+
+    assert_eq!(output.status.code(), Some(4));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout stays empty for a text error"
+    );
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("error:"),
+        "stderr carries the text error: {stderr}"
+    );
+    assert_no_leak(&output);
+}
+
+/// F6: --error-format json overrides the pretty default back to a stdout JSON
+/// envelope even when --format pretty is selected.
+#[tokio::test(flavor = "multi_thread")]
+async fn pretty_format_with_json_error_override_emits_json_envelope() {
+    let isolated = Isolated::new();
+    let output = isolated
+        .command_without_key()
+        .args([
+            "detect",
+            "--format",
+            "pretty",
+            "--no-color",
+            "--error-format",
+            "json",
+            "some text",
+        ])
+        .output()
+        .expect("run detect --format pretty --error-format json without a key");
+
+    assert_eq!(output.status.code(), Some(4));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "missing_api_key");
+    assert_no_leak(&output);
 }

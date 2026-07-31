@@ -132,6 +132,14 @@ JSON envelope commands and their `data` roots are closed:
 | Commands | `data` root |
 | --- | --- |
 | `detect`, `plagiarism`, `analyze` | one analysis, or an ordered analysis array for repeated files |
+
+For every repeated-file run the analyses are one canonical ordered series.
+Single-document success formats (JSON, TOON, Markdown, and pretty) place the
+whole series inside one success envelope whose `data` is the ordered analysis
+array, so an explicit non-JSONL format never performs billable work and then
+fails to render. JSONL is the only repeated-file streaming projection: it
+emits one ordered success envelope per analyzed file, one per line. The
+ordered-series rule is stable for schema major `"1"` (section 1).
 | `task_status`, `task_wait`, `history_show`, `history_rerun` | one analysis |
 | `bulk_submit`, `bulk_status`, `bulk_wait` | one bulk collection |
 | `bulk_results` | one ordered bulk-item page |
@@ -415,7 +423,7 @@ user confirmation.
 ```json
 {
   "provider": "pangram",
-  "upstream_version": "4",
+  "upstream_version": "4.0",
   "upstream_task_ids": ["task-123"],
   "upstream_bulk_id": "blk-123",
   "submitted_at": "2026-07-23T12:00:00Z",
@@ -657,12 +665,42 @@ hints from delaying interruption indefinitely.
 
 An accepted detached or bulk submission exits 0.
 
+A failure exit derives from the canonical error object's category everywhere
+it surfaces: as a top-level command failure envelope, and as the terminal
+check `error` carried inside a canonical failed analysis. The category-to-exit
+mapping is identical in both positions. In particular:
+
+- an upstream terminal task failure (`STAGE_FAILED`) is an upstream analysis
+  failure: the check carries `upstream_analysis_failed` (category `upstream`),
+  and the command exits 6 (network or upstream failure), never general exit 1
+- a failed analysis whose check error is a local usage or authentication
+  failure exits per that error's category instead
+- process interruption stays exit 130 per section 19
+
+### 12.1 Cancellation and the billable-submission boundary
+
+Local cancellation before the billable submit request is issued completes no
+remote action and reports exactly that (a local stop; with history disabled the
+process exits per the mapping above). Once the submit request is issued, the
+send is ambiguous: the body may have reached Pangram. Cancellation or any
+failure after issue therefore reports the canonical `submission_outcome_unknown`
+acceptance (section 4.5) with the local analysis ID, the request SHA-256, any
+known upstream IDs, the last observed state, and the fixed reconciliation
+recovery. An ambiguous billable send is never replayed, and the process must
+not claim either certain delivery or certain non-delivery.
+
+Signal-driven interruption of the CLI (Ctrl+C/SIGINT) still exits 130 as
+locked; the distinction above governs the identity reported alongside that
+exit and the canonical outcome recorded in the final output.
+
 ## 13. Output projections
 
 ### JSON
 
 One canonical envelope. For repeated files, explicit `--format json` returns an
-ordered array inside `data`.
+ordered array inside `data`. The same one-envelope ordered-series rule applies
+to every other single-document format (TOON, Markdown, pretty); only JSONL
+streams one envelope per analyzed file.
 
 ### JSONL
 
@@ -708,9 +746,17 @@ Resolution:
   subcommand and does not begin with `-` is literal text, including tokens
   that spell planned (not yet compiled) command names; those are analyzed as
   text. Only a hyphen-leading unknown remains a Clap usage error.
-- no command, non-TTY stdin with content: detect
-- no command, empty stdin or any redirected terminal stream: `input_required`
+- no command, non-TTY stdin (a pipe or redirection) with content: detect, and
+  the resolved `command` is `detect`
+- no command, non-TTY stdin that decodes to no detectable text (an empty or
+  whitespace-only pipe): the canonical `input_required` usage error (exit 2),
+  never the help surface
+- no command, a TTY stdin, and any other redirected stream: `input_required`
 - literal `-`: stdin
+
+Bare dispatch evaluates the source before any help or usage surface: a bare
+piped stdin never prints help, and only the all-TTY bare launch uses the
+pre-TUI successful-help fallback.
 
 Source-category and content rules:
 
@@ -732,6 +778,12 @@ Defaults:
 - noninteractive commands default to JSON success and JSON errors
 - an explicitly selected pretty format defaults to text errors
 - `--error-format` overrides those defaults
+- the resolved error surface applies to every failure of the invocation,
+  including failures raised before billable work (plan validation,
+  credential resolution, and client construction): an explicit
+  `--format pretty` surfaces a sanitized text message on stderr with empty
+  stdout and the category-derived exit, unless `--error-format json`
+  overrides it back to a stdout JSON envelope
 - `--progress auto` emits human progress only when stderr is a TTY and the
   selected output is pretty; otherwise it emits no progress
 - JSONL progress requires explicit `--progress jsonl`
@@ -755,6 +807,12 @@ Common applicable flags:
 --progress auto|never|jsonl
 --max-billable-units N
 ```
+
+`--save` is a later-phase flag: local history arrives in Phase 4. It remains in
+the normative grammar so the Phase 4 surface is fixed now, but until history is
+compiled the flag is not advertised in runtime help or the generated reference,
+and passing it is rejected as an unknown-argument usage error (exit 2) before
+any billable work. It must not be presented as an available Phase 2 capability.
 
 Rules:
 
@@ -780,7 +838,12 @@ Wait and completion:
 
 - `--timeout DURATION` accepts a non-negative decimal count of seconds (`30`,
   `0.5`), optionally followed by exactly one ASCII unit suffix `s`, `ms`,
-  `m`, or `h` (`500ms`, `2m`, `1h`). A missing unit means seconds.
+  `m`, or `h` (`500ms`, `2m`, `1h`). A missing unit means seconds. The grammar
+  is exact: no whitespace is allowed between the count and the suffix, an
+  exponent or non-finite form (`1e2`, `inf`, `nan`) is rejected, the count
+  must not be negative, and a count of `0` (or any value that truncates to
+  zero) is rejected as a usage error because it would not bound any wait. The
+  scaled value must fit the supported duration range.
 - when `--timeout` is not supplied, `detect` waits for the analysis to reach a
   terminal state without a local wait deadline; there is no hidden wait
   ceiling. A caller bounds an observation only by passing `--timeout`.

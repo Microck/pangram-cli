@@ -289,7 +289,18 @@ impl<C: Clock> UpstreamClient<C> {
             .await;
         match outcome {
             SendOutcome::Responded(response) => classify_submit(response),
-            SendOutcome::Cancelled => Err(SubmitOutcome::Cancelled),
+            // Cancellation before the send is issued completes no remote
+            // action (pre-issue, F3). Cancellation after the request is issued
+            // is ambiguous: the body may have reached Pangram, so the outcome
+            // must be `Ambiguous` (submission_outcome_unknown), never a
+            // definite no-remote-action claim, and never replayed.
+            SendOutcome::Cancelled { issued } => {
+                if issued {
+                    Err(SubmitOutcome::Ambiguous(AnalysisError::Cancelled))
+                } else {
+                    Err(SubmitOutcome::Cancelled)
+                }
+            }
             SendOutcome::Failed {
                 delivered_may_have_occurred,
                 error,
@@ -341,7 +352,7 @@ impl<C: Clock> UpstreamClient<C> {
             let outcome = self.http.get(&url, &self.api_key, cancel).await;
             let response = match outcome {
                 SendOutcome::Responded(response) => response,
-                SendOutcome::Cancelled => return Err(PollError::Cancelled),
+                SendOutcome::Cancelled { .. } => return Err(PollError::Cancelled),
                 SendOutcome::Failed { error, .. } => {
                     // Safe GET: transient transport classes may retry.
                     let retryable = matches!(&error, AnalysisError::Transport(_));

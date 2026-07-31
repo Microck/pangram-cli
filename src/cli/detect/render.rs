@@ -80,49 +80,94 @@ pub(super) fn success_outcome(
                     }
                 })
                 .as_u8();
-            let envelopes: Vec<_> = analyses
-                .into_iter()
-                .map(|analysis| {
-                    CommandEnvelope::success(
-                        CommandData::Detect(AnalysisOutput::one(analysis)),
-                        meta.clone(),
+            // The ordered-series rule (contracts.md 3.1): JSONL streams one
+            // ordered envelope per analyzed file; every single-document format
+            // (JSON, TOON, Markdown, pretty) wraps the whole series in one
+            // success envelope whose `data` is the ordered analysis array, so
+            // an explicit format never performs billable work and then fails
+            // rendering.
+            match output.format {
+                crate::output::OutputFormat::Jsonl => {
+                    let envelopes: Vec<_> = analyses
+                        .into_iter()
+                        .map(|analysis| {
+                            CommandEnvelope::success(
+                                CommandData::Detect(AnalysisOutput::one(analysis)),
+                                meta.clone(),
+                            )
+                        })
+                        .collect();
+                    emit_primary(&envelopes, output, exit_code, started_at)
+                }
+                _ => {
+                    let data = match AnalysisOutput::from_analyses(analyses) {
+                        Ok(data) => data,
+                        Err(_) => {
+                            return internal_outcome(output, started_at);
+                        }
+                    };
+                    let envelope = CommandEnvelope::success(CommandData::Detect(data), meta);
+                    emit_primary(
+                        std::slice::from_ref(&envelope),
+                        output,
+                        exit_code,
+                        started_at,
                     )
-                })
-                .collect();
-            emit_primary(&envelopes, output, exit_code, started_at)
+                }
+            }
         }
     }
 }
 
-/// The process exit for a success envelope derives from its analysis status:
-/// a partial result exits 3; a failed analysis still produced output exits
-/// per its status; otherwise 0. An accepted (`--detach`) run stays 0.
+/// The process exit for a success envelope derives from its canonical
+/// content exactly as the contract maps it (contracts.md 12): a partial
+/// result exits 3; a failed analysis exits per its terminal check error's
+/// category (an upstream `STAGE_FAILED` is `upstream_analysis_failed`, exit
+/// 6); an accepted (`--detach`) run stays 0.
 fn output_exit_code(envelope: &CommandEnvelope) -> ExitCode {
     match envelope.data() {
-        Some(CommandData::Detect(AnalysisOutput::One(analysis))) => {
-            ExitCode::for_status(analysis.status())
-        }
+        Some(CommandData::Detect(AnalysisOutput::One(analysis))) => analysis_exit_code(analysis),
         Some(CommandData::Detect(AnalysisOutput::Many(analyses))) => {
-            // Any partial or failed member surfaces the partial exit so a
+            // Any partial member surfaces the partial exit; otherwise any
+            // failed member surfaces its own category-derived exit, so a
             // repeated file run never silently claims full success.
-            let partial = analyses
-                .as_slice()
-                .iter()
-                .map(|analysis| analysis.status())
-                .any(|status| {
-                    matches!(
-                        status,
-                        crate::domain::AnalysisStatus::Partial
-                            | crate::domain::AnalysisStatus::Failed
-                    )
-                });
-            if partial {
-                ExitCode::Partial
-            } else {
-                ExitCode::Success
+            let mut exit = ExitCode::Success;
+            for analysis in analyses.as_slice() {
+                match analysis.status() {
+                    crate::domain::AnalysisStatus::Partial => return ExitCode::Partial,
+                    crate::domain::AnalysisStatus::Failed => {
+                        exit = analysis_exit_code(analysis);
+                    }
+                    _ => {}
+                }
             }
+            exit
         }
         _ => ExitCode::Success,
+    }
+}
+
+/// One analysis: a terminal failure exits per its check error's category
+/// (locked for the upstream `STAGE_FAILED` case at exit 6); every other
+/// status exits 0.
+fn analysis_exit_code(analysis: &crate::domain::Analysis<CanonicalError>) -> ExitCode {
+    match analysis.status() {
+        crate::domain::AnalysisStatus::Failed => analysis
+            .checks()
+            .iter()
+            .find_map(|check| match check {
+                crate::domain::Check::AiDetection(crate::domain::CheckState::Failed {
+                    error,
+                    ..
+                })
+                | crate::domain::Check::Plagiarism(crate::domain::CheckState::Failed {
+                    error,
+                    ..
+                }) => Some(ExitCode::for_error(error.category())),
+                _ => None,
+            })
+            .unwrap_or(ExitCode::GeneralFailure),
+        status => ExitCode::for_status(status),
     }
 }
 
@@ -153,7 +198,7 @@ pub(crate) fn early_failure(
     failure_outcome(output, started_at, error)
 }
 
-pub(super) fn failure_outcome(
+pub(crate) fn failure_outcome(
     output: ResolvedOutput,
     started_at: crate::domain::UtcTimestamp,
     error: CanonicalError,
@@ -186,14 +231,10 @@ pub(super) fn failure_outcome(
 pub(super) fn interrupted_outcome(
     output: ResolvedOutput,
     started_at: crate::domain::UtcTimestamp,
+    error: CanonicalError,
     note: String,
 ) -> DetectOutcome {
     note_stderr_raw(&note);
-    let error = CanonicalError::new(
-        ErrorCode::NetworkUnavailable,
-        "observation was interrupted locally; no remote cancellation was sent",
-    )
-    .expect("static template");
     let envelope = CommandEnvelope::failure(
         ResolvedCommand::Detect,
         error,

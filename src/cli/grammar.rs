@@ -296,7 +296,10 @@ const DETECT_ARGUMENTS: &[ArgumentSpec] = &[
     flag("--detach", Phase::TextDetection).available(),
     option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::TextDetection).available(),
     flag("--include-input", Phase::TextDetection).available(),
-    flag("--save", Phase::History).available(),
+    // `--save` stays in the normative grammar (Phase 4 history) but is not an
+    // available Phase 2 capability: the compiled runtime does not advertise it
+    // and rejects it before any billable work.
+    flag("--save", Phase::History),
     flag("--public-link", Phase::TextDetection).available(),
     option("--timeout", "DURATION", &[], false, false, Phase::TextDetection).available(),
     option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::TextDetection).available(),

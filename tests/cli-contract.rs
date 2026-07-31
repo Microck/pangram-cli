@@ -2,9 +2,63 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use microck_pangram_cli::cli::{ArgumentSpec, Availability, CommandSpec, FULL_GRAMMAR};
 use serde_json::Value;
+
+/// One hermetic filesystem root shared by every compiled-binary spawn in
+/// this file. Credential, config, data, and home state live under it so no
+/// subprocess can see a stored key, a host credential helper, or a real
+/// config. It is built once and kept alive for the whole test process.
+struct HermeticRoot {
+    _root: tempfile::TempDir,
+}
+
+fn hermetic_env(root: &tempfile::TempDir) -> Vec<(String, String)> {
+    let home = root.path().join("home");
+    let xdg_config = root.path().join("xdg-config");
+    let xdg_data = root.path().join("xdg-data");
+    let config = root.path().join("pangram.toml");
+    let data = root.path().join("data");
+    for directory in [&home, &xdg_config, &xdg_data, &data] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    [
+        ("HOME", home.to_str().unwrap()),
+        ("XDG_CONFIG_HOME", xdg_config.to_str().unwrap()),
+        ("XDG_DATA_HOME", xdg_data.to_str().unwrap()),
+        ("PANGRAM_CONFIG", config.to_str().unwrap()),
+        ("PANGRAM_DATA_DIR", data.to_str().unwrap()),
+        ("CI", "true"),
+        ("TERM", "dumb"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect()
+}
+
+fn hermetic_root() -> &'static HermeticRoot {
+    static ROOT: OnceLock<HermeticRoot> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = tempfile::tempdir().unwrap();
+        HermeticRoot { _root: root }
+    })
+}
+
+fn pangram() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pangram"));
+    // Hermetic by default: remove any inherited credential override and root
+    // all config/data/home state in a private temporary directory so no
+    // stored credential or production billing path is reachable. A test that
+    // needs a key sets it deliberately on the child it spawns.
+    command.env_remove("PANGRAM_API_KEY");
+    let root = hermetic_root();
+    for (key, value) in hermetic_env(&root._root) {
+        command.env(key, value);
+    }
+    command
+}
 
 const HELP: &str = "\
 Unofficial Pangram terminal client
@@ -95,10 +149,6 @@ const FORBIDDEN_NETWORK_ENDPOINTS: &[&str] = &[
     "github.com/Microck/pangram-cli/releases/latest/download",
 ];
 
-fn pangram() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_pangram"))
-}
-
 fn command(path: &[&str]) -> &'static CommandSpec {
     FULL_GRAMMAR
         .commands
@@ -172,6 +222,21 @@ fn help_lists_only_implemented_command_entries() {
     assert!(output.stderr.is_empty());
 }
 
+/// F5: every compiled-binary spawn in this file is credential/environment
+/// hermetic. The shared `pangram()` builder removes any inherited
+/// `PANGRAM_API_KEY` and roots config, data, and home state in a private
+/// temporary directory, so no stored credential or host environment can
+/// reach a production billing path. A bare `auth status` must report no
+/// configured credential rather than any stored key.
+#[test]
+fn spawns_are_credential_and_environment_hermetic() {
+    let output = pangram().arg("auth").arg("status").output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["data"]["configured"], false);
+    assert_eq!(body["data"]["source"], "none");
+}
+
 #[test]
 fn short_help_matches_the_exact_help_contract() {
     let output = pangram().arg("-h").output().unwrap();
@@ -182,12 +247,21 @@ fn short_help_matches_the_exact_help_contract() {
 }
 
 #[test]
-fn bare_invocation_prints_help_successfully() {
+fn bare_invocation_with_an_empty_stdin_is_input_required_not_help() {
+    // A compiled-binary spawn gets a non-TTY (null) stdin: bare dispatch
+    // evaluates the source before any help surface, so an empty stdin is the
+    // canonical input_required usage error (exit 2), never help text. The
+    // all-TTY help fallback cannot be exercised without a real terminal; the
+    // PTY harness owns that path.
     let output = pangram().output().unwrap();
 
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), HELP);
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("Usage:"), "not help:\n{stdout}");
+    let body: Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(body["command"], "detect");
+    assert_eq!(body["error"]["code"], "input_required");
 }
 
 #[test]
@@ -245,6 +319,22 @@ fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
             "{command} must not appear in the help Commands listing"
         );
     }
+}
+
+/// N4: `--save` stays in the normative grammar (Phase 4 history) but is not
+/// an available Phase 2 capability: the generated reference marks it planned,
+/// and the compiled runtime rejects it before any billable work.
+#[test]
+fn save_is_planned_in_the_reference_and_rejected_at_runtime() {
+    let save = argument(command(&["detect"]), "--save");
+    assert_eq!(save.availability, Availability::Planned);
+
+    let output = pangram()
+        .args(["detect", "--save", "some text"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
