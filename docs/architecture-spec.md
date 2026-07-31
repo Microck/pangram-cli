@@ -235,7 +235,8 @@ combined analysis without separate orchestration methods.
 
 The request does not carry a user-selectable Pangram model. The production
 analyzer is fixed to Pangram 4 and must serialize Pangram's documented model
-selector. It must not depend on the temporary Pangram 3 default or retain a
+selector, JSON request field `model` with the exact value `pangram-4`. It
+must not omit `model`, depend on the temporary Pangram 3 default, or retain a
 second model path.
 
 `BulkRequest` carries validated ordered items and the mandatory billable-unit
@@ -311,12 +312,15 @@ All requests use `x-api-key`.
 Production configuration cannot override these values. Test-only constructors
 accept loopback endpoint sets.
 
-Pangram's Pangram 4 launch did not publish the exact request selector and the
-current REST reference still describes Pangram 3-era request and bulk billing
-contracts. Production text and bulk submission remain unimplemented until the
-Pangram 4 fields are documented and represented in exact loopback request
-fixtures. Do not infer the selector from dashboard traffic or rely on default
-routing.
+The Pangram SDK v1.0.0 tag documents the exact text request selector (`model`
+set to `pangram-4`) even though the rendered public REST reference still
+describes the Pangram 3-era request. Production text submission sends that
+explicit selector and never relies on default routing; do not infer the
+selector from dashboard traffic. Bulk submission remains unimplemented
+because Pangram 4 bulk selection, billable-unit calculation, and the request
+ceiling remain undocumented; do not reuse the Pangram 3-era bulk unit or
+maximum. Both paths must be represented in exact loopback request fixtures
+before their adapters use them.
 
 ### 8.2 Reqwest configuration
 

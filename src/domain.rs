@@ -510,6 +510,29 @@ pub fn derive_parent_status(statuses: &[CheckStatus]) -> Result<AnalysisStatus, 
     Ok(AnalysisStatus::Partial)
 }
 
+/// Pangram 4 bills text detection in started 100-word units.
+pub const TEXT_BILLING_UNIT_WORDS: u64 = 100;
+
+/// Returns the Pangram 4 text billable units for a word count: one unit per
+/// started 100-word block, with a minimum of one even for empty input.
+///
+/// The saturating ceiling division cannot overflow: `word_count` plus the
+/// 99-word offset reaches `u64::MAX` without wrapping, and the minimum unit
+/// keeps the result at one when the quotient is zero. The analysis module
+/// uses this for single-text preflight and `--max-billable-units`
+/// validation; bulk billing follows Pangram's still-undocumented Pangram 4
+/// bulk rule and MUST NOT reuse this per-text formula.
+#[must_use]
+pub const fn text_billable_units(word_count: u64) -> u64 {
+    let started_blocks =
+        word_count.saturating_add(TEXT_BILLING_UNIT_WORDS - 1) / TEXT_BILLING_UNIT_WORDS;
+    if started_blocks == 0 {
+        1
+    } else {
+        started_blocks
+    }
+}
+
 /// Supplies the discriminator used by [`OrderedChecks`].
 pub trait OrderedCheck {
     fn check_kind(&self) -> CheckKind;

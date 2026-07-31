@@ -146,7 +146,9 @@ CLI before expanding breadth.
 
 Entry gate: Pangram must document the Pangram 4 request selector. The exact
 field and selected upstream version must be captured in the evidence ledger
-before protocol implementation starts.
+before protocol implementation starts. Resolved 2026-07-31: the Pangram SDK
+v1.0.0 tag documents the selector (`model` set to `pangram-4`); see the
+evidence ledger.
 
 ### Files
 

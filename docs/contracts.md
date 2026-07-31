@@ -738,9 +738,10 @@ Rules:
   a minimum of one
 
 Pangram 4 is the only production text model. The CLI has no model-selection
-flag. The analysis module MUST send Pangram's documented Pangram 4 selector
-and MUST NOT rely on the temporary Pangram 3 default. Submission remains
-blocked until Pangram publishes that field.
+flag. The analysis module MUST send Pangram's documented Pangram 4 selector,
+JSON request field `model` with the exact value `pangram-4`, and MUST NOT
+omit `model` or otherwise rely on the temporary Pangram 3 default routing
+that Pangram retires on 2026-09-30.
 
 There is no image-detection command, schema, or MCP tool. Invitation-only
 preview access does not qualify as a public documented API contract.

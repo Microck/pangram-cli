@@ -137,9 +137,9 @@ shapes MUST fail with `upstream_contract_changed`.
 
 Pangram 4 is the only production text model. The product does not expose model
 selection and does not retain a Pangram 3 compatibility path. Requests MUST
-include Pangram's documented Pangram 4 selector rather than relying on
-temporary default routing. Text submission remains blocked until Pangram
-publishes that request field.
+include Pangram's documented Pangram 4 selector, JSON request field `model`
+set to `pangram-4`, rather than omitting `model` or relying on temporary
+default routing that Pangram retires on 2026-09-30.
 
 Pangram 4 is intended for long-form natural-language writing of at least 50
 words. The product documents that limitation and may warn for shorter input,
@@ -567,11 +567,12 @@ Pangram's documented research snapshot states:
 - Pangram 4 text API price: USD 0.05 per started 100 words
 - each valid Pangram 4 text request costs at least one unit
 
-Pangram's Pangram 4 launch does not publish the exact model-selection request
-field, an updated bulk billing rule, or confirmation that the earlier
-1,000-unit bulk maximum remains valid. The product MUST NOT reuse the Pangram 3
-default or old bulk estimator as a fallback. Text and bulk submission remain
-blocked until their current request and billing contracts are documented.
+The Pangram SDK v1.0.0 tag documents the exact text model-selection request
+field (`model` set to `pangram-4`). Pangram 4 bulk billing and the earlier
+1,000-unit bulk maximum remain undocumented. The product MUST NOT reuse the
+Pangram 3 default or old bulk estimator as a fallback. Text submission sends
+the explicit selector; bulk submission remains blocked until its current
+request and billing contract is documented.
 
 Pricing is documentation, not a hard-coded monetary promise. The product
 estimates word counts and units but MUST NOT report an exact charged amount
@@ -644,7 +645,7 @@ The complete MCP tool contract is in [mcp-contract.md](mcp-contract.md).
 
 | Pangram capability | Product status |
 | --- | --- |
-| Single text AI detection | Blocked pending the documented Pangram 4 request selector |
+| Single text AI detection | Blocked pending Phase 2 implementation against the documented Pangram 4 text selector |
 | AI-assistance fractions, segments, and humanizer evidence | Blocked pending Pangram 4 REST conformance |
 | Multilingual model behavior | Blocked pending Pangram 4 REST conformance |
 | Text public dashboard link | Blocked with text submission, then opt-in |
@@ -697,7 +698,8 @@ Public v1 requires:
 
 1. written Pangram confirmation that a third-party CLI and MCP server may use
    the documented APIs and the fox logo in terminal artwork
-2. a documented Pangram 4 request selector and current bulk billing contract
+2. a documented Pangram 4 text request selector (resolved: `model` set to
+   `pangram-4`) and current bulk billing contract
 3. live authorized Pangram 4 text, bulk, and file-response conformance
 4. live authorized plagiarism-response conformance
 5. passing CLI, TUI, MCP, storage, update, and release contracts
@@ -742,8 +744,7 @@ reviews only final product quality.
 The following are external release blockers rather than unresolved design:
 
 - Pangram distribution permission
-- documented Pangram 4 request selection
-- documented Pangram 4 bulk billing and request limit
+- documented Pangram 4 bulk selection, billing, and request limit
 - Pangram 4 text and bulk response conformance
 - file response conformance
 - plagiarism response conformance
