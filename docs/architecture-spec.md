@@ -839,14 +839,23 @@ enters Phase 6. Its dependency-compatible Rust version becomes the package
 `rust-version` in that phase. The 2026-07-28-capable RMCP 3 prerelease requires
 Rust 1.88, but a prerelease is evidence, not an approved dependency pin.
 
+Phase 2 applies the same dependency-driven `rust-version` rule to the locked v1
+TOON projection. `toon-format 0.5.0` requires Rust 1.87: its decode parser uses
+`unsigned_is_multiple_of` (stabilized in Rust 1.87.0) and fails to compile on
+Rust 1.85 with `E0658`. Because TOON is part of the locked projection contract
+and the lowest selected direct-dependency-compatible toolchain becomes the
+package `rust-version`, Phase 2 raises `rust-version` from 1.85 to 1.87 (not to
+the RMCP 1.88 prerelease floor, which is not yet a selected dependency).
+
 Later tests add real Axum loopback servers, snapshots, PTYs, and the pinned
 Terminal Control harness when the corresponding behavior exists. Exact
 research snapshots live in [evidence-ledger.md](evidence-ledger.md), not in
 this normative architecture.
 
 The workspace pins current stable Rust for development and records the lowest
-dependency-compatible Rust 2024 toolchain as `rust-version`. Phase 0 MUST prove
-both toolchains before the manifest is accepted. Direct dependency upgrades are
+dependency-compatible Rust 2024 toolchain as `rust-version`. Each phase MUST
+prove both the current stable toolchain and the pinned `rust-version`
+toolchain before its manifest is accepted. Direct dependency upgrades are
 intentional changes.
 
 ## 18. Documentation workspace baseline

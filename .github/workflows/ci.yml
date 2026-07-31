@@ -23,7 +23,7 @@ jobs:
             manifest: rust-toolchain.toml
             table: toolchain
             key: channel
-          - toolchain: "1.85.0"
+          - toolchain: "1.87.0"
             manifest: Cargo.toml
             table: package
             key: rust-version

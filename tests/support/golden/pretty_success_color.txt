@@ -1,0 +1,36 @@
+[1mPangram[0m
+  [2mschema_version[0m: 1
+  [2mcommand[0m: detect
+  [2mstarted_at[0m: 2026-07-23T12:00:00Z
+
+[1mAnalysis[0m
+  [2mid[0m: anl_01983c20-0180-7a80-a001-000000000001
+  [2mstatus[0m: [32msucceeded[0m
+  [2msubmission_outcome[0m: terminal
+  [2minput[0m: text (stdin) 4 words
+  [2msave_state[0m: ephemeral
+  [2mcreated_at[0m: 2026-07-23T12:00:00Z
+  [2mupdated_at[0m: 2026-07-23T12:00:01Z
+  [2mcompleted_at[0m: 2026-07-23T12:00:01Z
+
+[1mChecks[0m
+  [2mkind[0m: ai_detection
+  [2mstatus[0m: [32msucceeded[0m
+  [2mupstream_task_id[0m: task-123
+  [2mupstream_stage[0m: STAGE_SUCCESS
+  [2mheadline[0m: Human-written
+  [2mprediction[0m: The document appears to be human-written.
+  [2mclassification[0m: [32mhuman[0m
+  [2mfraction_ai[0m: 0
+  [2mfraction_ai_assisted[0m: 0
+  [2mfraction_human[0m: 1
+  [2msegments[0m: 1
+- The text to analyze
+  [2mlabel[0m: Human Written
+  [2mconfidence[0m: [36mhigh[0m
+  [2mai_assistance_score[0m: 0
+  [2mhumanizer_score[0m: 0
+  [2mis_humanized[0m: false
+  [2mrange[0m: 0..19
+  [2mword_count[0m: 4
+  [2mtoken_length[0m: 4

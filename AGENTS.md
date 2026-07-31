@@ -60,6 +60,29 @@ lines requires a written architectural reason.
 
 Do not weaken a contract or test to accommodate an implementation shortcut.
 
+## Remote Cargo validation
+
+- Broad Cargo validation may run on the Yoga Windows host through its WSL2 Linux
+  environment when local disk space is constrained.
+- Use the repo-local `.crabbox.yaml` jobs `yoga-linux-smoke`,
+  `yoga-linux-msrv`, and `yoga-linux-gate`; do not run an equivalent broad
+  local build below the documented disk threshold.
+- The remote sync excludes `.git`, `.jj`, `.cache`, `.crabbox`, `target`, and
+  `tmp`. Remote builds use `/work/cargo-target/pangram-cli` and the shared
+  `/work/sccache` cache, so local `target/` contents are not required.
+- The Yoga gate runs `cargo fmt --check`, locked all-feature tests, and strict
+  all-target Clippy. The Yoga MSRV job runs the locked all-feature build and
+  test under Rust 1.87.0. GitHub Actions remains responsible for the native
+  Windows ACL, supply-chain, and generated-contract checks.
+
+Example:
+
+```bash
+crabbox job run yoga-linux-smoke
+crabbox job run yoga-linux-msrv
+crabbox job run yoga-linux-gate
+```
+
 ## Privacy and credentials
 
 - Never log API keys, auth headers, submitted content, segments, or plagiarism

@@ -1,0 +1,76 @@
+profile: yoga-linux
+provider: ssh
+target: windows
+windows:
+  mode: wsl2
+
+static:
+  user: microck
+  port: "22"
+  workRoot: /work/crabbox/pangram-cli
+
+sync:
+  delete: true
+  checksum: false
+  gitSeed: true
+  fingerprint: true
+  timeout: 15m
+  warnFiles: 50000
+  warnBytes: 2147483648
+  failFiles: 150000
+  failBytes: 10737418240
+  exclude:
+    - .git
+    - .jj
+    - .cache
+    - .crabbox
+    - target
+    - tmp
+
+run:
+  preflightTools:
+    - cargo
+    - git
+
+env:
+  allow:
+    - CI
+
+jobs:
+  yoga-linux-smoke:
+    shell: true
+    command: >
+      export PATH="$HOME/.cargo/bin:$PATH" &&
+      export RUSTC_WRAPPER=/usr/bin/sccache &&
+      export SCCACHE_DIR=/work/sccache &&
+      export CARGO_TARGET_DIR=/work/cargo-target/pangram-cli &&
+      rustc --version &&
+      cargo --version &&
+      cargo metadata --no-deps --format-version 1 >/dev/null
+    stop: auto
+
+  yoga-linux-msrv:
+    shell: true
+    command: >
+      export PATH="$HOME/.cargo/bin:$PATH" &&
+      export RUSTC_WRAPPER=/usr/bin/sccache &&
+      export SCCACHE_DIR=/work/sccache &&
+      export CARGO_TARGET_DIR=/work/cargo-target/pangram-cli-msrv &&
+      export RUSTUP_TOOLCHAIN=1.87.0 &&
+      rustc --version &&
+      cargo --version &&
+      cargo build --locked --all-features &&
+      cargo test --locked --all-features
+    stop: auto
+
+  yoga-linux-gate:
+    shell: true
+    command: >
+      export PATH="$HOME/.cargo/bin:$PATH" &&
+      export RUSTC_WRAPPER=/usr/bin/sccache &&
+      export SCCACHE_DIR=/work/sccache &&
+      export CARGO_TARGET_DIR=/work/cargo-target/pangram-cli &&
+      cargo fmt --check &&
+      cargo test --locked --all-features &&
+      cargo clippy --locked --all-features --all-targets -- -D warnings
+    stop: auto

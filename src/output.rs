@@ -21,6 +21,10 @@ pub use value::{
     UpdateStatusKind,
 };
 
+mod projection;
+
+pub use projection::{ColorPolicy, OutputFormat, ProjectionCause, render};
+
 /// An output value could not satisfy its public serialization contract.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OutputValidationError {

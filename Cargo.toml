@@ -2,7 +2,7 @@
 name = "microck-pangram-cli"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 description = "Unofficial Pangram terminal client"
 license = "MIT"
 repository = "https://github.com/Microck/pangram-cli"
@@ -39,6 +39,11 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.11.0"
 thiserror = "=2.0.19"
+# Canonical TOON projection of the JSON envelope. `default-features = false`
+# keeps the heavy `cli` feature out of the shipped binary; the projection uses
+# only `toon_format::encode_default`. Requires Rust 1.87 (`unsigned_is_multiple_of`
+# in the decoder), which is the package rust-version. Evidence: evidence-ledger.
+toon-format = { version = "=0.5.0", default-features = false }
 tokio = { version = "=1.53.1", features = [
     "rt-multi-thread",
     "macros",
@@ -95,6 +100,13 @@ required-features = ["dev-tools"]
 [[test]]
 name = "analysis-protocol"
 path = "tests/analysis-protocol.rs"
+required-features = ["dev-tools"]
+
+# The golden regenerator is a maintenance tool only; the normal suite reads
+# the committed fixtures directly under strict `-D warnings`.
+[[test]]
+name = "projection-contract-golden"
+path = "tests/projection-contract-golden.rs"
 required-features = ["dev-tools"]
 
 [profile.release]

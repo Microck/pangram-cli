@@ -41,6 +41,7 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
 // Phase 2 runtime dependencies: the Phase 1 set plus the async analysis core
 // (Tokio runtime utilities, the rustls-only Reqwest client, and
 // CancellationToken support). The analysis module owns every network path.
+// `toon-format` joins for the canonical TOON projection of the JSON envelope.
 const PHASE_2_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
     "directories",
@@ -53,6 +54,7 @@ const PHASE_2_RUNTIME_DEPENDENCIES: &[&str] = &[
     "serde_json",
     "sha2",
     "thiserror",
+    "toon-format",
     "tokio",
     "tokio-util",
     "toml",

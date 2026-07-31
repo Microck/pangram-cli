@@ -330,6 +330,13 @@ behavior enters this queue before implementation continues through that seam.
   and Phase 3 bulk submission remains blocked on the undocumented bulk billing
   contract. The domain gained the canonical started-100-word text billable-unit
   rule (`text_billable_units`) used later by CLI preflight and the Analyzer.
+- 2026-07-31: The locked v1 output-projection contract includes TOON, but the
+  pinned `toon-format 0.5.0` requires Rust 1.87 (its decode parser uses
+  `unsigned_is_multiple_of`, stabilized in 1.87.0, and fails on 1.85 with
+  `E0658`). Applying the architecture's lowest-dependency-compatible
+  `rust-version` rule, the package MSRV rose from 1.85 to the exact minimum
+  1.87.0 rather than to the RMCP 1.88 prerelease floor, and the CI MSRV leg
+  moved with it. Current stable remains 1.97.1.
 
 ## Progress log
 
@@ -372,7 +379,8 @@ behavior enters this queue before implementation continues through that seam.
   repeated analysis results.
 - 2026-07-28: Revalidated the Rust toolchain and Phase 0 dependency baseline.
   Current stable is Rust 1.97.1, and the lowest selected direct-dependency MSRV
-  remains Rust 1.85.
+  is Rust 1.87 (raised from 1.85 on 2026-07-31 when `toon-format 0.5.0` set the
+  floor; see the deviation log and evidence ledger).
 - 2026-07-28: Retargeted the planned stdio server to MCP 2026-07-28 before MCP
   implementation began. File access now requires explicit startup-approved
   roots, the removed initialization lifecycle has no compatibility path, and
@@ -382,8 +390,9 @@ behavior enters this queue before implementation continues through that seam.
   contract set, and a shared transfer corpus passes against every baseline seed
   and generated schema. Current-only regressions record the two documented
   contract-first seed corrections. Formatting, strict Clippy, Rust 1.85
-  compatibility, repository hygiene, dependency audit, license policy, secret
-  scanning, and workflow linting are green.
+  compatibility (the MSRV at that time, now 1.87), repository hygiene,
+  dependency audit, license policy, secret scanning, and workflow linting are
+  green.
 - 2026-07-30: Phase 1 implementation is in place. Strict configuration,
   atomic credential persistence with Unix `0600` and owner-only protected
   Windows ACL enforcement, the `auth`, `config`, and non-billable `doctor`
