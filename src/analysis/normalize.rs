@@ -149,6 +149,19 @@ pub enum TaskState {
     Failed { message: String, stage: String },
 }
 
+/// The one owner of the provider failure-message reduction shared by every
+/// stage classifier: walk the documented detail fields in priority order,
+/// take the first string, and reduce it through the sanitizer so the exact
+/// failure contract holds in exactly one place. Returns `None` when no
+/// detail field carries a string, letting the caller supply its fallback.
+pub(crate) fn failure_message(body: &serde_json::Value) -> Option<String> {
+    body.get("error_message")
+        .or_else(|| body.get("headline"))
+        .or_else(|| body.get("detail"))
+        .and_then(serde_json::Value::as_str)
+        .map(sanitize_upstream_message)
+}
+
 /// A fully normalized Pangram 4 success document, before assembly into the
 /// canonical check state. Carries provenance and result-side content.
 #[derive(Debug, Clone, PartialEq)]
@@ -179,12 +192,7 @@ pub fn normalize_task_state(body: &serde_json::Value) -> Result<TaskState, Canon
     match stage {
         TERMINAL_SUCCESS_STAGE => Ok(TaskState::Success(Box::new(normalize_success_task(body)?))),
         TERMINAL_FAILURE_STAGE => Ok(TaskState::Failed {
-            message: body
-                .get("error_message")
-                .or_else(|| body.get("headline"))
-                .or_else(|| body.get("detail"))
-                .and_then(serde_json::Value::as_str)
-                .map(sanitize_upstream_message)
+            message: failure_message(body)
                 .unwrap_or_else(|| "Pangram reported a task failure without detail".to_owned()),
             stage: stage.to_owned(),
         }),

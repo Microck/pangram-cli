@@ -25,7 +25,6 @@ Checks
   fraction_ai_assisted: 0
   fraction_human: 1
   segments: 1
-- The text to analyze
   label: Human Written
   confidence: high
   ai_assistance_score: 0

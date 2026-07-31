@@ -448,8 +448,10 @@ create one.
 ```
 
 The canonical field is `plagiarized_sentence_count`. The initial response
-normalizer accepts a numeric upstream `plagiarized_sentences`. A list triggers
-`upstream_contract_changed` until the live contract is resolved.
+normalizer accepts the numeric upstream `plagiarized_sentences` documented by
+the current official API reference. A list or missing value triggers
+`upstream_contract_changed`. Live conformance must confirm the numeric shape
+before public support.
 
 Source URLs preserve the raw provider string and are not required to validate as
 a URI. The runtime MUST NOT fetch them automatically. It offers an open action
@@ -566,10 +568,18 @@ manifest invariants to the Rust verifier.
 `estimated_billable_units` records the estimate calculated under the
 documented billing rule for the selected Pangram operation. Pangram 4 bulk
 selection uses one job-wide JSON `model` field with the exact value
-`pangram-4`; per-item model selectors are not supported. Pangram has not
-published a Pangram 4 bulk billing rule or confirmed the current request
-ceiling. Bulk remains blocked until both are documented. Estimates MUST NOT be
-presented as exact charges.
+`pangram-4`; per-item model selectors are not supported. Each valid item costs
+one unit per started 100-word block, with a minimum of one unit per item. The
+job estimate is the sum of those per-item units. Pangram accepts at most 1,000
+billable units in one bulk request and documents no separate item-count limit.
+Normal request-body limits still apply.
+
+The effective local ceiling is the smaller of the required caller-supplied
+`max_billable_units` and Pangram's 1,000-unit request limit. An estimate above
+that ceiling fails with `bulk_limit_exceeded` before credential or network
+work. An unexpected upstream `413 Payload Too Large` for a submitted bulk
+request maps to the same code and retains sanitized `http_status: 413` detail.
+Estimates MUST NOT be presented as exact charges.
 
 Bulk timestamps from Pangram are Unix epoch seconds encoded as strings. The
 normalizer converts them to RFC 3339 UTC.
@@ -716,6 +726,13 @@ mapping is identical in both positions. In particular:
 - a failed analysis whose check error is a local usage or authentication
   failure exits per that error's category instead
 - process interruption stays exit 130 per section 19
+
+For a repeated-file ordered series the run's exit follows the parent-status
+derivation of section 4.1 applied across the members: a `partial` run (mixed
+member outcomes, or any individually `partial` member) exits 3, while a run
+whose members are ALL `failed` exits per the first failed member's
+check-error category under the identical mapping above. This precedence is one
+shared rule used by every repeated-output projection.
 
 ### 12.1 Cancellation and the billable-submission boundary
 
@@ -904,7 +921,6 @@ pangram bulk submit [JSONL_PATH|-]
   --max-billable-units N
   [--dry-run]
   [--wait]
-  [--public-link]
   [--format FORMAT]
   [--progress auto|never|jsonl]
 
@@ -920,6 +936,8 @@ JSONL item:
 ```
 
 Unknown item fields and duplicate caller IDs fail whole-file validation.
+Pangram's Bulk API does not document a public-dashboard-link request or
+response field, so bulk submission has no `--public-link` option.
 
 ### 14.4 Task
 

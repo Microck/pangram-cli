@@ -25,7 +25,6 @@
   [2mfraction_ai_assisted[0m: 0
   [2mfraction_human[0m: 1
   [2msegments[0m: 1
-- The text to analyze
   [2mlabel[0m: Human Written
   [2mconfidence[0m: [36mhigh[0m
   [2mai_assistance_score[0m: 0

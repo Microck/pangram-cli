@@ -124,6 +124,11 @@ pub enum AnalysisError {
     InvalidEndpoint(&'static str),
     #[error("the request failed before a response: {0}")]
     Transport(String),
+    /// A transport failure reqwest classified structurally as a timeout.
+    /// Kept distinct so the canonical category never depends on matching
+    /// the rendered message text (CodeRabbit functional-correctness finding).
+    #[error("the request timed out before a response: {0}")]
+    TransportTimeout(String),
     #[error("the response body exceeded the supported size")]
     ResponseTooLarge,
     #[error("the response body was not valid JSON: {0}")]
@@ -140,7 +145,14 @@ impl AnalysisError {
     }
 
     pub(crate) fn transport(error: reqwest::Error) -> Self {
-        Self::Transport(sanitize_reqwest(&error))
+        // Capture reqwest's structural timeout class at construction so no
+        // downstream classifier ever re-derives it by matching the rendered
+        // template text.
+        if error.is_timeout() {
+            Self::TransportTimeout(sanitize_reqwest(&error))
+        } else {
+            Self::Transport(sanitize_reqwest(&error))
+        }
     }
 
     pub(crate) fn cancelled() -> Self {
@@ -270,15 +282,13 @@ impl<C: Clock> UpstreamClient<C> {
     /// the last-known state, or a classified terminal failure.
     pub async fn submit_text(
         &self,
-        text: &str,
-        public_dashboard_link: bool,
+        body: &serde_json::Value,
         cancel: &CancellationToken,
     ) -> Result<AcceptedTask, SubmitOutcome> {
-        let body = serde_json::json!({
-            "text": text,
-            "model": "pangram-4",
-            "public_dashboard_link": public_dashboard_link,
-        });
+        // The body is built once by `AnalysisRequest::submit_body` and passed
+        // in unchanged: the same document the caller hashes for
+        // `submission_outcome_unknown` reconciliation is the document sent on
+        // the wire, never two independently-built copies.
         // There is no caller wait deadline on the submit path; a cancelled
         // token is the only early release. Distinct deadline semantics live
         // on the observation path where the caller supplies a wait budget.
@@ -290,7 +300,7 @@ impl<C: Clock> UpstreamClient<C> {
         }
         let outcome = self
             .http
-            .post_json(&self.endpoints.submit, &self.api_key, &body, cancel)
+            .post_json(&self.endpoints.submit, &self.api_key, body, cancel)
             .await;
         match outcome {
             SendOutcome::Responded(response) => classify_submit(response),
@@ -359,8 +369,22 @@ impl<C: Clock> UpstreamClient<C> {
                 SendOutcome::Responded(response) => response,
                 SendOutcome::Cancelled { .. } => return Err(PollError::Cancelled),
                 SendOutcome::Failed { error, .. } => {
-                    // Safe GET: transient transport classes may retry.
-                    let retryable = matches!(&error, AnalysisError::Transport(_));
+                    // Safe GET: transient transport classes may retry. A
+                    // per-request timeout is transient too; a stalled peer on
+                    // a safe read must not abort observation outright.
+                    let retryable = matches!(
+                        &error,
+                        AnalysisError::Transport(_) | AnalysisError::TransportTimeout(_)
+                    );
+                    // When the caller's explicit wait budget has already
+                    // arrived, that budget (not the per-request timeout)
+                    // governs the surface: report the canonical wait timeout.
+                    if let (Some(deadline), AnalysisError::TransportTimeout(_)) = (deadline, &error)
+                    {
+                        if clock.now() >= deadline {
+                            return Err(PollError::DeadlineExceeded);
+                        }
+                    }
                     if !retryable || attempt >= policy.max_attempts {
                         return Err(PollError::Failed(Box::new(transport_poll_error(&error))));
                     }
@@ -490,7 +514,7 @@ pub enum PollError {
 /// timeouts are retryable because no billable body was sent.
 fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
     match error {
-        AnalysisError::Transport(message) if message.contains("timed out") => CanonicalError::new(
+        AnalysisError::TransportTimeout(_) => CanonicalError::new(
             ErrorCode::NetworkTimeout,
             "Pangram did not answer a safe read before the request timeout.",
         )
@@ -502,7 +526,9 @@ fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
 
 fn contract_symptom_error(error: &AnalysisError) -> CanonicalError {
     let message = match error {
-        AnalysisError::Transport(detail) => detail.clone(),
+        AnalysisError::Transport(detail) | AnalysisError::TransportTimeout(detail) => {
+            detail.clone()
+        }
         other => other.to_string(),
     };
     let mut details = std::collections::BTreeMap::new();
@@ -556,12 +582,10 @@ fn classify_poll(response: Response, _task_id: &UpstreamTaskId) -> Result<TaskPo
     match stage {
         "STAGE_SUCCESS" => Ok(TaskPoll::Terminal(Box::new(response))),
         "STAGE_FAILED" => {
-            let message = body
-                .get("error_message")
-                .or_else(|| body.get("headline"))
-                .or_else(|| body.get("detail"))
-                .and_then(serde_json::Value::as_str)
-                .map(super::normalize::sanitize_upstream_message)
+            // The failure-message reduction is owned by
+            // `normalize::failure_message` so both stage classifiers reduce
+            // the provider's detail fields through one identical path.
+            let message = super::normalize::failure_message(&body)
                 .unwrap_or_else(|| "Pangram reported a task failure without detail".to_owned());
             Ok(TaskPoll::AnalysisFailed {
                 message,
@@ -659,15 +683,14 @@ fn classify_http_failure(response: &Response, task_id: Option<&UpstreamTaskId>) 
 }
 
 fn timed_out(error: &AnalysisError) -> bool {
-    match error {
-        AnalysisError::Transport(message) => message.contains("timed out"),
-        _ => false,
-    }
+    matches!(error, AnalysisError::TransportTimeout(_))
 }
 
 fn map_transport_failure(error: &AnalysisError) -> CanonicalError {
     let message = match error {
-        AnalysisError::Transport(detail) => detail.clone(),
+        AnalysisError::Transport(detail) | AnalysisError::TransportTimeout(detail) => {
+            detail.clone()
+        }
         other => other.to_string(),
     };
     if timed_out(error) {

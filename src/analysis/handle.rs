@@ -175,7 +175,12 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
         .expect("a running analysis snapshot always satisfies invariants")
     }
 
-    /// The current non-terminal canonical analysis.
+    /// The current non-terminal canonical analysis. An accepted task that no
+    /// poll has observed yet is reported `queued` with a `None` check-level
+    /// upstream stage (no stage exists to report); the real upstream task id
+    /// is already and honestly preserved in `provenance.upstream_task_ids`,
+    /// so no identity is fabricated or lost. Once a stage is observed the
+    /// snapshot becomes `running` with that stage.
     #[must_use]
     pub fn snapshot(&self) -> Analysis<CanonicalError> {
         self.snapshot_analysis(self.last_stage.is_some())
@@ -303,7 +308,14 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
                             Ok(self.finish_failed(analysis_failed_error(&message)))
                         }
                         Ok(TaskState::InProgress { .. }) => {
-                            unreachable!("terminal documents never normalize to in-progress")
+                            // A terminal body must normalize to Success or
+                            // Failed; an in-progress token here means the
+                            // upstream stage surface drifted from the pinned
+                            // contract, not a genuine in-progress state.
+                            Err(TaskError::new(
+                                self.request.id(),
+                                contract_symptom("stage", "terminal-classified-in-progress"),
+                            ))
                         }
                         Err(error) => Err(TaskError::new(self.request.id(), error)),
                     });
@@ -395,11 +407,8 @@ impl<C: super::config::Clock> Analyzer<C> {
         request: AnalysisRequest,
         cancel: &CancellationToken,
     ) -> Result<Accepted, super::upstream::SubmissionFailure> {
-        match self
-            .client
-            .submit_text(request.text(), request.public_dashboard_link(), cancel)
-            .await
-        {
+        let body = request.submit_body();
+        match self.client.submit_text(&body, cancel).await {
             Ok(accepted) => Ok(Accepted::Task(AcceptedInput {
                 task_id: accepted.task_id,
                 request,

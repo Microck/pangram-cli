@@ -72,12 +72,17 @@ content.
 - exactly one of `items` or `jsonl_path`
 - positive `max_billable_units`
 
-Optional fields are `public_link` and `save`.
+The optional field is `save`. Pangram's Bulk API does not document a
+public-dashboard-link request or response field, so `submit_bulk` has no
+`public_link` input.
 
-The server does not advertise `submit_bulk` until Pangram documents Pangram 4
-bulk selection, billing units, and the current request ceiling. The input
-schema must encode the documented ceiling once known; it must not preserve the
-Pangram 3-era 1,000-unit maximum as a fallback.
+The server does not advertise `submit_bulk` until Phase 3 implements it and
+live conformance validates the response contract. The request uses one
+job-wide JSON `model` field set to `pangram-4`, with no per-item selector. Each
+valid item costs one unit per started 100-word block, with a minimum of one;
+the job estimate is their sum. The input schema and preflight enforce
+Pangram's 1,000-unit request limit as well as the smaller caller-supplied
+`max_billable_units` ceiling.
 
 `get_bulk` and `wait_bulk` require exactly one of local `bulk_id` or
 `upstream_bulk_id`. `wait_bulk` optionally accepts `timeout_ms`.

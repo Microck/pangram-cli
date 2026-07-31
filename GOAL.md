@@ -163,7 +163,7 @@ approved contracts.
 | 0 | Complete |
 | 1 | Complete |
 | 2 | Complete |
-| 3 | Not started (blocked: Pangram 4 bulk billing and request ceiling are undocumented) |
+| 3 | Not started (documented entry contract resolved) |
 | 4 | Not started |
 | 5 | Not started |
 | 6 | Not started |
@@ -245,9 +245,10 @@ Requires explicit authority:
   and architecture contracts have completed their pre-Phase-0 correction pass.
 - File and plagiarism response shapes need live confirmation.
 - Pangram 4 is the only intended text model. Its published model card defines
-  result semantics. The Pangram SDK v1.0.0 tag documents the text
-  model-selection request field (`model` set to `pangram-4`), while the bulk
-  billing contract remains undocumented.
+  result semantics. The Pangram SDK v1.0.0 tag documents the text and job-wide
+  bulk model-selection request field (`model` set to `pangram-4`). Pangram's
+  official API reference documents per-item started-100-word bulk billing and
+  the 1,000-unit request limit.
 - The Pangram 4 text request selector is resolved. The Pangram SDK v1.0.0 tag
   (`ca42297`, 2026-07-29) documents `POST
   https://text.external-api.pangram.com/task` with JSON field `model` set to
@@ -272,7 +273,6 @@ Requires explicit authority:
 1. What is the SHA-256 and provenance of the replacement fox source geometry?
 2. Which stable RMCP 3 release and resulting minimum Rust version are current
    when Phase 6 begins?
-3. What billing unit and request ceiling apply to Pangram 4 bulk work?
 
 ### Unknown knowns
 
@@ -319,17 +319,19 @@ behavior enters this queue before implementation continues through that seam.
   for literal seed equivalence would violate the observable contract. They
   were corrected before ownership transfer completed and are covered by
   current-only regressions.
-- 2026-07-29: Pangram 4 launched before its public REST reference and SDK
-  documented the selection field and updated bulk billing contract. Pangram
-  CLI now targets Pangram 4 only and blocks text and bulk submission rather
-  than relying on Pangram 3 default routing or old billing assumptions.
+- 2026-07-29: Pangram 4 launched before its rendered public REST reference and
+  SDK release documented the selection field and updated bulk billing
+  contract. The initial correction targeted Pangram 4 only and blocked text
+  and bulk submission rather than relying on Pangram 3 default routing or old
+  billing assumptions.
 - 2026-07-31: The Pangram SDK v1.0.0 tag (`ca42297`) documented the Pangram 4
-  text selection field (`model` set to `pangram-4`) while the rendered REST
-  reference still omitted it. Text submission was unblocked contract-first and
-  pinned to the explicit selector, the no-default/no-fallback rule was kept,
-  and Phase 3 bulk submission remains blocked on the undocumented bulk billing
-  contract. The domain gained the canonical started-100-word text billable-unit
-  rule (`text_billable_units`) used later by CLI preflight and the Analyzer.
+  text and job-wide bulk selection field (`model` set to `pangram-4`) while the
+  rendered REST reference still omitted it. Text submission was unblocked
+  contract-first and pinned to the explicit selector, the no-default/no-fallback
+  rule was kept, and the domain gained the canonical started-100-word text
+  billable-unit rule (`text_billable_units`) used later by CLI preflight and
+  the Analyzer. The bulk billing source had not yet been located in this
+  research pass.
 - 2026-07-31: The locked v1 output-projection contract includes TOON, but the
   pinned `toon-format 0.5.0` requires Rust 1.87 (its decode parser uses
   `unsigned_is_multiple_of`, stabilized in 1.87.0, and fails on 1.85 with
@@ -424,8 +426,8 @@ behavior enters this queue before implementation continues through that seam.
   the rendered-docs staleness was recorded as a caveat rather than a protocol
   unknown, and the evidence ledger gained sourced protocol and bulk-blocker
   rows. The domain gained the canonical `text_billable_units` rule with
-  property and overflow-boundary tests. Phase 3 bulk submission and the bulk
-  billing unknown remain open, so Phase 2 stays In progress.
+  property and overflow-boundary tests. Phase 3 remained out of this Phase 2
+  packet, so Phase 2 stayed In progress.
 - 2026-07-31: Phase 2 independent-review remediation landed contract-first
   and test-first. Bare piped stdin now detects (the `--help` fallback moved
   behind bare dispatch; empty or whitespace-only pipes return
@@ -454,8 +456,13 @@ behavior enters this queue before implementation continues through that seam.
   remote Yoga current/MSRV/gate, generated drift, hygiene, supply-chain,
   gitleaks, and the no-network policy are green, and the native Windows ACL
   and generated/supply-chain CI gates are exercised on the delivery pull
-  request. Phase 3 bulk submission remains blocked on Pangram's undocumented
-  bulk billing unit and request ceiling rather than on any Phase 2 gap.
+  request. Phase 3 remains separate planned work rather than a Phase 2 gap.
+- 2026-07-31: Pangram's official Mintlify API source at `eb214f4` resolves the
+  Phase 3 external entry contract. A Pangram 4 bulk job uses one selector for
+  the whole request, bills each valid item in started 100-word units with a
+  minimum of one, and accepts at most 1,000 billable units. No separate item
+  count limit is documented. Phase 3 may proceed with loopback implementation;
+  public support still requires live conformance.
 
 ## Out of scope
 

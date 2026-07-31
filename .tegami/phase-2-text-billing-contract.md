@@ -13,8 +13,9 @@ falls back to Pangram's temporary Pangram 3 default routing (retired
 started 100-word block with a minimum of one, and that canonical estimate is
 the single rule later used by CLI preflight and the analysis module.
 
-Bulk submission remains blocked until Pangram documents its Pangram 4 bulk
-selection, billing, and request ceiling.
+The official API reference now also documents Pangram 4 bulk selection,
+per-item started-100-word billing, and a 1,000-unit request limit. Bulk commands
+remain planned for Phase 3 and require live conformance before public support.
 
 This fragment uses `patch` for both packages, matching every existing
 `.tegami/` fragment in this repository: `minor` is reserved for a release

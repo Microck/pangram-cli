@@ -101,16 +101,25 @@ impl AnalysisRequest {
         AnalysisInput::Text(text_input.expect("analysis request input construction is total"))
     }
 
-    /// The request SHA-256 used in `submission_outcome_unknown` details.
-    /// This hashes the exact serialized JSON body sent upstream.
+    /// The exact JSON body sent upstream for this request. This is the single
+    /// owner of the submit document: [`Self::request_sha256`] hashes precisely
+    /// this value and [`UpstreamClient::submit_text`] posts precisely this
+    /// value, so the reconciliation hash can never drift from the bytes on
+    /// the wire (CodeRabbit data-integrity finding).
     #[must_use]
-    pub fn request_sha256(&self) -> Sha256Hash {
-        let body = serde_json::json!({
+    pub fn submit_body(&self) -> serde_json::Value {
+        serde_json::json!({
             "text": self.text,
             "model": "pangram-4",
             "public_dashboard_link": self.public_dashboard_link,
-        });
-        Sha256Hash::digest(body.to_string().as_bytes())
+        })
+    }
+
+    /// The request SHA-256 used in `submission_outcome_unknown` details.
+    /// Hashes the exact JSON document [`Self::submit_body`] returns.
+    #[must_use]
+    pub fn request_sha256(&self) -> Sha256Hash {
+        Sha256Hash::digest(self.submit_body().to_string().as_bytes())
     }
 }
 

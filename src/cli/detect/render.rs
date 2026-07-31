@@ -65,21 +65,11 @@ pub(super) fn success_outcome(
             )
         }
         _ => {
-            let exit_code = analyses
-                .iter()
-                .map(|analysis| analysis.status())
-                .fold(ExitCode::Success, |code, status| {
-                    if matches!(
-                        status,
-                        crate::domain::AnalysisStatus::Partial
-                            | crate::domain::AnalysisStatus::Failed
-                    ) {
-                        ExitCode::Partial
-                    } else {
-                        code
-                    }
-                })
-                .as_u8();
+            // The repeated-run exit is the single precedence owned by
+            // `run_exit_code` (contracts.md 4.1 + 12), shared with
+            // `output_exit_code` so both the JSONL and single-document paths
+            // agree exactly.
+            let exit_code = run_exit_code(&analyses).as_u8();
             // The ordered-series rule (contracts.md 3.1): JSONL streams one
             // ordered envelope per analyzed file; every single-document format
             // (JSON, TOON, Markdown, pretty) wraps the whole series in one
@@ -128,22 +118,33 @@ fn output_exit_code(envelope: &CommandEnvelope) -> ExitCode {
     match envelope.data() {
         Some(CommandData::Detect(AnalysisOutput::One(analysis))) => analysis_exit_code(analysis),
         Some(CommandData::Detect(AnalysisOutput::Many(analyses))) => {
-            // Any partial member surfaces the partial exit; otherwise any
-            // failed member surfaces its own category-derived exit, so a
-            // repeated file run never silently claims full success.
-            let mut exit = ExitCode::Success;
-            for analysis in analyses.as_slice() {
-                match analysis.status() {
-                    crate::domain::AnalysisStatus::Partial => return ExitCode::Partial,
-                    crate::domain::AnalysisStatus::Failed => {
-                        exit = analysis_exit_code(analysis);
-                    }
-                    _ => {}
-                }
-            }
-            exit
+            run_exit_code(analyses.as_slice())
         }
         _ => ExitCode::Success,
+    }
+}
+
+/// The single owner of the repeated-run exit precedence (contracts.md 4.1 +
+/// 12). The run's parent status derives across members exactly like one
+/// analysis derives across checks: a `partial` parent (mixed member outcomes,
+/// or an individually `partial` member) exits 3; a run whose members are all
+/// `failed` exits per the first failed member's check-error category (the
+/// identical category mapping in both envelope positions), so an all-failed
+/// upstream STAGE_FAILED run exits 6; otherwise the run exits 0.
+fn run_exit_code(analyses: &[crate::domain::Analysis<CanonicalError>]) -> ExitCode {
+    use crate::domain::AnalysisStatus as S;
+    let any_partial = analyses.iter().any(|a| matches!(a.status(), S::Partial));
+    let any_succeeded = analyses.iter().any(|a| matches!(a.status(), S::Succeeded));
+    let any_failed = analyses.iter().any(|a| matches!(a.status(), S::Failed));
+    if any_partial || (any_succeeded && any_failed) {
+        ExitCode::Partial
+    } else if any_failed {
+        analyses
+            .iter()
+            .find(|a| matches!(a.status(), S::Failed))
+            .map_or(ExitCode::GeneralFailure, analysis_exit_code)
+    } else {
+        ExitCode::Success
     }
 }
 
@@ -308,7 +309,7 @@ fn emit_error_text(envelope: &CommandEnvelope) -> bool {
 }
 
 /// Strips control characters from a message before it reaches stderr.
-fn sanitize_for_stderr(text: &str) -> String {
+pub(super) fn sanitize_for_stderr(text: &str) -> String {
     text.chars()
         .map(|ch| if ch.is_control() { '\u{FFFD}' } else { ch })
         .collect()
@@ -327,14 +328,23 @@ pub(super) fn note_stderr_raw(note: &str) {
 }
 
 /// The identity tuple printed on interruption so the caller can reconcile
-/// without a hidden task ledger. Carries only IDs and the last stage.
+/// without a hidden task ledger. Carries only IDs and the last stage. The
+/// upstream-supplied task id and stage token are untrusted, so each is
+/// sanitized for the terminal at the write boundary (control sequences
+/// stripped) before it is assembled into the note.
 pub(super) fn identity_note(identity: &crate::analysis::OperationIdentity) -> String {
     let mut note = format!("interrupted; local analysis id {}", identity.analysis_id);
     if let Some(task_id) = &identity.task_id {
-        note.push_str(&format!("; upstream task id {task_id}"));
+        note.push_str(&format!(
+            "; upstream task id {}",
+            sanitize_for_stderr(task_id.as_str())
+        ));
     }
     if let Some(stage) = &identity.last_stage {
-        note.push_str(&format!("; last stage {stage}"));
+        note.push_str(&format!(
+            "; last stage {}",
+            sanitize_for_stderr(stage.as_str())
+        ));
     }
     note
 }

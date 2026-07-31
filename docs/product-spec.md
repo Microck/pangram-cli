@@ -157,10 +157,9 @@ Plagiarism MUST preserve:
 - matched text
 - similarity scores
 
-The REST example currently treats `plagiarized_sentences` as a count while
-other official wording calls it a list. The initial implementation follows the
-numeric REST example and remains blocked from public conformance until a live
-authorized response resolves the conflict.
+The current official API reference defines `plagiarized_sentences` as an
+integer count. The implementation follows that contract. A live authorized
+response must still confirm the shape before public conformance.
 
 ### 5.3 Combined analysis
 
@@ -191,19 +190,24 @@ Submission accepts items with optional caller-provided IDs. The product MUST:
 - warn that upstream bulk metadata and results expire 48 hours after terminal
   completion
 
-Pangram 4 bulk submission remains blocked until Pangram documents how to select
-the model, calculate billable units, and cap a request. The 1,000-entry page
-limit is a response-pagination contract and is independent of the unresolved
-billable-unit ceiling.
+The Pangram SDK documents Pangram 4 bulk selection as one job-wide JSON
+`model` field with the exact value `pangram-4`; per-item selectors are not
+supported. Each valid item costs one unit per started 100-word block, with a
+minimum of one unit per item. A job costs the sum of its item units and cannot
+exceed 1,000 billable units. There is no separate item-count limit, but normal
+request-body limits still apply. The 1,000-entry page limit is a separate
+response-pagination contract.
 
 ### 5.5 Files
 
 UTF-8 text files use the text endpoint and support every applicable check.
 PDF, DOCX, and RTF files use the file endpoint for AI detection.
 
-Binary document implementation remains behind live conformance because
-official file-response documentation has conflicted about whether the endpoint
-returns a public link only or a full result.
+Binary document implementation remains behind live conformance because the
+current official sources conflict. The Mintlify API reference documents an
+array containing only `public_dashboard_link`, while the Pangram SDK v1.0.0
+README documents extracted text, prediction fields, windows, `filename`, and
+an optional `dashboard_link`.
 
 The product MUST NOT invent client-side PDF, DOCX, or RTF text extraction as a
 fallback. Plagiarism and combined analysis for binary documents remain blocked
@@ -567,12 +571,13 @@ Pangram's documented research snapshot states:
 - Pangram 4 text API price: USD 0.05 per started 100 words
 - each valid Pangram 4 text request costs at least one unit
 
-The Pangram SDK v1.0.0 tag documents the exact text model-selection request
-field (`model` set to `pangram-4`). Pangram 4 bulk billing and the earlier
-1,000-unit bulk maximum remain undocumented. The product MUST NOT reuse the
-Pangram 3 default or old bulk estimator as a fallback. Text submission sends
-the explicit selector; bulk submission remains blocked until its current
-request and billing contract is documented.
+The Pangram SDK v1.0.0 tag documents the exact text and job-wide bulk
+model-selection request field (`model` set to `pangram-4`). Pangram's official
+API reference defines each valid Pangram 4 bulk item as one billable unit per
+started 100-word block, with a minimum of one, and caps a request at 1,000
+units. The product MUST NOT reuse the Pangram 3 default or its 1,000-word
+estimator. Text and bulk submission send the explicit selector. Bulk preflight
+sums item units and enforces both the caller's ceiling and Pangram's limit.
 
 Pricing is documentation, not a hard-coded monetary promise. The product
 estimates word counts and units but MUST NOT report an exact charged amount
@@ -649,7 +654,7 @@ The complete MCP tool contract is in [mcp-contract.md](mcp-contract.md).
 | AI-assistance fractions, segments, and humanizer evidence | Blocked pending Pangram 4 REST conformance |
 | Multilingual model behavior | Blocked pending Pangram 4 REST conformance |
 | Text public dashboard link | Blocked with text submission, then opt-in |
-| Bulk AI detection | Blocked pending Pangram 4 selection, billing, and limit documentation |
+| Bulk AI detection | Planned for Phase 3 against the documented Pangram 4 contract; blocked from public support pending implementation and live conformance |
 | PDF, DOCX, and RTF AI detection | Blocked pending live response conformance |
 | Plagiarism text check | Blocked from public conformance pending field validation |
 | Combined AI and plagiarism report | Local composition of supported checks |
@@ -698,8 +703,9 @@ Public v1 requires:
 
 1. written Pangram confirmation that a third-party CLI and MCP server may use
    the documented APIs and the fox logo in terminal artwork
-2. a documented Pangram 4 text request selector (resolved: `model` set to
-   `pangram-4`) and current bulk billing contract
+2. documented Pangram 4 text and job-wide bulk contract (resolved: `model` set
+   to `pangram-4`, 100-word per-item billing units, and a 1,000-unit bulk
+   request limit)
 3. live authorized Pangram 4 text, bulk, and file-response conformance
 4. live authorized plagiarism-response conformance
 5. passing CLI, TUI, MCP, storage, update, and release contracts
@@ -744,7 +750,6 @@ reviews only final product quality.
 The following are external release blockers rather than unresolved design:
 
 - Pangram distribution permission
-- documented Pangram 4 bulk selection, billing, and request limit
 - Pangram 4 text and bulk response conformance
 - file response conformance
 - plagiarism response conformance

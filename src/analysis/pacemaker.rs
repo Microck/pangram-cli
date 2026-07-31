@@ -84,6 +84,14 @@ impl<C: Clock> Pacemaker<C> {
     /// surface the canonical wait timeout instead of a local interruption.
     pub async fn hurdle(&self, cancel: &CancellationToken, deadline: Option<Instant>) -> Gate {
         let now = self.clock.now();
+        // An already-lapsed wait deadline must gate request issue even on the
+        // immediate path: a caller whose budget ran out issues no request at
+        // all, and the shared schedule is not advanced for a stop it never
+        // performs. (CodeRabbit stability finding; the sleep path already
+        // honors the deadline, but the released-immediately branch did not.)
+        if deadline.is_some_and(|deadline| now >= deadline) {
+            return Gate::DeadlinePassed;
+        }
         let (wait_until, immediate) = {
             let mut inner = self.inner.lock().expect("pacemaker poisoned");
             let scheduled = inner.next_issue;
@@ -249,6 +257,39 @@ mod tests {
         assert!(
             !cancel.is_cancelled(),
             "a deadline wake is not a cancellation"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lapsed_deadline_stops_immediate_issue_without_advancing_the_schedule() {
+        let clock = SystemClock;
+        let gate = Pacemaker::new(FIVE_PER_SECOND, clock);
+        let cancel = CancellationToken::new();
+
+        // First call is normally immediate; a deadline that has already
+        // passed must prevent that immediate issue entirely.
+        let past_deadline = clock.now() - Duration::from_millis(1);
+        let outcome = gate.hurdle(&cancel, Some(past_deadline)).await;
+        assert_eq!(
+            outcome,
+            Gate::DeadlinePassed,
+            "a lapsed deadline gates the immediate issue path"
+        );
+        assert!(
+            !cancel.is_cancelled(),
+            "the deadline stop is not a cancellation"
+        );
+
+        // Because the stopped call performed no issue, the schedule is not
+        // advanced: a subsequent hurdle with a live deadline still releases
+        // immediately (the first true issue).
+        let outcome = gate
+            .hurdle(&cancel, Some(clock.now() + Duration::from_secs(60)))
+            .await;
+        assert_eq!(
+            outcome,
+            Gate::Released,
+            "the schedule was not advanced by the lapsed-deadline stop"
         );
     }
 }

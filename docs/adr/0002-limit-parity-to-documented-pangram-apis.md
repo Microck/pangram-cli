@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-07-23
+Amended: 2026-07-31
 
 ## Context
 
@@ -37,6 +38,13 @@ documented request field. A temporary upstream default is not a stable
 contract. Pangram CLI must not submit Pangram 4 work until the public API
 documents how to select it.
 
+The Pangram SDK v1.0.0 release satisfied the selection condition for text and
+bulk on 2026-07-29. The official Mintlify API reference also documents the
+Pangram 4 bulk billing rule and request limit: one unit per started 100-word
+block per valid item, a minimum of one per item, and at most 1,000 units per
+request. Text and bulk are no longer blocked on public request documentation.
+Bulk still requires Phase 3 implementation and live conformance.
+
 File analysis and plagiarism remain release-gated until live conformance
 resolves their documented response conflicts.
 
@@ -46,8 +54,11 @@ resolves their documented response conflicts.
 - The CLI may intentionally omit web-only account and dashboard features.
 - New documented Pangram operations can extend the parity matrix through a
   contract-first change.
-- Pangram 4 text and bulk submission stay blocked while their public request
-  and billing documentation lags the product launch.
+- Pangram 4 text submission uses the documented selector without a default
+  model fallback.
+- Pangram 4 bulk implementation may proceed against the documented selector,
+  billing rule, and request limit; public support still requires live
+  conformance.
 - Public release still needs written Pangram permission even when only public
   endpoints are used.
 

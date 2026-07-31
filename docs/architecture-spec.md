@@ -312,15 +312,18 @@ All requests use `x-api-key`.
 Production configuration cannot override these values. Test-only constructors
 accept loopback endpoint sets.
 
-The Pangram SDK v1.0.0 tag documents the exact text request selector (`model`
-set to `pangram-4`) even though the rendered public REST reference still
-describes the Pangram 3-era request. Production text submission sends that
-explicit selector and never relies on default routing; do not infer the
-selector from dashboard traffic. Bulk submission remains unimplemented
-because Pangram 4 bulk selection, billable-unit calculation, and the request
-ceiling remain undocumented; do not reuse the Pangram 3-era bulk unit or
-maximum. Both paths must be represented in exact loopback request fixtures
-before their adapters use them.
+The Pangram SDK v1.0.0 tag documents the exact text and job-wide bulk request
+selector (`model` set to `pangram-4`) even though the rendered public REST
+reference still describes the Pangram 3-era request. Production text
+submission sends that explicit selector and never relies on default routing;
+do not infer the selector from dashboard traffic. A future bulk submission
+uses the same job-wide selector and never places a selector on individual
+items. Each valid item contributes one unit per started 100-word block, with a
+minimum of one; the job estimate is their sum. The upstream request limit is
+1,000 billable units with no separate item-count limit. Do not reuse the
+Pangram 3-era 1,000-word unit. Bulk remains unimplemented until Phase 3, and
+both paths must be represented in exact loopback request fixtures before their
+adapters use them. Live conformance remains a public-support gate.
 
 ### 8.2 Reqwest configuration
 

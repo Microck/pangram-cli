@@ -38,8 +38,8 @@ use super::StreamTty;
 use client::set_active_cancel;
 use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
 use render::{
-    DETACH_NOTE, identity_note, internal_error, interrupted_outcome, note_stderr, success_outcome,
-    usage_error,
+    DETACH_NOTE, identity_note, internal_error, interrupted_outcome, note_stderr,
+    sanitize_for_stderr, success_outcome, usage_error,
 };
 
 // The submodules hold the cohesive halves of the adapter:
@@ -516,9 +516,12 @@ impl ProgressSink {
             // sink exists, so it is unreachable here.
             ProgressMode::Auto | ProgressMode::Quiet => {}
             ProgressMode::Human => {
+                // The provider-supplied stage token is untrusted; sanitize it
+                // for the terminal at the write boundary.
                 eprintln!(
                     "detect {}: running ({})",
-                    event.analysis_id, event.last_stage
+                    event.analysis_id,
+                    sanitize_for_stderr(event.last_stage.as_str())
                 );
             }
             ProgressMode::Jsonl => {

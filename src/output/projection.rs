@@ -343,11 +343,24 @@ fn write_analysis_markdown<W: HumanWriter>(
         writer.label_value("completed_at", &completed.to_string())?;
     }
     writer.blank()?;
+    // Segment/evidence text echoes submitted content: emit it in the human
+    // projection only when the user opted in to echoing input
+    // (`--include-input`, which makes the canonical input record carry the
+    // text). Headlines/predictions and all numeric evidence still always
+    // render.
+    let echo_segment_text = match &analysis.input {
+        AnalysisInput::Text(text) => text.text.is_some(),
+        AnalysisInput::File(file) => file.extracted_text.is_some(),
+    };
     writer.heading(3, "Checks")?;
     for check in analysis.checks() {
         match check {
-            Check::AiDetection(state) => write_check(writer, "ai_detection", state)?,
-            Check::Plagiarism(state) => write_check(writer, "plagiarism", state)?,
+            Check::AiDetection(state) => {
+                write_check(writer, "ai_detection", state, echo_segment_text)?
+            }
+            Check::Plagiarism(state) => {
+                write_check(writer, "plagiarism", state, echo_segment_text)?
+            }
         }
     }
     Ok(())
@@ -357,18 +370,18 @@ fn write_analysis_markdown<W: HumanWriter>(
 /// function pattern-matches each kind with its own state type and calls the
 /// concrete result renderer without any downcast.
 trait RenderResult {
-    fn render<W: HumanWriter>(&self, writer: &mut W) -> io::Result<()>;
+    fn render<W: HumanWriter>(&self, writer: &mut W, echo_text: bool) -> io::Result<()>;
 }
 
 impl RenderResult for crate::domain::AiDetectionResult {
-    fn render<W: HumanWriter>(&self, writer: &mut W) -> io::Result<()> {
-        write_ai_result(writer, self)
+    fn render<W: HumanWriter>(&self, writer: &mut W, echo_text: bool) -> io::Result<()> {
+        write_ai_result(writer, self, echo_text)
     }
 }
 
 impl RenderResult for crate::domain::PlagiarismResult {
-    fn render<W: HumanWriter>(&self, writer: &mut W) -> io::Result<()> {
-        write_plagiarism_result(writer, self)
+    fn render<W: HumanWriter>(&self, writer: &mut W, echo_text: bool) -> io::Result<()> {
+        write_plagiarism_result(writer, self, echo_text)
     }
 }
 
@@ -376,20 +389,21 @@ fn write_check<R: RenderResult, W: HumanWriter>(
     writer: &mut W,
     kind: &str,
     state: &CheckState<R, CanonicalError>,
+    echo_text: bool,
 ) -> io::Result<()> {
     let status = check_status_label(state.status()).to_owned();
     writer.label_value("kind", &writer.escape(kind))?;
     writer.label_value("status", &writer.token(&status))?;
     if let Some(identity) = state_upstream(state) {
         if let Some(task) = &identity.task_id {
-            writer.label_value("upstream_task_id", task.as_str())?;
+            writer.label_value("upstream_task_id", &writer.escape(task.as_str()))?;
         }
         if let Some(stage) = &identity.last_stage {
             writer.label_value("upstream_stage", &writer.escape(stage.as_str()))?;
         }
     }
     match state {
-        CheckState::Succeeded { result, .. } => result.render(writer)?,
+        CheckState::Succeeded { result, .. } => result.render(writer, echo_text)?,
         CheckState::Failed { error, .. } => write_error(writer, error)?,
         CheckState::Queued { .. } | CheckState::Running { .. } => {}
     }
@@ -410,6 +424,7 @@ fn state_upstream<R>(
 fn write_plagiarism_result<W: HumanWriter>(
     writer: &mut W,
     result: &crate::domain::PlagiarismResult,
+    echo_text: bool,
 ) -> io::Result<()> {
     writer.label_value(
         "plagiarism_detected",
@@ -427,7 +442,11 @@ fn write_plagiarism_result<W: HumanWriter>(
     writer.label_value("matches", &result.matches.len().to_string())?;
     for match_ in &result.matches {
         writer.line(&format!("- {}", writer.escape(&match_.source_url)))?;
-        writer.label_value("matched_text", &writer.escape(&match_.matched_text))?;
+        // Matched text echoes submitted content: gated on --include-input
+        // like segment text.
+        if echo_text {
+            writer.label_value("matched_text", &writer.escape(&match_.matched_text))?;
+        }
         writer.label_value(
             "similarity_score",
             &match_.similarity_score.get().to_string(),
@@ -448,6 +467,7 @@ fn check_status_label(status: crate::domain::CheckStatus) -> &'static str {
 fn write_ai_result<W: HumanWriter>(
     writer: &mut W,
     result: &crate::domain::AiDetectionResult,
+    echo_text: bool,
 ) -> io::Result<()> {
     writer.label_value("headline", &writer.escape(&result.headline))?;
     writer.label_value("prediction", &writer.escape(&result.prediction))?;
@@ -463,7 +483,11 @@ fn write_ai_result<W: HumanWriter>(
     writer.label_value("fraction_human", &result.fraction_human.get().to_string())?;
     writer.label_value("segments", &result.segments.len().to_string())?;
     for segment in &result.segments {
-        writer.line(&format!("- {}", writer.escape(&segment.text)))?;
+        // Segment text echoes submitted content: present only when the run
+        // opted into echoing input (`--include-input`).
+        if echo_text {
+            writer.line(&format!("- {}", writer.escape(&segment.text)))?;
+        }
         writer.label_value("label", &writer.escape(segment.label.as_str()))?;
         writer.label_value(
             "confidence",
@@ -537,15 +561,18 @@ fn write_error_details<W: HumanWriter>(
                 LocalOperationId::AnalysisId(id) => id.to_string(),
                 LocalOperationId::BulkId(id) => id.to_string(),
             };
-            writer.label_value("operation_id", &id)?;
-            writer.label_value("request_sha256", &details.request_sha256.to_string())?;
+            writer.label_value("operation_id", &writer.escape(&id))?;
+            writer.label_value(
+                "request_sha256",
+                &writer.escape(details.request_sha256.to_string()),
+            )?;
             if let Some(task) = &details.upstream_task_id {
-                writer.label_value("upstream_task_id", task.as_str())?;
+                writer.label_value("upstream_task_id", &writer.escape(task.as_str()))?;
             }
             if let Some(bulk) = &details.upstream_bulk_id {
-                writer.label_value("upstream_bulk_id", bulk.as_str())?;
+                writer.label_value("upstream_bulk_id", &writer.escape(bulk.as_str()))?;
             }
-            writer.label_value("last_status", details.last_status.as_str())?;
+            writer.label_value("last_status", &writer.escape(details.last_status.as_str()))?;
         }
         super::CanonicalErrorDetails::Fields(fields) => {
             for (key, value) in fields {

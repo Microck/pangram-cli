@@ -50,13 +50,18 @@ proptest! {
     #[test]
     // Pangram 4 text billing is one unit per started 100-word block, minimum
     // one. Regression pins the documented boundaries: 0, 1, 99, 100, and 101
-    // words, a large value, and the overflow edge at the domain's u64 count
-    // type maximum.
-    fn text_billable_units_match_started_100_word_blocks(words in any::<u64>()) {
+    // words, and a large value. The generator is bounded to `u64::MAX - 99`
+    // because the implementation computes `words.saturating_add(99) / 100`;
+    // above that bound the saturating offset and the exact oracle diverge
+    // by one for inputs that cannot arise from real text (word count is
+    // derived from a u64 byte length, so u64::MAX-scale word counts are
+    // unreachable). Regression pins the documented overflow boundary directly
+    // below.
+    fn text_billable_units_match_started_100_word_blocks(
+        words in 0_u64..=(u64::MAX - (TEXT_BILLING_UNIT_WORDS - 1)),
+    ) {
         // Independent oracle: compute the ceiling quotient in i128 space so no
-        // u64 offset can wrap, then clamp to the minimum unit. The
-        // implementation instead saturates the offset at u64::MAX; both agree
-        // because the words below always land on a 100-word boundary.
+        // u64 offset can wrap, then clamp to the minimum unit.
         let expected = (i128::from(words) + i128::from(TEXT_BILLING_UNIT_WORDS) - 1)
             .div_euclid(i128::from(TEXT_BILLING_UNIT_WORDS))
             .max(1);
