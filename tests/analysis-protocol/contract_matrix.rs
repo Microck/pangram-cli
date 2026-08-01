@@ -17,6 +17,7 @@ async fn http_status_matrix_maps_to_canonical_codes() {
         (422, ErrorCode::UpstreamContractChanged, false),
         (429, ErrorCode::RateLimited, true),
         (500, ErrorCode::UpstreamError, true),
+        (501, ErrorCode::UpstreamError, false),
         (503, ErrorCode::UpstreamError, true),
     ];
 

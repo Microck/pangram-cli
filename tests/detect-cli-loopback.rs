@@ -221,12 +221,16 @@ async fn detect_from_piped_stdin_uses_stdin_origin() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn pangram detect");
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(text.as_bytes())
-        .expect("write stdin");
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(text.as_bytes()) {
+        // A child that exits before draining stdin closes the pipe; tolerate
+        // that here as `spawn_with_stdin` already does, while still failing
+        // loudly on any other write error.
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "stdin: {error}"
+        );
+    }
     let output = child.wait_with_output().expect("await pangram");
 
     assert_eq!(output.status.code(), Some(0));

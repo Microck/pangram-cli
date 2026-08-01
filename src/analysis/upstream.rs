@@ -79,7 +79,12 @@ impl UpstreamEndpoints {
                 "test endpoints use the server root; paths are protocol-owned",
             ));
         }
-        let submit = format!("{base_url}/task");
+        // Strip any trailing slash from the accepted root so the submit/poll
+        // path joins produce exactly one separator. `http://host/` passes the
+        // root check above; without the trim it would build `//task` and miss
+        // the protocol-owned endpoint.
+        let base = base_url.trim_end_matches('/');
+        let submit = format!("{base}/task");
         let poll_prefix = submit.clone();
         Ok(Self {
             submit,

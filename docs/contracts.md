@@ -127,12 +127,6 @@ Bare piped detection uses `detect`.
 A success envelope contains `data` and MUST NOT contain `error`, even when the
 extra `error` value would not validate as a canonical error.
 
-JSON envelope commands and their `data` roots are closed:
-
-| Commands | `data` root |
-| --- | --- |
-| `detect`, `plagiarism`, `analyze` | one analysis, or an ordered analysis array for repeated files |
-
 For every repeated-file run the analyses are one canonical ordered series.
 Single-document success formats (JSON, TOON, Markdown, and pretty) place the
 whole series inside one success envelope whose `data` is the ordered analysis
@@ -140,6 +134,12 @@ array, so an explicit non-JSONL format never performs billable work and then
 fails to render. JSONL is the only repeated-file streaming projection: it
 emits one ordered success envelope per analyzed file, one per line. The
 ordered-series rule is stable for schema major `"1"` (section 1).
+
+JSON envelope commands and their `data` roots are closed:
+
+| Commands | `data` root |
+| --- | --- |
+| `detect`, `plagiarism`, `analyze` | one analysis, or an ordered analysis array for repeated files |
 | `task_status`, `task_wait`, `history_show`, `history_rerun` | one analysis |
 | `bulk_submit`, `bulk_status`, `bulk_wait` | one bulk collection |
 | `bulk_results` | one ordered bulk-item page |

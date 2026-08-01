@@ -8,10 +8,11 @@ packages:
 
 Pangram CLI now pins Pangram 4 as the only production text model through the
 documented request selector `model` set to `pangram-4`, so text analysis never
-falls back to Pangram's temporary Pangram 3 default routing (retired
-2026-09-30). Pangram 4 text analysis is estimated at one billable unit per
-started 100-word block with a minimum of one, and that canonical estimate is
-the single rule later used by CLI preflight and the analysis module.
+falls back to Pangram's temporary Pangram 3 default routing (scheduled to
+retire on 2026-09-30). Pangram 4 text analysis is estimated at one billable
+unit per started 100-word block with a minimum of one, and that canonical
+estimate is the single rule later used by CLI preflight and the analysis
+module.
 
 The official API reference now also documents Pangram 4 bulk selection,
 per-item started-100-word billing, and a 1,000-unit request limit. Bulk commands

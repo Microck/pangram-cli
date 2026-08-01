@@ -650,7 +650,7 @@ The complete MCP tool contract is in [mcp-contract.md](mcp-contract.md).
 
 | Pangram capability | Product status |
 | --- | --- |
-| Single text AI detection | Blocked pending Phase 2 implementation against the documented Pangram 4 text selector |
+| Single text AI detection | Implemented against the documented Pangram 4 text selector; blocked from public support pending Pangram 4 REST conformance |
 | AI-assistance fractions, segments, and humanizer evidence | Blocked pending Pangram 4 REST conformance |
 | Multilingual model behavior | Blocked pending Pangram 4 REST conformance |
 | Text public dashboard link | Blocked with text submission, then opt-in |
