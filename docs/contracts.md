@@ -585,8 +585,64 @@ work. An unexpected upstream `413 Payload Too Large` for a submitted bulk
 request maps to the same code and retains sanitized `http_status: 413` detail.
 Estimates MUST NOT be presented as exact charges.
 
-Bulk timestamps from Pangram are Unix epoch seconds encoded as strings. The
-normalizer converts them to RFC 3339 UTC.
+Bulk metadata and results expire 48 hours after the job reaches a terminal
+status. Bulk timestamps from Pangram are Unix epoch seconds encoded as
+strings (for example `"1760000000.0"`). The normalizer converts them to RFC
+3339 UTC.
+
+### 9.1 Bulk wire contract
+
+The loopback fixture and the future production client assert these documented
+shapes exactly (official Bulk API source `eb214f4`, verified current on
+2026-08-01). Unknown upstream values on a required state or shape fail
+upstream contract validation per section 6.2 of the architecture; the fixture
+plays them to prove it.
+
+Submit is `POST {text-base}/bulk`. The request body carries exactly one of
+`items` or `text` plus one job-wide `model`:
+
+- `items` is the ordered list `{"id": optional-caller-id, "text": "..."}`.
+  Caller-supplied `id` values are optional and MUST be unique within one
+  request when provided; the local JSONL validator rejects duplicates before
+  submission (section 14.3).
+- `text` is the ordered list of plain strings used when no caller IDs are
+  needed.
+- `model` is exactly `pangram-4` for the whole job. No per-item selector
+  exists, and there is no public-dashboard-link request field.
+
+The 202 response carries the upstream `bulk_id`, an initial `status`, the
+`total_items` count, an ordered `accepted_items` list (`index`, optional
+`id`, `task_id`), and an ordered `failed_items` list for items rejected by
+immediate validation (`index`, optional `id`, null `task_id`, `stage`,
+`error`).
+
+Status polling is `GET /bulk/{bulk_id}` and returns the job `bulk_id`, one of
+the closed statuses `queued`/`running`/`succeeded`/`failed`/`partial`, the
+`total_items`/`accepted`/`succeeded`/`failed` counters, and the
+`created_at`/`completed_at` epoch-second strings (`completed_at` is null
+while the job is not terminal).
+
+Item metadata paging is `GET /bulk/{bulk_id}/items?offset=N&limit=M`; result
+paging is `GET /bulk/{bulk_id}/results?offset=N&limit=M`. Both accept a
+zero-based `offset` and a `limit` capped at 1,000, and return the job
+`bulk_id`, the echoed page `offset` and `limit`, `total_items`, and page
+lists:
+
+- the items page returns one `items` list of metadata (`index`, optional
+  `id`, `task_id`, `stage`, optional `error`).
+- the results page returns an `items` list for successful or in-progress
+  work (completed items add a `result`; in-progress items carry
+  `result: null`) plus a separate `failed_items` metadata list for the same
+  page.
+
+The documented bulk error matrix is: `401` missing or invalid key, `402`
+insufficient credits, `403` model not enabled or job not owned, `404` unknown
+job, `413` over the billable-unit limit, `422` empty/duplicate-ID/both-shapes/
+invalid-model validation, `500` processing error, and `503` model temporarily
+unavailable. Only the safe GET routes (`GET /bulk/{bulk_id}`, `/items`,
+`/results`) are eligible for the bounded transient-failure retry policy; the
+billable `POST /bulk` is never replayed after an ambiguous send (section
+12.1).
 
 ## 10. Progress events
 

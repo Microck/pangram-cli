@@ -2,10 +2,11 @@ use std::str::FromStr;
 
 use microck_pangram_cli::domain::{
     AiDetectionResult, Analysis, AnalysisId, AnalysisInput, AnalysisStatus, BulkCollection,
-    BulkCounters, BulkId, BulkItem, BulkItemState, BulkPage, Check, CheckKind, CheckState,
-    CheckStatus, FileInput, LocalOperationId, OrderedChecks, Provenance, Sha256Hash,
-    SubmissionOutcome, SubmissionOutcomeUnknownDetails, TEXT_BILLING_UNIT_WORDS, UpstreamBulkId,
-    UpstreamIdentity, UpstreamTaskIds, UtcTimestamp, derive_parent_status, text_billable_units,
+    BulkCounters, BulkId, BulkItem, BulkItemState, BulkPage, BulkSubmissionItem,
+    BulkSubmissionPlan, Check, CheckKind, CheckState, CheckStatus, FileInput, LocalOperationId,
+    OrderedChecks, Provenance, Sha256Hash, SubmissionOutcome, SubmissionOutcomeUnknownDetails,
+    TEXT_BILLING_UNIT_WORDS, UpstreamBulkId, UpstreamIdentity, UpstreamTaskIds, UtcTimestamp,
+    bulk_estimated_billable_units, derive_parent_status, text_billable_units,
 };
 use proptest::prelude::*;
 use schemars::schema_for;
@@ -169,6 +170,46 @@ fn text_billable_units_pinned_boundaries() {
 
     for (words, expected) in cases {
         assert_eq!(text_billable_units(*words), *expected, "words = {words}");
+    }
+}
+
+proptest! {
+    // Pangram 4 bulk billing is the sum of each valid item's started
+    // 100-word units, minimum one per item. The plan enforces the smaller of
+    // the caller ceiling and the 1,000-unit upstream cap, and rejects an
+    // estimate above it before any network work (roadmap Phase 3 gate).
+    #[test]
+    fn bulk_plan_accepts_every_estimate_at_or_below_the_effective_ceiling(
+        // Keep item units small so a modest item count can cross 1000: 1 unit
+        // each (0..=100 words), up to 1100 items, caller ceiling 0..=1500.
+        word_counts in prop::collection::vec(0_u64..=100, 1..=1100),
+        caller_ceiling in 0_u64..=1500,
+    ) {
+        let items: Vec<BulkSubmissionItem> = word_counts
+            .iter()
+            .map(|words| BulkSubmissionItem::new(None, "text".to_owned(), *words).unwrap())
+            .collect();
+        // Each item is one started-100-word unit here (0..=100 words).
+        let estimate = bulk_estimated_billable_units(word_counts.iter().copied()).unwrap();
+        prop_assert_eq!(estimate, word_counts.len() as u64);
+
+        let plan = BulkSubmissionPlan::new(items, caller_ceiling);
+        let effective = caller_ceiling.min(1000);
+        if caller_ceiling == 0 {
+            prop_assert!(plan.is_err(), "a zero caller ceiling is rejected");
+        } else if estimate <= effective {
+            let plan = plan.expect("an estimate within the ceiling passes preflight");
+            prop_assert_eq!(plan.estimated_billable_units(), estimate);
+            // One job-wide model and exactly one of items/text.
+            let body = plan.submit_body();
+            prop_assert_eq!(&body["model"], &serde_json::json!("pangram-4"));
+            prop_assert_eq!(body.get("public_dashboard_link"), None);
+        } else {
+            prop_assert_eq!(
+                plan.unwrap_err(),
+                microck_pangram_cli::domain::DomainError::BulkLimitExceeded
+            );
+        }
     }
 }
 

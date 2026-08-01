@@ -5,6 +5,7 @@
 //! and contract matrices) over one shared support module; each file stays
 //! below the repository's 800-line decomposition threshold.
 
+mod bulk_protocol;
 mod contract_matrix;
 mod observation;
 mod submission;
@@ -14,8 +15,8 @@ mod fixture;
 
 mod support {
     pub(crate) use super::fixture::{
-        ProtocolFixture, SYNTHETIC_KEY, SYNTHETIC_TEXT, Step, TASK_ID, pangram4_failure,
-        pangram4_success,
+        BulkProbeClient, BulkProbeOutcome, BulkRequestView, ProtocolFixture, SYNTHETIC_KEY,
+        SYNTHETIC_TEXT, Step, TASK_ID, pangram4_failure, pangram4_success,
     };
     pub(crate) use microck_pangram_cli::analysis::{
         AnalysisRequest, Analyzer, Duration, PollPolicy, RetryPolicy, StopObserving, WaitOptions,

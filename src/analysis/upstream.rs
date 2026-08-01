@@ -100,6 +100,52 @@ impl UpstreamEndpoints {
     }
 }
 
+/// Loopback-only bulk URL derivation for the protocol fixture (Phase 3
+/// contract packet). The bulk routes join beneath the same loopback server
+/// root as the task endpoints, mirroring the production rule that all bulk
+/// routes live under `https://text.external-api.pangram.com/bulk` (contracts
+/// section 9.1). Production bulk URL production is deliberately not exposed
+/// until the Phase 3 production client packet owns it.
+#[cfg(any(test, feature = "dev-tools", doctest))]
+impl UpstreamEndpoints {
+    /// `POST /bulk` plus the base for the three GET routes.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bulk_base(&self) -> String {
+        // `submit` is `<root>/task`; the bulk routes are `<root>/bulk`.
+        let root = self.submit.strip_suffix("/task").unwrap_or(&self.submit);
+        format!("{root}/bulk")
+    }
+
+    /// `GET /bulk/{bulk_id}`.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bulk_status_url(&self, bulk_id: &str) -> String {
+        format!("{}/{}", self.bulk_base(), encode_path(bulk_id))
+    }
+
+    /// `GET /bulk/{bulk_id}/items?offset=&limit=`. Both are caller-supplied;
+    /// the client is responsible for bounding `limit` at the documented 1000.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bulk_items_url(&self, bulk_id: &str, offset: u64, limit: u64) -> String {
+        format!(
+            "{}/items?offset={offset}&limit={limit}",
+            self.bulk_status_url(bulk_id)
+        )
+    }
+
+    /// `GET /bulk/{bulk_id}/results?offset=&limit=`.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bulk_results_url(&self, bulk_id: &str, offset: u64, limit: u64) -> String {
+        format!(
+            "{}/results?offset={offset}&limit={limit}",
+            self.bulk_status_url(bulk_id)
+        )
+    }
+}
+
 /// Percent-encodes the characters a path segment cannot carry. Pangram task
 /// IDs are documented as simple tokens; this is belt-and-braces so a future
 /// opaque ID cannot break URL structure.
@@ -281,6 +327,15 @@ impl<C: Clock> UpstreamClient<C> {
     #[must_use]
     pub const fn config(&self) -> &AnalysisConfig<C> {
         &self.config
+    }
+
+    /// The resolved endpoint set. Exposed for the `dev-tools` protocol
+    /// fixture's bulk probe; production adapters never read it.
+    #[cfg(any(test, feature = "dev-tools", doctest))]
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn endpoints(&self) -> &UpstreamEndpoints {
+        &self.endpoints
     }
 
     /// Submits one Pangram 4 text-analysis task. This is billable: on any

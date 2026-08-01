@@ -475,6 +475,33 @@ behavior enters this queue before implementation continues through that seam.
   mcp-contract.md remains the sole MCP bulk surface contract. Phase 3 stays In
   progress; public support still requires implementation plus live
   conformance.
+- 2026-08-01: The second bounded Phase 3 packet locks the official bulk
+  wire/domain contract and lands the real Axum loopback fixture foundation.
+  The official Bulk API source `eb214f4` was re-verified as the latest commit
+  on `api-reference/bulk-api.mdx` on 2026-08-01, and contracts.md gained
+  section 9.1 pinning the exact documented wire shapes: submit `items`/`text`
+  plus one job-wide `model` (`pangram-4`, no per-item selector, no
+  public-link field), the 202 accepted/failed item lists, the status
+  counters, items/results pages (offset/limit, max limit 1,000), epoch-second
+  string timestamps, 48-hour terminal retention, and the 401/402/403/404/413/
+  422/500/503 error matrix. `src/domain/bulk.rs` adds the typed,
+  constructor-validated `BulkSubmissionItem`/`BulkSubmissionPlan` (ordered
+  items, unique caller IDs, the min(caller ceiling, 1000) effective ceiling,
+  checked estimate, whole-file JSONL validation) and the deserialization
+  fixture wire types for submit/status/items/results responses.
+  `tests/support/protocol_loopback/bulk.rs` extends the real Axum fixture
+  with the four documented `/bulk` routes, scripted queues, and a loopback
+  `BulkProbeClient` (real reqwest against the fixture, decoding 2xx bodies
+  into the domain wire types); eleven `bulk_protocol` integration tests prove
+  the request grammar, 413/no-replay, terminal failure, partial child
+  results, page offset/limit/query, and stalled/safe-retry surfaces. The
+  route URL derivation lives behind a `dev-tools`-gated
+  `UpstreamEndpoints::bulk_*` accessor; no production endpoint constants or
+  production bulk client exist yet. The compiled CLI, README availability,
+  and MCP surface are unchanged (no capability Tegami). Generated contracts
+  show no drift: the new wire types are fixture spines, not public output
+  schema types. Phase 3 stays In progress; public support still requires the
+  production analysis client and live conformance.
 
 ## Out of scope
 
