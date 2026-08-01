@@ -103,12 +103,13 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
 // (Tokio runtime utilities, the rustls-only Reqwest client, and
 // CancellationToken support). The analysis module owns every network path.
 // `toon-format` joins for the canonical TOON projection of the JSON envelope.
-const PHASE_2_RUNTIME_DEPENDENCIES: &[&str] = &[
+const PHASE_4_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
     "directories",
     "jiff",
     "reqwest",
     "rpassword",
+    "rusqlite",
     "schemars",
     "secrecy",
     "serde",
@@ -598,7 +599,7 @@ fn mcp_file_roots_are_explicit_repeatable_startup_options() {
 }
 
 #[test]
-fn cargo_metadata_reports_the_exact_phase_one_runtime_dependencies() {
+fn cargo_metadata_reports_the_exact_runtime_dependencies() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -626,7 +627,7 @@ fn cargo_metadata_reports_the_exact_phase_one_runtime_dependencies() {
         .filter(|dependency| dependency["kind"].is_null())
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
-    let expected: BTreeSet<_> = PHASE_2_RUNTIME_DEPENDENCIES.iter().copied().collect();
+    let expected: BTreeSet<_> = PHASE_4_RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
 }
 

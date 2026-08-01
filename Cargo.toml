@@ -33,6 +33,24 @@ reqwest = { version = "=0.13.4", default-features = false, features = [
     "stream",
 ] }
 rpassword = "=7.5.4"
+# Local history storage (architecture-spec 11.1): bundled SQLite with FTS5.
+# `default-features = false` keeps rusqlite's `cache` (hashlink) default out
+# of the shipped graph (rusqlite 0.39.0 has no other default feature).
+# `bundled` compiles vendored SQLite 3.51.3 through the transitive
+# libsqlite3-sys 0.37.0, whose build script unconditionally defines
+# SQLITE_ENABLE_FTS5 (evidence-ledger). No async database abstraction;
+# adapters use spawn_blocking when needed.
+# Pin note: rusqlite 0.40.1/0.38.1 effectively require Rust 1.95
+# (`cfg_select!`, stabilized in 1.95, is used in rusqlite source and in the
+# libsqlite3-sys 0.38.1 build script), which exceeds the locked package MSRV
+# of 1.87. rusqlite 0.39.0 requires `libsqlite3-sys ^0.37.0`; under Cargo's
+# 0.x caret semantics ^0.37.0 resolves only to >=0.37.0, <0.38.0, so the
+# incompatible 0.38.1 can never be selected, and Cargo.lock pins the
+# transitive 0.37.0 on top of that. No direct libsqlite3-sys dependency is
+# needed: this is the newest pair that compiles on Rust 1.87.0.
+rusqlite = { version = "=0.39.0", default-features = false, features = [
+    "bundled",
+] }
 schemars = { version = "=1.2.2", features = ["jiff02", "preserve_order", "uuid1"] }
 secrecy = "=0.10.3"
 serde = { version = "=1.0.229", features = ["derive"] }
