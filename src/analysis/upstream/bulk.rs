@@ -51,9 +51,7 @@ impl<C: Clock> UpstreamClient<C> {
                 return Err(SubmitOutcome::Cancelled);
             }
         }
-        let outcome = self
-            .post(&self.endpoints().bulk_submit_url(), &body, cancel)
-            .await;
+        let outcome = self.post(&self.bulk_submit_url(), &body, cancel).await;
         match outcome {
             SendOutcome::Responded(response) => classify_bulk_submit(response),
             SendOutcome::Cancelled { issued } => {

@@ -329,6 +329,13 @@ Closed `origin` values:
 - `literal`
 - `stdin`
 - `file`
+- `unknown`
+
+`unknown` marks the descriptor of a remotely authored operation the caller
+observes by explicit upstream ID (section 4.6): the input was submitted by
+another actor or process, so no local submission category applies. It is
+valid only on that resumed-observation path; locally submitted commands
+never emit it.
 
 `name` is present for a text file. `text` is omitted unless the caller
 explicitly requests input content or reads a full saved export.
@@ -400,6 +407,44 @@ Every timeout or handled interruption after acceptance reports the local ID,
 known upstream identifiers, and last observed state before exit. With history
 disabled, the process retains this identity only in its final output; it does
 not create a hidden task ledger.
+
+### 4.6 Resumed observation authorship
+
+A command that observes a Pangram operation by its explicit upstream ID
+(`task status`, `task wait`, and every bulk status, wait, items, and results
+read of a job not submitted in the same invocation) reconciles a remote
+record it did not author. With local history disabled, the process retains no
+authorship record of earlier submissions, so the canonical analysis or bulk
+collection it emits honestly records only the observed remote state and never
+fabricates a local authorship fact:
+
+- the local `anl_` or `bulk_` identity is generated fresh for the read, so
+  the envelope stays self-describing; it makes no claim about the original
+  submission's local identity
+- `submission_outcome` is `accepted` whenever an upstream identity was
+  observed (the evidence that a remote operation exists), never `terminal`;
+  `terminal` is reserved for an operation the caller itself submitted, so a
+  resumed read never claims it
+- `provenance.submitted_at` is omitted because the caller did not submit the
+  operation; `provenance.completed_at` is present only when observation
+  reached a terminal state, and preserves that observation's time
+- `provenance` carries the observed upstream identities
+  (`upstream_task_ids`, `upstream_bulk_id`, and `upstream_version` from a
+  terminal document) and nothing inferred
+- a resumed analysis or collection carries a descriptor only for what the
+  local caller actually holds. A same-process `bulk wait` or `bulk results`
+  after `bulk submit` builds each item's input descriptor from the validated
+  local plan (section 9.1). A `task` read holds no local submission plan, so
+  its item descriptor derives only from the terminal document Pangram
+  attested: when a terminal success document carries the normalized text,
+  the descriptor computes SHA-256, byte count, word count, and the
+  `unknown` origin over that attested text, and it never echoes the text
+  itself. A task read that has not yet reached a terminal document carries
+  no input descriptor (`input` is omitted) rather than inventing one
+
+Workflow caveat: none of this exposes content. A terminal task read surfaces
+hashes and counts, not the submitted text, unless the caller separately
+holds and supplies it locally.
 
 ## 5. AI-detection result
 

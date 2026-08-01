@@ -207,6 +207,7 @@ fn origin_label(origin: crate::domain::TextOrigin) -> &'static str {
         crate::domain::TextOrigin::Literal => "literal",
         crate::domain::TextOrigin::Stdin => "stdin",
         crate::domain::TextOrigin::File => "file",
+        crate::domain::TextOrigin::Unknown => "unknown",
     }
 }
 
@@ -333,8 +334,10 @@ fn write_analysis_markdown<W: HumanWriter>(
         "submission_outcome",
         submission_label(analysis.submission_outcome()),
     )?;
-    for (label, value) in input_summary(&analysis.input) {
-        writer.label_value(&writer.escape(label), &writer.escape(value))?;
+    if let Some(input) = analysis.input() {
+        for (label, value) in input_summary(input) {
+            writer.label_value(&writer.escape(label), &writer.escape(value))?;
+        }
     }
     writer.label_value("save_state", save_label(analysis.save_state))?;
     writer.label_value("created_at", &analysis.created_at.to_string())?;
@@ -348,9 +351,10 @@ fn write_analysis_markdown<W: HumanWriter>(
     // (`--include-input`, which makes the canonical input record carry the
     // text). Headlines/predictions and all numeric evidence still always
     // render.
-    let echo_segment_text = match &analysis.input {
-        AnalysisInput::Text(text) => text.text.is_some(),
-        AnalysisInput::File(file) => file.extracted_text.is_some(),
+    let echo_segment_text = match analysis.input() {
+        Some(AnalysisInput::Text(text)) => text.text.is_some(),
+        Some(AnalysisInput::File(file)) => file.extracted_text.is_some(),
+        None => false,
     };
     writer.heading(3, "Checks")?;
     for check in analysis.checks() {

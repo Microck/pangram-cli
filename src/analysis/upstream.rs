@@ -341,6 +341,12 @@ impl<C: Clock> UpstreamClient<C> {
         &self.endpoints
     }
 
+    /// The exact bulk submit URL (production or loopback). Internal to the
+    /// analysis module; adapters never construct URLs.
+    pub(crate) fn bulk_submit_url(&self) -> String {
+        self.endpoints.bulk_submit_url()
+    }
+
     /// The exact bulk status URL for one job (production or loopback).
     /// Internal to the analysis module; adapters never construct URLs.
     pub(crate) fn bulk_status_url(&self, bulk_id: &str) -> String {

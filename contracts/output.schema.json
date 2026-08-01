@@ -25,7 +25,12 @@
           "$ref": "#/$defs/SubmissionOutcome"
         },
         "input": {
-          "$ref": "#/$defs/AnalysisInput"
+          "description": "The canonical input descriptor. Omitted only on a resumed-observation\nread whose remote operation has not yet reached a terminal document\n(contracts.md 4.6); locally submitted commands always carry one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisInput"
+            }
+          ]
         },
         "checks": {
           "$ref": "#/$defs/OrderedChecks"
@@ -68,7 +73,6 @@
         "id",
         "status",
         "submission_outcome",
-        "input",
         "checks",
         "save_state",
         "provenance",
@@ -468,11 +472,20 @@
       ]
     },
     "TextOrigin": {
-      "type": "string",
-      "enum": [
-        "literal",
-        "stdin",
-        "file"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "literal",
+            "stdin",
+            "file"
+          ]
+        },
+        {
+          "description": "The input of a remotely authored operation the client observes by\nexplicit upstream ID (contracts.md 4.6). Valid only on resumed\nreads; never produced by a locally submitted command.",
+          "type": "string",
+          "const": "unknown"
+        }
       ]
     },
     "Sha256Hash": {
@@ -1641,7 +1654,10 @@
           "minimum": 0
         },
         "estimated_billable_units": {
-          "type": "integer",
+          "description": "The locally computed billing estimate, present only when the caller\nholds the validated local submission plan (contracts.md 4.6): a\nresumed observation of a remotely authored job omits it rather than\nfabricating a charge.",
+          "type": [
+            "integer"
+          ],
           "format": "uint64",
           "minimum": 1
         },
@@ -1667,7 +1683,6 @@
         "accepted",
         "succeeded",
         "failed",
-        "estimated_billable_units",
         "created_at",
         "updated_at"
       ],

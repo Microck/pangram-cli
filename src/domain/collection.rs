@@ -98,8 +98,13 @@ pub struct BulkCollection {
     submission_outcome: SubmissionOutcome,
     #[serde(flatten)]
     counters: BulkCounters,
+    /// The locally computed billing estimate, present only when the caller
+    /// holds the validated local submission plan (contracts.md 4.6): a
+    /// resumed observation of a remotely authored job omits it rather than
+    /// fabricating a charge.
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
-    estimated_billable_units: u64,
+    estimated_billable_units: Option<u64>,
     created_at: UtcTimestamp,
     updated_at: UtcTimestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,12 +119,12 @@ impl BulkCollection {
         status: AnalysisStatus,
         submission_outcome: SubmissionOutcome,
         counters: BulkCounters,
-        estimated_billable_units: u64,
+        estimated_billable_units: Option<u64>,
         created_at: UtcTimestamp,
         updated_at: UtcTimestamp,
         completed_at: Option<UtcTimestamp>,
     ) -> Result<Self, DomainError> {
-        if estimated_billable_units == 0 {
+        if matches!(estimated_billable_units, Some(0)) {
             return Err(DomainError::OutOfRange("estimated billable units"));
         }
         let status_is_valid = match status {
@@ -175,6 +180,26 @@ impl BulkCollection {
     pub const fn counters(&self) -> &BulkCounters {
         &self.counters
     }
+
+    #[must_use]
+    pub const fn id(&self) -> BulkId {
+        self.id
+    }
+
+    #[must_use]
+    pub const fn submission_outcome(&self) -> SubmissionOutcome {
+        self.submission_outcome
+    }
+
+    #[must_use]
+    pub const fn upstream_bulk_id(&self) -> Option<&UpstreamBulkId> {
+        self.upstream_bulk_id.as_ref()
+    }
+
+    #[must_use]
+    pub const fn estimated_billable_units(&self) -> Option<u64> {
+        self.estimated_billable_units
+    }
 }
 
 #[derive(Deserialize)]
@@ -186,7 +211,8 @@ struct BulkCollectionWire {
     submission_outcome: SubmissionOutcome,
     #[serde(flatten)]
     counters: BulkCounters,
-    estimated_billable_units: u64,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    estimated_billable_units: Option<u64>,
     created_at: UtcTimestamp,
     updated_at: UtcTimestamp,
     #[serde(default, deserialize_with = "deserialize_missing_only")]

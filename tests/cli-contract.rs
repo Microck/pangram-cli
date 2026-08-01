@@ -70,6 +70,8 @@ Commands:
   config  Inspect and edit the local Pangram configuration
   doctor  Run local diagnostics without network access or credential validation
   detect  Detect AI-generated text through Pangram 4
+  bulk    Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
+  task    Inspect or wait for a Pangram 4 text task
   help    Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -87,13 +89,11 @@ Options:
 const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "agent",
     "analyze",
-    "bulk",
     "completions",
     "history",
     "mcp",
     "plagiarism",
     "skills",
-    "task",
     "update",
 ];
 
@@ -472,12 +472,12 @@ fn bulk_submit_has_no_public_link_in_the_rust_owned_grammar() {
     }
 }
 
-/// Phase 3 has not activated any bulk or task surface: the grammar keeps
-/// every bulk and task entry planned, and the compiled help/runtime exposes
-/// none of them. A bare token spelling one is literal detect text, never a
-/// dispatched subcommand.
+/// Phase 3 packet 4 activated the bulk and task surfaces: the grammar marks
+/// every entry available, the compiled help advertises both parents, and a
+/// bare invocation of either parent is a Clap usage error (exit 2), never
+/// literal detect text.
 #[test]
-fn bulk_and_task_commands_remain_planned_at_the_packet_boundary() {
+fn bulk_and_task_commands_are_available_at_the_activation_packet() {
     for path in [
         ["bulk"].as_slice(),
         ["bulk", "submit"].as_slice(),
@@ -491,8 +491,8 @@ fn bulk_and_task_commands_remain_planned_at_the_packet_boundary() {
         let spec = command(path);
         assert_eq!(
             spec.availability,
-            Availability::Planned,
-            "{path:?} must remain planned until the Phase 3 activation packet"
+            Availability::Available,
+            "{path:?} must be available at the Phase 3 activation packet"
         );
     }
 
@@ -505,9 +505,15 @@ fn bulk_and_task_commands_remain_planned_at_the_packet_boundary() {
         .collect();
     for name in ["bulk", "task"] {
         assert!(
-            !listed_commands.contains(&name),
-            "{name} must not appear in the compiled help Commands listing"
+            listed_commands.contains(&name),
+            "{name} must appear in the compiled help Commands listing"
         );
+
+        // A bare parent is a usage error, never literal detection text.
+        let output = pangram().arg(name).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("Usage:"), "{name}: {stderr}");
     }
 }
 

@@ -343,16 +343,14 @@ fn generated_cli_reference_keeps_bulk_submit_free_of_public_link() {
         .expect("detect keeps its contracted --public-link flag");
     assert_eq!(detect_public_link["availability"], json!("available"));
 
-    // Bulk submit itself must remain planned: this packet fixes the seed
-    // grammar only and activates no Phase 3 surface.
-    assert_eq!(bulk_submit["availability"], json!("planned"));
+    // Bulk submit itself is available at the Phase 3 activation packet.
+    assert_eq!(bulk_submit["availability"], json!("available"));
 }
 
-// The generated help fixture lists only implemented (available) top-level
-// commands; the planned Phase 3 bulk and task namespaces must not surface
-// anywhere in it.
+// The generated help fixture lists the implemented (available) top-level
+// commands; the Phase 3 bulk and task namespaces surface in it.
 #[test]
-fn generated_cli_help_lists_no_planned_bulk_or_task_surface() {
+fn generated_cli_help_lists_the_activated_bulk_and_task_surface() {
     let GeneratedArtifact { bytes, .. } = generated_artifacts()
         .unwrap()
         .into_iter()
@@ -369,8 +367,8 @@ fn generated_cli_help_lists_no_planned_bulk_or_task_surface() {
 
     for name in ["bulk", "task"] {
         assert!(
-            !listed.contains(&name),
-            "generated cli-help.txt must not list the planned {name} command"
+            listed.contains(&name),
+            "generated cli-help.txt must list the available {name} command"
         );
     }
 }

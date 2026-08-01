@@ -485,7 +485,7 @@ fn bulk_collection(
         status,
         outcome,
         counters,
-        2,
+        Some(2),
         timestamp,
         timestamp,
         None,

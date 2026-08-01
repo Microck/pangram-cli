@@ -221,7 +221,13 @@ pub struct RunningBulk<C = super::config::SystemClock> {
     client: UpstreamClient<C>,
     bulk_id: BulkId,
     upstream_bulk_id: UpstreamBulkId,
-    plan: BulkSubmissionPlan,
+    /// The validated local submission plan. `Some` for an operation this
+    /// process submitted (or a same-process resume), so per-item input
+    /// descriptors are built from trusted local data only. `None` for a
+    /// resumed observation of a remotely authored job (contracts.md 4.6):
+    /// page items then derive descriptors only from upstream-attested
+    /// terminal content, and the collection omits the billing estimate.
+    plan: Option<BulkSubmissionPlan>,
     last: crate::domain::BulkCounters,
     last_status: AnalysisStatus,
 }
@@ -249,9 +255,11 @@ impl<C: Clock> RunningBulk<C> {
         &self.upstream_bulk_id
     }
 
+    /// The validated local plan when this handle describes a locally
+    /// submitted (or planned) operation; `None` on a resumed observation.
     #[must_use]
-    pub const fn plan(&self) -> &BulkSubmissionPlan {
-        &self.plan
+    pub const fn plan(&self) -> Option<&BulkSubmissionPlan> {
+        self.plan.as_ref()
     }
 
     /// The most recent observed status/counter state (for fetch-all
@@ -293,8 +301,11 @@ impl<C: Clock> RunningBulk<C> {
         let wire: crate::domain::BulkStatusResponse = response.json().map_err(|error| {
             PollError::Failed(Box::new(contract_symptom("body", error.to_string())))
         })?;
-        let plan_total = u64::try_from(self.plan.items().len()).unwrap_or(u64::MAX);
-        let normalized = bulk::normalize_bulk_status(&wire, Some(plan_total))
+        let plan_total = self
+            .plan
+            .as_ref()
+            .map(|plan| u64::try_from(plan.items().len()).unwrap_or(u64::MAX));
+        let normalized = bulk::normalize_bulk_status(&wire, plan_total)
             .map_err(|error| PollError::Failed(Box::new(error)))?;
         if normalized.bulk_id.as_str() != self.upstream_bulk_id.as_str() {
             return Err(PollError::Failed(Box::new(contract_symptom(
@@ -497,7 +508,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             client: self.client.clone(),
             bulk_id: request.id(),
             upstream_bulk_id,
-            plan: request.plan().clone(),
+            plan: Some(request.plan().clone()),
             last: counters,
             last_status: initial_status,
         }
@@ -520,7 +531,28 @@ impl<C: Clock> BulkAnalyzer<C> {
             client: self.client.clone(),
             bulk_id,
             upstream_bulk_id,
-            plan,
+            plan: Some(plan),
+            last: counters,
+            last_status: AnalysisStatus::Queued,
+        }
+    }
+
+    /// Rehydrates a running handle to observe a remotely authored job by its
+    /// explicit upstream ID (`bulk status`, `bulk wait`, `bulk results` of a
+    /// job not submitted in this process). No local plan exists, so per-item
+    /// descriptors derive only from upstream-attested terminal content and
+    /// the collection omits the billing estimate (contracts.md 4.6). Initial
+    /// counters are the minimal non-terminal placeholder; the first status
+    /// observation rehydrates the real counters.
+    #[must_use]
+    pub fn resume_observed(&self, upstream_bulk_id: UpstreamBulkId) -> RunningBulk<C> {
+        let counters = crate::domain::BulkCounters::new(1, 0, 0, 0)
+            .expect("a total-only counter set is valid");
+        RunningBulk {
+            client: self.client.clone(),
+            bulk_id: BulkId::new(),
+            upstream_bulk_id,
+            plan: None,
             last: counters,
             last_status: AnalysisStatus::Queued,
         }

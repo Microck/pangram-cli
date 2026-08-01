@@ -176,6 +176,7 @@ fn analysis_exit_code(analysis: &crate::domain::Analysis<CanonicalError>) -> Exi
 /// policy is resolved from the global flags alone, defaulting a pre-flag
 /// failure to the contract's machine-JSON default.
 pub(crate) fn early_failure(
+    command: ResolvedCommand,
     global: super::GlobalFlags,
     streams: &dyn crate::cli::StreamTty,
     started_at: crate::domain::UtcTimestamp,
@@ -196,17 +197,18 @@ pub(crate) fn early_failure(
         color,
         error: surface,
     };
-    failure_outcome(output, started_at, error)
+    failure_outcome(command, output, started_at, error)
 }
 
 pub(crate) fn failure_outcome(
+    command: ResolvedCommand,
     output: ResolvedOutput,
     started_at: crate::domain::UtcTimestamp,
     error: CanonicalError,
 ) -> DetectOutcome {
     let exit_code = ExitCode::for_error(error.category()).as_u8();
     let envelope = CommandEnvelope::failure(
-        ResolvedCommand::Detect,
+        command,
         error,
         EnvelopeMeta::default()
             .with_started_at(started_at)
@@ -229,7 +231,8 @@ pub(crate) fn failure_outcome(
     }
 }
 
-pub(super) fn interrupted_outcome(
+pub(crate) fn interrupted_outcome(
+    command: ResolvedCommand,
     output: ResolvedOutput,
     started_at: crate::domain::UtcTimestamp,
     error: CanonicalError,
@@ -237,7 +240,7 @@ pub(super) fn interrupted_outcome(
 ) -> DetectOutcome {
     note_stderr_raw(&note);
     let envelope = CommandEnvelope::failure(
-        ResolvedCommand::Detect,
+        command,
         error,
         EnvelopeMeta::default()
             .with_started_at(started_at)
@@ -262,6 +265,23 @@ pub(super) fn interrupted_outcome(
             }
         }
     }
+}
+
+/// Renders a single success envelope as the primary output through the one
+/// projection owner. Shared by detection, bulk, and task commands so every
+/// projection boundary stays identical.
+pub(crate) fn primary_outcome(
+    envelope: &CommandEnvelope,
+    output: ResolvedOutput,
+    exit_code: u8,
+    started_at: crate::domain::UtcTimestamp,
+) -> DetectOutcome {
+    emit_primary(
+        std::slice::from_ref(envelope),
+        output,
+        exit_code,
+        started_at,
+    )
 }
 
 /// Renders the primary envelope to stdout through the single projection
@@ -311,17 +331,17 @@ fn emit_error_text(envelope: &CommandEnvelope) -> bool {
 /// Strips control characters from a message before it reaches stderr. One
 /// owner: this delegates to the projection-owned terminal sanitizer so both
 /// write boundaries strip exactly the same scalars and can never diverge.
-pub(super) fn sanitize_for_stderr(text: &str) -> String {
+pub(crate) fn sanitize_for_stderr(text: &str) -> String {
     crate::output::sanitize_terminal(text)
 }
 
 /// An advisory diagnostic note always goes to stderr, TTY or not, per the
 /// shell contract; it carries no content and no ANSI.
-pub(super) fn note_stderr(_streams: &dyn crate::cli::StreamTty, note: &str) {
+pub(crate) fn note_stderr(_streams: &dyn crate::cli::StreamTty, note: &str) {
     note_stderr_raw(note);
 }
 
-pub(super) fn note_stderr_raw(note: &str) {
+pub(crate) fn note_stderr_raw(note: &str) {
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(stderr, "note: {note}");
     let _ = stderr.flush();
@@ -332,7 +352,7 @@ pub(super) fn note_stderr_raw(note: &str) {
 /// upstream-supplied task id and stage token are untrusted, so each is
 /// sanitized for the terminal at the write boundary (control sequences
 /// stripped) before it is assembled into the note.
-pub(super) fn identity_note(identity: &crate::analysis::OperationIdentity) -> String {
+pub(crate) fn identity_note(identity: &crate::analysis::OperationIdentity) -> String {
     let mut note = format!("interrupted; local analysis id {}", identity.analysis_id);
     if let Some(task_id) = &identity.task_id {
         note.push_str(&format!(
@@ -354,19 +374,20 @@ fn internal_outcome(
     started_at: crate::domain::UtcTimestamp,
 ) -> DetectOutcome {
     failure_outcome(
+        ResolvedCommand::Detect,
         output,
         started_at,
         internal_error("the result could not be rendered honestly"),
     )
 }
 
-pub(super) fn internal_error(message: &str) -> CanonicalError {
+pub(crate) fn internal_error(message: &str) -> CanonicalError {
     CanonicalError::new(ErrorCode::UpstreamError, message)
         .and_then(|error| error.with_contextual_retryability(false))
         .expect("the internal-error template is statically valid")
 }
 
-pub(super) fn usage_error(code: ErrorCode, message: &str) -> CanonicalError {
+pub(crate) fn usage_error(code: ErrorCode, message: &str) -> CanonicalError {
     CanonicalError::new(code, message).expect("usage messages are non-empty")
 }
 
@@ -385,7 +406,7 @@ pub(crate) fn missing_api_key_error() -> CanonicalError {
 
 /// Milliseconds between `started_at` and now, for canonical `duration_ms`.
 /// A clock skew clamps at zero rather than wrapping.
-fn elapsed_ms(started: crate::domain::UtcTimestamp) -> u64 {
+pub(crate) fn elapsed_ms(started: crate::domain::UtcTimestamp) -> u64 {
     let now = crate::domain::UtcTimestamp::now().get();
     match now.duration_since(started.get()) {
         duration if duration.is_negative() => 0,
