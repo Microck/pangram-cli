@@ -30,8 +30,9 @@ pub(crate) use client::{
     resolve_api_key,
 };
 pub(crate) use render::{
-    DetectOutcome, early_failure, elapsed_ms, failure_outcome, identity_note, internal_error,
-    interrupted_outcome, note_stderr, primary_outcome, sanitize_for_stderr, usage_error,
+    DetectOutcome, analysis_exit_code, early_failure, elapsed_ms, failure_outcome, identity_note,
+    internal_error, interrupted_outcome, note_stderr, primary_outcome, sanitize_for_stderr,
+    usage_error,
 };
 
 use clap::ArgMatches;

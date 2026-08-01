@@ -150,8 +150,9 @@ fn run_exit_code(analyses: &[crate::domain::Analysis<CanonicalError>]) -> ExitCo
 
 /// One analysis: a terminal failure exits per its check error's category
 /// (locked for the upstream `STAGE_FAILED` case at exit 6); every other
-/// status exits 0.
-fn analysis_exit_code(analysis: &crate::domain::Analysis<CanonicalError>) -> ExitCode {
+/// status exits 0. Shared with the task adapter so `task status`/`task wait`
+/// derive the identical category-mapped exit (contracts.md 12).
+pub(crate) fn analysis_exit_code(analysis: &crate::domain::Analysis<CanonicalError>) -> ExitCode {
     match analysis.status() {
         crate::domain::AnalysisStatus::Failed => analysis
             .checks()

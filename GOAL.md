@@ -523,6 +523,27 @@ behavior enters this queue before implementation continues through that seam.
   index 1 window, and the hostile `u64::MAX`/plan-mismatch allocation guards.
   contracts.md and the shared fragment were updated contract-first. Phase 3
   stays In progress; public bulk support still requires live conformance.
+- 2026-08-01: A fourth Phase 3 remediation packet landed contract-first and
+  test-first, addressing the review findings on the CLI bulk/task activation.
+  The bulk/task CLI adapter decomposed from `src/cli/bulk.rs` into the
+  cohesive `src/cli/bulk/` modules (`mod`, `policy`, `plan`, `submit`,
+  `status_wait`, `results`, `task`), each below the hygiene threshold and
+  sharing the detection preparation, async runtime, and projection owners. A
+  Rust-owned typed dry-run schema, closed `bulk_submit` union
+  (`BulkDryRun`/`BulkSubmitOutput`), and projection now own the dry-run
+  reconciliation shape, refreshed through the official generator with no
+  drift beyond the intended singular closed union. Dozens of compiled-binary
+  loopback tests across `tests/bulk-task-cli-loopback.rs`,
+  `tests/bulk-task-status-results-loopback.rs`, and the shared
+  `tests/support/bulk_cli_env.rs` lock the exact exit, stdout-envelope,
+  stderr-separation, help, one-POST no-replay, and loopback grammar of the
+  bulk and task surfaces. A non-JSON `--format` on `bulk submit` (submitted
+  or dry-run) is rejected as `unsupported_combination` before any source
+  read, plan validation, credential resolution, or network access. The real
+  documented normalization is kept and tested: an upstream terminal
+  `STAGE_FAILED` exits 6 per its upstream category. The minor Tegami bump is
+  set for both packages. Phase 3 stays In progress; public bulk/task support
+  still requires live conformance.
 
 ## Out of scope
 

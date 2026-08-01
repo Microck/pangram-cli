@@ -141,7 +141,8 @@ JSON envelope commands and their `data` roots are closed:
 | --- | --- |
 | `detect`, `plagiarism`, `analyze` | one analysis, or an ordered analysis array for repeated files |
 | `task_status`, `task_wait`, `history_show`, `history_rerun` | one analysis |
-| `bulk_submit`, `bulk_status`, `bulk_wait` | one bulk collection |
+| `bulk_submit` | one bulk collection, or the canonical bulk dry-run shape (section 9.2) |
+| `bulk_status`, `bulk_wait` | one bulk collection |
 | `bulk_results` | one ordered bulk-item page |
 | `history_list`, `history_search` | an ordered analysis summary page |
 | `history_delete`, `history_clear`, `auth_set`, `auth_logout`, `config_set`, `mcp_install`, `mcp_uninstall` | mutation acknowledgement |
@@ -642,6 +643,48 @@ work. An unexpected upstream `413 Payload Too Large` for a submitted bulk
 request maps to the same code and retains sanitized `http_status: 413` detail.
 Estimates MUST NOT be presented as exact charges.
 
+A submitted (non-dry-run) bulk run is envelope-only output: as with the dry
+run, `--format` with a non-JSON value is rejected as a usage error before any
+bulk preparation, credential resolution, or network access, so no
+billable-unit estimate, plan validation, or submission work is performed for
+a projection the submitted run cannot express.
+
+### 9.2 Bulk dry run
+
+`bulk submit --dry-run` reports the validated plan without credentials,
+network, or any remote identity. It is a local preflight: it runs after
+whole-file JSONL validation and the billable-unit ceiling check, and returns
+exit 0 with the canonical `bulk_submit` success envelope. The `bulk_submit`
+data root is therefore the closed union of `BulkCollection` (a submitted run)
+and exactly one `BulkDryRun` shape (a dry run):
+
+```json
+{
+  "id": "bulk_01983c20-0180-7a80-a001-000000000001",
+  "status": "queued",
+  "submission_outcome": "not_submitted",
+  "plan_sha256": "2f77668a9dfbf8d5848b9eeb4a7145ca94c6ed9236e4a773f6dcafa5132b2f91",
+  "estimated_billable_units": 3,
+  "item_count": 3
+}
+```
+
+- `id` is the freshly generated local bulk ID. No upstream identity exists,
+  so `upstream_bulk_id` is absent.
+- `status` is always the closed value `queued` (nothing has run).
+- `submission_outcome` is always the closed value `not_submitted`.
+- `plan_sha256` is the request-document SHA-256 the submitted run would send,
+  for reconciliation.
+- `estimated_billable_units` and `item_count` come from the validated plan.
+
+A dry run is JSON-only: the machine reconciliation shape has no TOON,
+Markdown, or pretty projection, so `--format` with a non-JSON value is
+rejected as a usage error before credentials or network. The dry run carries
+no analyzed content and reserves an additional dry-run marker (`dry.noop`,
+`dry.observed` false) under its data root so machine consumers can tell a
+preflight from a real queued collection without relying on
+`submission_outcome` alone.
+
 Bulk metadata and results expire 48 hours after the job reaches a terminal
 status. Bulk timestamps from Pangram are Unix epoch seconds encoded as
 strings (for example `"1760000000.0"`). The normalizer converts them to RFC
@@ -892,11 +935,22 @@ it surfaces: as a top-level command failure envelope, and as the terminal
 check `error` carried inside a canonical failed analysis. The category-to-exit
 mapping is identical in both positions. In particular:
 
-- an upstream terminal task failure (`STAGE_FAILED`) is an upstream analysis
-  failure: the check carries `upstream_analysis_failed` (category `upstream`),
-  and the command exits 6 (network or upstream failure), never general exit 1
+- an upstream terminal task failure (`STAGE_FAILED` on the observe stream)
+  is an upstream analysis failure: the check carries
+  `upstream_analysis_failed` (category `upstream`), and the command exits 6
+  (network or upstream failure), never general exit 1
+- the per-task status snapshot (`task status` and `task wait`, reading a
+  text task by its upstream ID) follows the identical observation contract:
+  an upstream terminal `STAGE_FAILED` on the poll stream is normalized to
+  the same upstream terminal failure (`upstream_analysis_failed`, category
+  `upstream`, exit 6), and any non-terminal stage reads as still `running`
+  until a later poll reports a terminal state
 - a failed analysis whose check error is a local usage or authentication
   failure exits per that error's category instead
+- a bulk collection that reaches the terminal `failed` state failed every
+  item through an upstream terminal analysis failure (immediate upstream
+  rejection or `STAGE_FAILED`); that terminal bulk failure is an upstream
+  failure and exits 6, never general exit 1
 - process interruption stays exit 130 per section 19
 
 For a repeated-file ordered series the run's exit follows the parent-status

@@ -1,7 +1,7 @@
 ---
 packages:
-  "cargo:microck-pangram-cli": patch
-  "npm:@microck/pangram-cli": patch
+  "cargo:microck-pangram-cli": minor
+  "npm:@microck/pangram-cli": minor
 ---
 
 ## Added

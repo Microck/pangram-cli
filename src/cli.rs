@@ -313,7 +313,7 @@ pub fn runtime_command() -> Command {
                 .long("limit")
                 .value_name("N")
                 .num_args(1)
-                .help("Page size within 1..=1000 (default 100; fetch-all when the offset is omitted and the page is short)"),
+                .help("Page size within 1..=1000 (default 100; fetch-all only when no --limit is given and --offset stays 0)"),
         )
         .arg(
             Arg::new("format")
@@ -339,9 +339,7 @@ pub fn runtime_command() -> Command {
                 .value_name("ID")
                 .num_args(1)
                 .required(true)
-                .help(
-                    "The Pangram task identity (or a local analysis ID when history resolves it)",
-                ),
+                .help("The upstream Pangram task identity"),
         );
 
     let task_wait = Command::new("wait")
@@ -351,9 +349,7 @@ pub fn runtime_command() -> Command {
                 .value_name("ID")
                 .num_args(1)
                 .required(true)
-                .help(
-                    "The Pangram task identity (or a local analysis ID when history resolves it)",
-                ),
+                .help("The upstream Pangram task identity"),
         )
         .arg(
             Arg::new("timeout")

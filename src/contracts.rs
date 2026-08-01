@@ -418,7 +418,14 @@ fn output_schema() -> Value {
             schema_ref::<Analysis<CanonicalError>>(),
         ),
         data_condition(
-            &["bulk_submit", "bulk_status", "bulk_wait"],
+            &["bulk_submit"],
+            json!({"oneOf": [
+                schema_ref::<BulkCollection>(),
+                schema_ref::<crate::output::BulkDryRun>(),
+            ]}),
+        ),
+        data_condition(
+            &["bulk_status", "bulk_wait"],
             schema_ref::<BulkCollection>(),
         ),
         data_condition(&["bulk_results"], schema_ref::<BulkPage<CanonicalError>>()),

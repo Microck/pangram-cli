@@ -15,10 +15,10 @@ use crate::domain::{
 mod value;
 
 pub use value::{
-    AnalysisOutput, AuthSource, AuthStatus, CommandData, CommandEnvelope, ConfigGetStatus,
-    ConfigListStatus, ConfigPathStatus, DoctorCheck, DoctorCheckStatus, DoctorStatus, EnvelopeMeta,
-    McpClientStatus, McpStatus, MutationAcknowledgement, NonEmptyAnalyses, UpdateStatus,
-    UpdateStatusKind,
+    AnalysisOutput, AuthSource, AuthStatus, BulkDryRun, BulkSubmitOutput, CommandData,
+    CommandEnvelope, ConfigGetStatus, ConfigListStatus, ConfigPathStatus, DoctorCheck,
+    DoctorCheckStatus, DoctorStatus, EnvelopeMeta, McpClientStatus, McpStatus,
+    MutationAcknowledgement, NonEmptyAnalyses, UpdateStatus, UpdateStatusKind,
 };
 
 mod projection;
