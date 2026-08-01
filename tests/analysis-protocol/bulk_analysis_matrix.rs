@@ -502,3 +502,171 @@ async fn analyzer_is_the_single_adapter_facing_bulk_and_text_owner() {
     let _text = request("hello");
     fixture.shutdown().await;
 }
+
+/// 31. A resumed (plan=None) observed results page marks every emitted
+/// child analysis `accepted`, never `terminal` (contracts.md 4.6): the read
+/// reconciles a remotely authored job, so neither a failed nor a succeeded
+/// child may claim the caller-submitted outcome. A failed child carries the
+/// sanitized upstream error with no input descriptor; a succeeded child
+/// derives its descriptor only from the terminal document Pangram attested
+/// (`origin: unknown`, never echoed text). Every caller ID stays `None`
+/// because no trusted local plan exists.
+#[tokio::test(flavor = "current_thread")]
+async fn observed_results_page_children_are_accepted_never_terminal() {
+    use microck_pangram_cli::domain::{SubmissionOutcome, TextOrigin};
+
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(serde_json::json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-001", "task_id": "task-1", "stage": "STAGE_SUCCESS",
+             "error": null, "result": success_result("Attested text")}
+        ],
+        "failed_items": [
+            {"index": 1, "id": "row-002", "task_id": null, "stage": "STAGE_FAILED",
+             "error": "Text must contain at least one valid token"}
+        ]
+    })));
+
+    let analyzer = Analyzer::from_client(fixture.client());
+    let running =
+        analyzer.observe_bulk(microck_pangram_cli::domain::UpstreamBulkId::new(BULK_ID).unwrap());
+    let page = analyzer
+        .bulk_results_page(&running, 0, 100, &StopObserving::new().token().clone())
+        .await
+        .expect("a resumed observed results page");
+
+    let items = page.page.items();
+    assert_eq!(items.len(), 2);
+
+    // Succeeded child at index 0: accepted, attested-text descriptor only.
+    assert_eq!(items[0].index, 0);
+    assert_eq!(items[0].caller_id, None);
+    let BulkItemState::Succeeded { analysis } = &items[0].state else {
+        panic!("observed item 0 succeeded");
+    };
+    assert_eq!(analysis.submission_outcome(), SubmissionOutcome::Accepted);
+    assert_eq!(analysis.status(), AnalysisStatus::Succeeded);
+    let input = analysis
+        .input()
+        .expect("an attested terminal document yields a descriptor");
+    let microck_pangram_cli::domain::AnalysisInput::Text(text) = input else {
+        panic!("bulk text item");
+    };
+    assert_eq!(text.origin(), TextOrigin::Unknown);
+    // The descriptor holds hashes/counts, not the attested text itself.
+    assert!(text.text.is_none());
+
+    // Failed child at index 1: accepted, sanitized error, no input.
+    assert_eq!(items[1].index, 1);
+    assert_eq!(items[1].caller_id, None);
+    let BulkItemState::Failed { error } = &items[1].state else {
+        panic!("observed item 1 failed");
+    };
+    assert_eq!(error.code(), ErrorCode::UpstreamAnalysisFailed);
+    assert_scrubbed(error);
+    fixture.shutdown().await;
+}
+
+/// 32. A resumed observed results page whose succeeded child's terminal
+/// document carries no `text` field still emits the child analysis as
+/// `accepted`, and omits the input descriptor entirely rather than
+/// fabricating one from nothing.
+#[tokio::test(flavor = "current_thread")]
+async fn observed_results_success_without_text_omits_the_descriptor() {
+    use microck_pangram_cli::domain::SubmissionOutcome;
+
+    // A Pangram 4 terminal success with no top-level `text` field: valid
+    // under one-pass normalization (`normalized_text: None`).
+    let mut no_text = pangram4_success("unused");
+    no_text.as_object_mut().unwrap().remove("text");
+
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(serde_json::json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 0, "id": "row-001", "task_id": "task-1", "stage": "STAGE_SUCCESS",
+             "error": null, "result": no_text}
+        ],
+        "failed_items": []
+    })));
+
+    let analyzer = Analyzer::from_client(fixture.client());
+    let running =
+        analyzer.observe_bulk(microck_pangram_cli::domain::UpstreamBulkId::new(BULK_ID).unwrap());
+    let page = analyzer
+        .bulk_results_page(&running, 0, 100, &StopObserving::new().token().clone())
+        .await
+        .expect("a text-less observed results page");
+
+    let items = page.page.items();
+    assert_eq!(items.len(), 1);
+    let BulkItemState::Succeeded { analysis } = &items[0].state else {
+        panic!("observed item 0 succeeded");
+    };
+    assert_eq!(analysis.submission_outcome(), SubmissionOutcome::Accepted);
+    assert!(
+        analysis.input().is_none(),
+        "no attested text means no descriptor is fabricated"
+    );
+    fixture.shutdown().await;
+}
+
+/// 33. A mixed observed page (succeeded 0 + failed 1, then failed 0 +
+/// succeeded 1 across two reads of the same job) keeps exact item status,
+/// counters/order identity through the canonical page, and marks every
+/// emitted child analysis `accepted`. (Order within one page is
+/// cross-list-disjoint per 9.1, never a chained ordering across the two
+/// upstream lists.)
+#[tokio::test(flavor = "current_thread")]
+async fn observed_mixed_results_pages_keep_exact_status_and_acceptance() {
+    use microck_pangram_cli::domain::SubmissionOutcome;
+
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(serde_json::json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-0", "stage": "STAGE_SUCCESS",
+             "error": null, "result": success_result("First")}
+        ],
+        "failed_items": [
+            {"index": 1, "id": "row-001", "task_id": null, "stage": "STAGE_FAILED",
+             "error": "Text must contain at least one valid token"}
+        ]
+    })));
+
+    let analyzer = Analyzer::from_client(fixture.client());
+    let running =
+        analyzer.observe_bulk(microck_pangram_cli::domain::UpstreamBulkId::new(BULK_ID).unwrap());
+    let page = analyzer
+        .bulk_results_page(&running, 0, 100, &StopObserving::new().token().clone())
+        .await
+        .expect("the mixed observed page normalizes");
+    let items = page.page.items();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].index, 0);
+    assert_eq!(items[1].index, 1);
+
+    // Exact per-position states and identities are preserved; both child
+    // analyses are `accepted` observations.
+    let BulkItemState::Succeeded { analysis } = &items[0].state else {
+        panic!("index 0 succeeded");
+    };
+    assert_eq!(analysis.submission_outcome(), SubmissionOutcome::Accepted);
+    assert_eq!(
+        items[0].upstream_task_id.as_ref().unwrap().as_str(),
+        "task-0"
+    );
+    assert!(matches!(items[1].state, BulkItemState::Failed { .. }));
+    assert_eq!(items[1].upstream_task_id, None);
+    fixture.shutdown().await;
+}

@@ -164,6 +164,41 @@ pub fn accepted_202(total: u64) -> Value {
     })
 }
 
+/// The documented 202 acceptance over `total_items` where `accepted_count`
+/// items are accepted and the rest fail immediate upstream validation. The
+/// accepted items come first (indices `0..accepted_count`), then the failed
+/// items (`accepted_count..total`), covering every position exactly once.
+pub fn accepted_202_split(total: u64, accepted_count: u64) -> Value {
+    assert!(accepted_count <= total);
+    let accepted: Vec<Value> = (0..accepted_count)
+        .map(|index| {
+            json!({
+                "index": index,
+                "id": format!("row-{index:03}"),
+                "task_id": format!("task-{index:03}"),
+            })
+        })
+        .collect();
+    let failed: Vec<Value> = (accepted_count..total)
+        .map(|index| {
+            json!({
+                "index": index,
+                "id": format!("row-{index:03}"),
+                "task_id": null,
+                "stage": "STAGE_FAILED",
+                "error": "Text must contain at least one valid token",
+            })
+        })
+        .collect();
+    json!({
+        "bulk_id": BULK_ID,
+        "status": "queued",
+        "total_items": total,
+        "accepted_items": accepted,
+        "failed_items": failed,
+    })
+}
+
 /// The documented status body for a job over `total` with the given counters.
 /// A terminal status carries a non-null `completed_at`; a non-terminal status
 /// carries null (contracts.md 9.1).

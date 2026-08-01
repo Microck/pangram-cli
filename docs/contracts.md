@@ -425,7 +425,13 @@ fabricates a local authorship fact:
 - `submission_outcome` is `accepted` whenever an upstream identity was
   observed (the evidence that a remote operation exists), never `terminal`;
   `terminal` is reserved for an operation the caller itself submitted, so a
-  resumed read never claims it
+  resumed read never claims it. This rule binds every emitted analysis,
+  including the per-item child analyses inside a resumed bulk items or
+  results page: an observed bulk child analysis (succeeded or failed) is
+  `accepted`, never `terminal`, even after the observed child has reached
+  its terminal state. A same-process read of a job this process submitted
+  builds its child analyses from the validated local plan and claims
+  `terminal`, exactly as before
 - `provenance.submitted_at` is omitted because the caller did not submit the
   operation; `provenance.completed_at` is present only when observation
   reached a terminal state, and preserves that observation's time
@@ -446,6 +452,15 @@ fabricates a local authorship fact:
 Workflow caveat: none of this exposes content. A terminal task read surfaces
 hashes and counts, not the submitted text, unless the caller separately
 holds and supplies it locally.
+
+A resumed bulk child analysis whose remote item has not attested terminal
+content carries no input descriptor (`input` is omitted) rather than a
+fabricated or placeholder one. This binds both directions of terminal
+content: a failed child never carries an input descriptor, and a succeeded
+child whose terminal document carries no normalized text also omits `input`
+rather than inventing one. A same-process read of a locally submitted job
+still builds every succeeded or failed child's input descriptor from the
+validated local plan and claims `terminal`.
 
 ## 5. AI-detection result
 
@@ -767,7 +782,18 @@ maximum, because every received response body is bounded in memory right up
 to the client's 16 MiB hard response cap and a 1,000-item page is the worst
 case. Explicit one-page `bulk items`/`bulk results` requests may still use
 any `limit` in `1..=1,000`; only the internal fetch-all walk is capped to
-100. A submitted session's response `total_items` MUST equal the validated
+100. Because there is no aggregate endpoint, a fetch-all read reassembles
+the strictly ordered union of every walked page into one canonical page
+whose synthetic window metadata reports the whole aggregate: `offset` is
+`0`, `limit` is `max(1, total_items)` (still bounded by the documented
+1,000 cap), and `next_offset` is absent (the end-of-set marker). That
+synthetic `limit` names the complete aggregate window the caller received;
+it does not echo any single request page size (the walker requested pages
+of 100), so consumers can tell "one complete aggregate" from "one bounded
+upstream page" without hidden state. The exact-coverage and no-advance
+safeguards above bind the walk before this reassembly, so a synthesized
+aggregate exists only after every position in `0..total_items` was covered
+exactly once. A submitted session's response `total_items` MUST equal the validated
 local plan count and is checked before any client-side allocation; a
 mismatch is contract drift. For a status/page read of a job without a local
 plan (a resumed remote handle), the client validates the upstream-reported
@@ -928,7 +954,27 @@ hints from delaying interruption indefinitely.
 | 7 | Local configuration, history, or update-state failure |
 | 130 | Interrupted by the user |
 
-An accepted detached or bulk submission exits 0.
+An accepted detached or bulk submission exits 0. This binds every
+successfully parsed HTTP 202 bulk acceptance, including one whose
+`failed_items` list rejects some or even every submitted item through
+immediate upstream validation: the acceptance itself is the authority for
+exit 0, and the envelope MUST report the truthful validated counters and
+derived status from that 202 response (the accepted and immediately failed
+counts, a `queued` collection while any accepted work remains, or the
+terminal `failed`/`partial`/`succeeded` collection when the 202 rejected
+every item), preserving every accepted caller ID and the observed upstream
+identity. A `bulk submit` without `--wait` never fabricates all-queued-zero
+counters over an acceptance that already reports immediate failures.
+
+A successful `bulk results` page or fetch-all read exits 0 regardless of the
+child outcomes on the returned window. One results page is a successful
+retrieval of a window and a page is not authoritative for the whole-job
+terminal state: failed children on the returned page are preserved as failed
+children (`status: failed` with their sanitized `error`) inside the
+successful command envelope. Callers that need the job-outcome exit use
+`bulk status` or `bulk wait`, whose observed terminal collection owns the
+section 12 outcome mapping (a terminal `failed` collection exits 6, a
+`partial` exits 3, a `succeeded` exits 0).
 
 A failure exit derives from the canonical error object's category everywhere
 it surfaces: as a top-level command failure envelope, and as the terminal
@@ -1164,6 +1210,15 @@ JSONL item:
 Unknown item fields and duplicate caller IDs fail whole-file validation.
 Pangram's Bulk API does not document a public-dashboard-link request or
 response field, so bulk submission has no `--public-link` option.
+
+`bulk results` exit semantics follow section 12: a successful page read
+(one explicit `--offset`/`--limit` window, or the offset-0 no-limit
+fetch-all) exits 0 regardless of failed children on the returned window,
+because it is a successful retrieval and one page is not authoritative for
+whole-job terminal state; `bulk status` and `bulk wait` own the job-outcome
+exit mapping. A fetch-all read emits one canonical aggregate page whose
+window metadata reports `offset: 0` and `limit: max(1, total_items)`
+(section 9.1): the complete set, not the 100-item walk granularity.
 
 ### 14.4 Task
 

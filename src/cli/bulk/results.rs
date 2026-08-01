@@ -8,7 +8,7 @@ use clap::ArgMatches;
 use crate::analysis::StopObserving;
 use crate::cli::StreamTty;
 use crate::cli::detect::{self, DetectOutcome, GlobalFlags};
-use crate::domain::{BulkPage, UtcTimestamp};
+use crate::domain::UtcTimestamp;
 use crate::output::{CommandData, ErrorCode, ExitCode, ResolvedCommand};
 
 use super::plan::parse_upstream_bulk_id;
@@ -17,7 +17,12 @@ use super::{new_runtime, prepare, succeed};
 
 const BULK_RESULTS_DEFAULT_LIMIT: u64 = 100;
 const BULK_RESULTS_MAX_LIMIT: u64 = 1000;
-const BULK_RESULTS_FETCH_ALL_MIN_ITEMS: u64 = 10;
+/// The read bound for one fetch-all walk: the maximum number of safe-GET
+/// result pages the walker requests before giving up. Each walked page holds
+/// up to `BULK_FETCH_ALL_PAGE_SIZE` (100) items, so 10 reads cover the
+/// documented 1,000-item job cap exactly. This is a page-read budget, not an
+/// item count.
+const BULK_RESULTS_FETCH_ALL_MAX_READS: u64 = 10;
 
 pub(super) fn bulk_results(
     sub: &ArgMatches,
@@ -81,7 +86,7 @@ pub(super) fn bulk_results(
         let running = analyzer.observe_bulk(upstream_id);
         let outcome = if fetch_all {
             analyzer
-                .bulk_results_all(&running, BULK_RESULTS_FETCH_ALL_MIN_ITEMS, &cancel, |_| {})
+                .bulk_results_all(&running, BULK_RESULTS_FETCH_ALL_MAX_READS, &cancel, |_| {})
                 .await
         } else {
             analyzer
@@ -93,7 +98,7 @@ pub(super) fn bulk_results(
     });
     detect::reset_sigint_flag();
     match result {
-        Ok(page) => succeed_page(page, fetch_all, output, started, resolved),
+        Ok(page) => succeed_page(page, output, started),
         Err(failure) => {
             let error = failure.into_error();
             if matches!(error.code(), ErrorCode::UpstreamNotFound) {
@@ -107,39 +112,19 @@ pub(super) fn bulk_results(
     }
 }
 
-/// Projects one bulk results page: a terminal read returns the canonical
-/// page (exit 0 for a single page; the fetch-all composition reassembles one
-/// canonical page shape through the domain owner).
+/// Projects one bulk results page. Both the explicit single-page read and
+/// the fetch-all composition return the canonical page the domain owner
+/// assembled; the fetch-all aggregate already carries the synthetic window
+/// metadata (`offset: 0`, `limit: max(1, total_items)` bounded by 1,000,
+/// absent `next_offset`) documented in contracts.md 9.1/14.3, so the adapter
+/// never reassembles or re-windows it here.
 fn succeed_page(
     page_result: crate::analysis::BulkPageResult,
-    fetch_all: bool,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
-    resolved: ResolvedCommand,
 ) -> DetectOutcome {
-    let page = if fetch_all {
-        let count = page_result.page.items().len();
-        match BulkPage::new(
-            page_result.page.items().to_vec(),
-            0,
-            u64::try_from(count.max(1)).unwrap_or(1),
-            None,
-        ) {
-            Ok(page) => page,
-            Err(_) => {
-                return detect::failure_outcome(
-                    resolved,
-                    output,
-                    started,
-                    detect::internal_error("the fetched bulk results could not be reassembled"),
-                );
-            }
-        }
-    } else {
-        page_result.page
-    };
     succeed(
-        CommandData::BulkResults(page),
+        CommandData::BulkResults(page_result.page),
         ExitCode::Success,
         output,
         started,

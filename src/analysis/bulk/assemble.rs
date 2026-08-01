@@ -3,7 +3,7 @@
 use crate::domain::{
     Analysis, AnalysisId, AnalysisInput, AnalysisStatus, BulkCounters, BulkItem,
     BulkSubmissionPlan, Check, CheckState, Provenance, Provider, SaveState, Sha256Hash, TextInput,
-    TextOrigin, UpstreamTaskIds, UtcTimestamp,
+    TextOrigin, UpstreamBulkId, UpstreamTaskIds, UtcTimestamp,
 };
 use crate::output::{CanonicalError, ErrorCode};
 
@@ -69,9 +69,13 @@ pub(super) fn initial_counters(
 /// input descriptors come only from the trusted local plan; on a resumed
 /// observation (`None`) they derive only from upstream-attested terminal
 /// content (contracts.md 4.6) and running/failed children omit the input
-/// descriptor rather than fabricating one.
+/// descriptor rather than fabricating one. The observed job's upstream bulk
+/// identity is carried on every resumed child analysis's provenance so a
+/// text-less (or no-task-id) observed child still satisfies the `accepted`
+/// evidence rule.
 pub(super) fn assemble_results_page(
     plan: Option<&BulkSubmissionPlan>,
+    upstream_bulk_id: &UpstreamBulkId,
     page: NormalizedResultsPage,
 ) -> Result<Vec<BulkItem<CanonicalError>>, CanonicalError> {
     let NormalizedResultsPage {
@@ -102,7 +106,7 @@ pub(super) fn assemble_results_page(
                             success.task,
                             now,
                         )?,
-                        None => build_observed_success_analysis(success, now)?,
+                        None => build_observed_success_analysis(success, upstream_bulk_id, now)?,
                     };
                     items.push(BulkItem {
                         index,
@@ -137,7 +141,7 @@ pub(super) fn assemble_results_page(
         } else if let Some(outcome) = failed.get(&index) {
             let analysis = match plan {
                 Some(plan) => build_terminal_failed_analysis(plan_item_at(plan, index)?, outcome)?,
-                None => build_observed_failed_analysis(outcome)?,
+                None => build_observed_failed_analysis(outcome, upstream_bulk_id)?,
             };
             items.push(BulkItem {
                 index,
@@ -164,9 +168,11 @@ pub(super) fn assemble_results_page(
 /// worker's own task identity. Item order is enforced upstream by the page
 /// validator; each entry only composes the worker's reported outcome. On a
 /// resumed observation (`None`) a failed child carries the upstream error
-/// with no fabricated input descriptor.
+/// with no fabricated input descriptor, and its provenance carries the
+/// observed upstream bulk identity (contracts.md 4.6).
 pub(super) fn assemble_items_metadata_page(
     plan: Option<&BulkSubmissionPlan>,
+    upstream_bulk_id: &UpstreamBulkId,
     page: NormalizedItemsPage,
 ) -> Result<Vec<BulkItem<CanonicalError>>, CanonicalError> {
     let NormalizedItemsPage { outcomes } = page;
@@ -195,7 +201,7 @@ pub(super) fn assemble_items_metadata_page(
                     Some(plan) => {
                         build_terminal_failed_analysis(plan_item_at(plan, index)?, &outcome)?
                     }
-                    None => build_observed_failed_analysis(&outcome)?,
+                    None => build_observed_failed_analysis(&outcome, upstream_bulk_id)?,
                 };
                 items.push(BulkItem {
                     index,
@@ -344,11 +350,14 @@ fn build_terminal_failed_analysis(
 /// A canonical terminal-success bulk child analysis on a resumed observation:
 /// the input descriptor derives only from the upstream-attested terminal text
 /// (`origin: unknown`, SHA-256, byte and word counts), never echoed back.
-/// `submission_outcome` is `terminal` because Pangram returned the item's
-/// final document in the results page; `provenance.submitted_at` is omitted
-/// because the caller did not submit the operation (contracts.md 4.6).
+/// `submission_outcome` is `accepted` (never `terminal`) because the read
+/// reconciles a remotely authored job; `terminal` is reserved for an
+/// operation the caller itself submitted (contracts.md 4.6).
+/// `provenance.submitted_at` is omitted because the caller did not submit
+/// the operation.
 fn build_observed_success_analysis(
     success: NormalizedBulkSuccess,
+    upstream_bulk_id: &UpstreamBulkId,
     now: UtcTimestamp,
 ) -> Result<Analysis<CanonicalError>, CanonicalError> {
     let NormalizedBulkSuccess { task_id, task } = success;
@@ -382,13 +391,13 @@ fn build_observed_success_analysis(
         provider: Provider::Pangram,
         upstream_version: Some(version),
         upstream_task_ids: task_id.map(|id| UpstreamTaskIds::new(vec![id]).expect("one ID")),
-        upstream_bulk_id: None,
+        upstream_bulk_id: Some(upstream_bulk_id.clone()),
         submitted_at: None,
         completed_at: Some(now),
     };
     Analysis::with_optional_input(
         AnalysisId::new(),
-        crate::domain::SubmissionOutcome::Terminal,
+        crate::domain::SubmissionOutcome::Accepted,
         input,
         checks,
         SaveState::Ephemeral,
@@ -408,10 +417,12 @@ fn build_observed_success_analysis(
 /// A canonical terminal-failure bulk child analysis on a resumed observation:
 /// no local plan and no attested item text exist, so the input descriptor is
 /// omitted rather than fabricated (contracts.md 4.6). `submission_outcome` is
-/// `terminal` because Pangram returned the item's terminal rejection in the
-/// page; `provenance.submitted_at` is omitted.
+/// `accepted` (never `terminal`): the read reconciles a remotely authored
+/// job, and `terminal` is reserved for an operation the caller itself
+/// submitted (contracts.md 4.6). `provenance.submitted_at` is omitted.
 fn build_observed_failed_analysis(
     outcome: &NormalizedBulkItemOutcome,
+    upstream_bulk_id: &UpstreamBulkId,
 ) -> Result<Analysis<CanonicalError>, CanonicalError> {
     let error = outcome_error(outcome);
     let state = CheckState::Failed {
@@ -431,13 +442,13 @@ fn build_observed_failed_analysis(
             .task_id
             .as_ref()
             .map(|id| UpstreamTaskIds::new(vec![id.clone()]).expect("one ID")),
-        upstream_bulk_id: None,
+        upstream_bulk_id: Some(upstream_bulk_id.clone()),
         submitted_at: None,
         completed_at: Some(now),
     };
     Analysis::with_optional_input(
         AnalysisId::new(),
-        crate::domain::SubmissionOutcome::Terminal,
+        crate::domain::SubmissionOutcome::Accepted,
         None,
         checks,
         SaveState::Ephemeral,

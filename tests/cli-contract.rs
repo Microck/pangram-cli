@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use microck_pangram_cli::cli::{ArgumentSpec, Availability, CommandSpec, FULL_GRAMMAR};
+use microck_pangram_cli::cli::{
+    ArgumentSpec, Availability, CommandKind, CommandSpec, FULL_GRAMMAR,
+};
 use serde_json::Value;
 
 /// One hermetic filesystem root shared by every compiled-binary spawn in
@@ -319,6 +321,68 @@ fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
             "{command} must not appear in the help Commands listing"
         );
     }
+}
+
+/// The README "Available today" table lists exactly the compiled binary's
+/// available top-level command names. This pins the advertised surface to the
+/// Rust-owned grammar so a README claim can never drift from the compiled
+/// reality in either direction: a newly available command must be listed, and
+/// a listed command must really be available. (The bare `pangram` row spells
+/// the available root entrypoint, not a subcommand name.)
+#[test]
+fn readme_available_table_matches_the_available_top_level_grammar() {
+    let available_names: BTreeSet<&str> = FULL_GRAMMAR
+        .commands
+        .iter()
+        .filter(|command| command.availability == Availability::Available)
+        .filter(|command| command.path.len() == 1)
+        .filter(|command| matches!(command.kind, CommandKind::Command | CommandKind::Namespace))
+        .filter_map(|command| command.path.first().copied())
+        .collect();
+
+    let readme = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md"))
+        .expect("read README.md");
+
+    // Extract the "Available today" table only, stopping at the next
+    // section heading, and pull the command token from each `pangram X` row.
+    let available_section = readme
+        .split("Available today:")
+        .nth(1)
+        .expect("the README keeps an \"Available today:\" section");
+    let available_section = available_section
+        .split("\n## ")
+        .next()
+        .unwrap_or(available_section);
+    let available_section = available_section
+        .split("\nPlanned:")
+        .next()
+        .unwrap_or(available_section);
+
+    let mut listed_names = BTreeSet::new();
+    for line in available_section.lines() {
+        let line = line.trim();
+        if !line.starts_with("| `pangram ") {
+            continue;
+        }
+        // `| `pangram detect` | ...` -> "detect".
+        let cell = line
+            .split('`')
+            .nth(1)
+            .expect("a backtick-quoted command cell");
+        if let Some(name) = cell.strip_prefix("pangram ") {
+            // Take the leading command token only (a subcommand path lists
+            // its first segment; the bare `pangram` row never matches here).
+            let first = name.split_whitespace().next().unwrap_or(name);
+            listed_names.insert(first.to_owned());
+        }
+    }
+    let listed_names: BTreeSet<&str> = listed_names.iter().map(String::as_str).collect();
+
+    assert_eq!(
+        listed_names, available_names,
+        "the README \"Available today\" table must list exactly the available \
+         top-level command names from the Rust-owned grammar (no more, no fewer)"
+    );
 }
 
 /// N4: `--save` stays in the normative grammar (Phase 4 history) but is not

@@ -27,8 +27,8 @@ use serde_json::Value;
 
 use env::fixture::{BulkRequestView, ProtocolFixture, SYNTHETIC_KEY, Step};
 use env::{
-    BULK_ID, Isolated, accepted_202, assert_no_leak, interrupt, jsonl, spawn_with_stdin,
-    stdout_envelope,
+    BULK_ID, Isolated, accepted_202, accepted_202_split, assert_no_leak, interrupt, jsonl,
+    spawn_with_stdin, stdout_envelope,
 };
 
 // A valid two-source dry run validates the plan, projects the canonical
@@ -447,6 +447,118 @@ async fn bulk_submit_accepted_reports_queued_collection_and_one_post() {
     assert_eq!(sent["items"][0]["id"], "row-000");
     assert!(sent.get("public_dashboard_link").is_none());
     assert_eq!(fixture.post_count(), 1);
+    assert_eq!(fixture.get_count(), 0, "no polling without --wait");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A 202 that accepts every item projects the truthful accepted snapshot:
+// queued with all items accepted, none yet finished, exit 0, one POST.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_submit_without_wait_projects_all_accepted_snapshot() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_202(3))));
+    let isolated = Isolated::new();
+    let input = jsonl(&[
+        ("row-000", "first synthetic words"),
+        ("row-001", "second synthetic words"),
+        ("row-002", "third synthetic words"),
+    ]);
+    let output = spawn_with_stdin(
+        isolated.command(fixture.base_url()),
+        &["bulk", "submit", "-", "--max-billable-units", "10"],
+        input.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(0), "a parsed 202 exits 0");
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], "bulk_submit");
+    let data = &envelope["data"];
+    assert_eq!(data["status"], "queued");
+    assert_eq!(data["submission_outcome"], "accepted");
+    assert_eq!(data["upstream_bulk_id"], BULK_ID);
+    assert_eq!(data["total_items"], 3);
+    assert_eq!(data["accepted"], 3);
+    assert_eq!(data["succeeded"], 0);
+    assert_eq!(data["failed"], 0);
+    assert!(data.get("completed_at").is_none(), "non-terminal");
+    assert_eq!(fixture.post_count(), 1);
+    assert_eq!(fixture.get_count(), 0, "no polling without --wait");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A 202 that accepts some items and immediately fails others through
+// immediate upstream validation still exits 0 (the acceptance itself is the
+// authority), while reporting the truthful counters: accepted and failed
+// counts from the 202, not fabricated all-queued-zero values.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_submit_without_wait_projects_mixed_acceptance_truthfully() {
+    let fixture = ProtocolFixture::start().await;
+    // 3 items, 2 accepted + 1 immediately failed.
+    fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_202_split(3, 2))));
+    let isolated = Isolated::new();
+    let input = jsonl(&[
+        ("row-000", "first synthetic words"),
+        ("row-001", "second synthetic words"),
+        ("row-002", "third synthetic words"),
+    ]);
+    let output = spawn_with_stdin(
+        isolated.command(fixture.base_url()),
+        &["bulk", "submit", "-", "--max-billable-units", "10"],
+        input.as_bytes(),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a parsed 202 with immediate failures still exits 0"
+    );
+    let envelope = stdout_envelope(&output);
+    let data = &envelope["data"];
+    // Some accepted work remains, so the collection is queued (non-terminal).
+    assert_eq!(data["status"], "queued");
+    assert_eq!(data["total_items"], 3);
+    assert_eq!(data["accepted"], 2);
+    assert_eq!(data["succeeded"], 0);
+    assert_eq!(data["failed"], 1);
+    assert_eq!(data["submission_outcome"], "accepted");
+    assert_eq!(fixture.post_count(), 1, "one billable send, no replay");
+    assert_eq!(fixture.get_count(), 0, "no polling without --wait");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A 202 that immediately rejects every submitted item is still a parsed
+// acceptance (exit 0), but the truthful snapshot is the terminal `failed`
+// collection (all items failed), never a fabricated all-queued-zero state.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_submit_without_wait_projects_an_all_failed_acceptance() {
+    let fixture = ProtocolFixture::start().await;
+    // 2 items, both immediately failed by upstream validation.
+    fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_202_split(2, 0))));
+    let isolated = Isolated::new();
+    let input = jsonl(&[
+        ("row-000", "first synthetic words"),
+        ("row-001", "second synthetic words"),
+    ]);
+    let output = spawn_with_stdin(
+        isolated.command(fixture.base_url()),
+        &["bulk", "submit", "-", "--max-billable-units", "10"],
+        input.as_bytes(),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a parsed 202 that rejected every item still exits 0"
+    );
+    let envelope = stdout_envelope(&output);
+    let data = &envelope["data"];
+    assert_eq!(data["status"], "failed");
+    assert_eq!(data["total_items"], 2);
+    assert_eq!(data["accepted"], 0);
+    assert_eq!(data["succeeded"], 0);
+    assert_eq!(data["failed"], 2);
+    assert_eq!(data["submission_outcome"], "accepted");
+    assert_eq!(fixture.post_count(), 1, "one billable send, no replay");
     assert_eq!(fixture.get_count(), 0, "no polling without --wait");
     assert_no_leak(&output);
     fixture.shutdown().await;

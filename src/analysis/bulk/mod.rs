@@ -269,6 +269,17 @@ impl<C: Clock> RunningBulk<C> {
         (self.last_status, self.last)
     }
 
+    /// The validated acceptance snapshot: the truthful status and counters
+    /// derived from the HTTP 202 response at submission time (accepted and
+    /// immediately failed counts, and the derived collection status). A
+    /// `bulk submit` without `--wait` projects this validated snapshot
+    /// rather than fabricating all-queued-zero counters over an acceptance
+    /// that may already report immediate failures (contracts.md 12).
+    #[must_use]
+    pub const fn accepted_snapshot(&self) -> (AnalysisStatus, crate::domain::BulkCounters) {
+        (self.last_status, self.last)
+    }
+
     #[must_use]
     pub fn identity(&self) -> BulkOperationIdentity {
         BulkOperationIdentity {
@@ -606,7 +617,7 @@ impl<C: Clock> BulkAnalyzer<C> {
         )
         .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let total = header.total_items;
-        let items = assemble_items_metadata_page(running.plan(), page)
+        let items = assemble_items_metadata_page(running.plan(), running.upstream_bulk_id(), page)
             .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let next = next_offset(&items, total);
         Ok(BulkPageResult {
@@ -666,7 +677,7 @@ impl<C: Clock> BulkAnalyzer<C> {
         )
         .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let total = header.total_items;
-        let items = assemble_results_page(running.plan(), page)
+        let items = assemble_results_page(running.plan(), running.upstream_bulk_id(), page)
             .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let next = next_offset(&items, total);
         Ok(BulkPageResult {
@@ -827,8 +838,16 @@ impl<C: Clock> BulkAnalyzer<C> {
         }
 
         let total_value = total.unwrap_or(0);
+        // The fetch-all aggregate is one canonical page whose synthetic
+        // window metadata reports the whole reassembled set, not the
+        // 100-item walk granularity: `offset` is 0 and `limit` is
+        // `max(1, total_items)` bounded by the documented 1,000-item page
+        // cap, so consumers can tell "one complete aggregate" from "one
+        // bounded upstream page" (contracts.md 9.1/14.3). `next_offset` is
+        // absent (the end-of-set marker).
+        let aggregate_limit = total_value.clamp(1, crate::domain::BULK_PAGE_LIMIT_MAX);
         Ok(BulkPageResult {
-            page: BulkPage::new(all_items, 0, FETCH_ALL_PAGE_SIZE, None)
+            page: BulkPage::new(all_items, 0, aggregate_limit, None)
                 .map_err(|error| bulk_domain_error(running.bulk_id(), error))?,
             total_items: total_value,
             upstream_bulk_id: running.upstream_bulk_id().clone(),

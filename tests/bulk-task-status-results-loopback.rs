@@ -387,6 +387,145 @@ async fn bulk_results_explicit_offset_reads_one_page() {
     fixture.shutdown().await;
 }
 
+// A mixed results page (one succeeded + one failed child) is a successful
+// page retrieval: it exits 0 (a page is not authoritative for whole-job
+// terminal state; contracts.md 12/14.3), preserves the failed child as a
+// failed child with its sanitized error, and never fails with
+// `upstream_contract_changed`. The observed resumed read marks every child
+// analysis `accepted` (never `terminal`; contracts.md 4.6).
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_mixed_page_exits_0_and_preserves_failures() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-000", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("synthetic loopback words")}
+        ],
+        "failed_items": [
+            {"index": 1, "id": "row-001", "task_id": null, "stage": "STAGE_FAILED",
+             "error": "Text must contain at least one valid token"}
+        ]
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID, "--limit", "100"])
+        .output()
+        .expect("run bulk results with a mixed page");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a successful page read exits 0 regardless of failed children"
+    );
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], "bulk_results");
+    assert!(
+        envelope.get("error").is_none(),
+        "no false upstream_contract_changed: {envelope}"
+    );
+    let items = envelope["data"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    // Items are strictly ascending by index: 0 succeeded, 1 failed.
+    assert_eq!(items[0]["index"], 0);
+    assert_eq!(items[0]["status"], "succeeded");
+    assert_eq!(items[0]["analysis"]["submission_outcome"], "accepted");
+    assert_eq!(items[1]["index"], 1);
+    assert_eq!(items[1]["status"], "failed");
+    assert_eq!(
+        items[1]["error"]["code"], "upstream_analysis_failed",
+        "the failed child keeps its sanitized upstream error"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A results page whose succeeded child's terminal document carries no
+// `text` field is still a valid observed read: the command succeeds (exit 0)
+// and emits the child analysis `accepted`, never a false
+// `upstream_contract_changed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_textless_success_exits_0_without_contract_drift() {
+    let fixture = ProtocolFixture::start().await;
+    let mut no_text = pangram4_success("unused");
+    no_text.as_object_mut().unwrap().remove("text");
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-000", "stage": "STAGE_SUCCESS",
+             "error": null, "result": no_text}
+        ],
+        "failed_items": []
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID, "--limit", "100"])
+        .output()
+        .expect("run bulk results with a text-less success");
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    assert!(
+        envelope.get("error").is_none(),
+        "a text-less success is not contract drift: {envelope}"
+    );
+    let items = envelope["data"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["index"], 0);
+    assert_eq!(items[0]["status"], "succeeded");
+    assert_eq!(items[0]["analysis"]["submission_outcome"], "accepted");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A fetch-all read over a multi-page job reassembles every walked page into
+// one canonical aggregate window: `offset: 0`, `limit: max(1, total_items)`
+// bounded by 1,000 (the complete set, not the 100-item walk granularity),
+// and no `next_offset`. The walker requests pages of 100; the aggregate
+// reports the whole reassembled window (contracts.md 9.1/14.3).
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_fetch_all_reports_one_aggregate_window() {
+    let fixture = ProtocolFixture::start().await;
+    // total 120 items across two walked pages (100 + 20).
+    fixture.on_bulk_results(Step::Json(results_page(0, 100, 100, 120)));
+    fixture.on_bulk_results(Step::Json(results_page(100, 100, 20, 120)));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID])
+        .output()
+        .expect("run bulk results fetch-all over two pages");
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], "bulk_results");
+    let data = &envelope["data"];
+    assert_eq!(data["offset"], 0);
+    assert_eq!(
+        data["limit"], 120,
+        "the aggregate window limit is max(1, total_items), not the 100-item page size"
+    );
+    assert!(
+        data.get("next_offset").is_none(),
+        "no next_offset on the complete aggregate"
+    );
+    assert_eq!(data["items"].as_array().unwrap().len(), 120);
+    // The walk requested pages of 100 at offsets 0 and 100.
+    let recorded = fixture.requests();
+    let requests = BulkRequestView::for_path(&recorded, BULK_ID, "/results");
+    assert_eq!(requests.len(), 2, "two walked pages");
+    assert!(requests[0].query.contains("offset=0"));
+    assert!(requests[0].query.contains("limit=100"));
+    assert!(requests[1].query.contains("offset=100"));
+    assert!(requests[1].query.contains("limit=100"));
+    fixture.shutdown().await;
+}
+
 // A --limit outside 1..=1000 is a usage error before any request.
 #[tokio::test(flavor = "multi_thread")]
 async fn bulk_results_rejects_an_out_of_range_limit() {

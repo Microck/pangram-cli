@@ -29,3 +29,28 @@ SIGINT during a wait exits 130 with the identity tuple on stderr. Progress
 on `bulk wait` and `task wait` follows the shared `auto|never|jsonl`
 policy. Bulk submission carries no `--public-link` option, matching the
 documented Bulk API.
+
+## Fixed
+
+A `bulk submit` accepted without `--wait` now projects the truthful HTTP 202
+acceptance snapshot: the validated accepted and immediately failed counters
+and the derived collection status (a `queued` collection while accepted work
+remains, or the terminal `failed` collection when the 202 rejected every
+submitted item). Previously it fabricated an all-queued-zero state over an
+acceptance that could already report immediate failures.
+
+A resumed or observed `bulk items`/`bulk results` read of a job this process
+did not submit now emits every child analysis with `submission_outcome:
+accepted` (never `terminal`), matching the task observed-read contract:
+`terminal` is reserved for an operation the caller itself submitted. A
+succeeded child whose terminal document carries no normalized text, and any
+failed child, correctly normalize as valid accepted children instead of
+failing as `upstream_contract_changed`.
+
+A successful `bulk results` page or fetch-all read exits 0 regardless of
+failed children on the returned window, preserving them as failed children:
+one page is not authoritative for whole-job terminal state, and `bulk
+status`/`bulk wait` own the job-outcome exit. A fetch-all read reports one
+canonical aggregate window (`offset: 0`, `limit: max(1, total_items)` bounded
+by 1,000, no `next_offset`) representing the complete reassembled set rather
+than the 100-item walk granularity.

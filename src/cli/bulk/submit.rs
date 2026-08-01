@@ -8,7 +8,7 @@ use clap::ArgMatches;
 use crate::analysis::{BulkAnalysisRequest, StopObserving, WaitOptions};
 use crate::cli::StreamTty;
 use crate::cli::detect::{self, DetectOutcome, GlobalFlags, ProgressMode};
-use crate::domain::{AnalysisStatus, BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
+use crate::domain::{BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
 use crate::output::{
     CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode, ExitCode, OutputFormat,
     ResolvedCommand,
@@ -281,9 +281,12 @@ fn failure_status_envelope(error: CanonicalError, started: UtcTimestamp) -> Dete
     }
 }
 
-/// The accepted (enqueued) submission outcome: the running collection at the
-/// observed snapshot resolution. With no `--wait`, the adapter records the
-/// accept state without observing remotely.
+/// The accepted (enqueued) submission outcome: the running collection
+/// projected from the validated HTTP 202 acceptance snapshot. With no
+/// `--wait`, the adapter records the truthful accept state (accepted and
+/// immediately failed counts, and the derived collection status) without
+/// observing remotely; it never fabricates all-queued-zero counters over an
+/// acceptance that may already report immediate failures (contracts.md 12).
 fn submit_accepted_outcome(
     running: &crate::analysis::RunningBulk,
     output: detect::ResolvedOutput,
@@ -292,15 +295,12 @@ fn submit_accepted_outcome(
     let identity = running.identity();
     let plan = running.plan();
     let estimated = plan.map(|plan| plan.estimated_billable_units());
-    let total = plan.map(|plan| plan.items().len()).unwrap_or(1);
-    let counters =
-        crate::domain::BulkCounters::new(u64::try_from(total).unwrap_or(u64::MAX), 0, 0, 0)
-            .expect("an all-queued counter set is valid");
+    let (status, counters) = running.accepted_snapshot();
     let now = UtcTimestamp::now();
     let collection = match BulkCollection::new(
         identity.bulk_id,
         identity.upstream_bulk_id.clone(),
-        AnalysisStatus::Queued,
+        status,
         SubmissionOutcome::Accepted,
         counters,
         estimated,
