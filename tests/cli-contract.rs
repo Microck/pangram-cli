@@ -2,26 +2,86 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use microck_pangram_cli::cli::{ArgumentSpec, Availability, CommandSpec, FULL_GRAMMAR};
 use serde_json::Value;
 
+/// One hermetic filesystem root shared by every compiled-binary spawn in
+/// this file. Credential, config, data, and home state live under it so no
+/// subprocess can see a stored key, a host credential helper, or a real
+/// config. It is built once and kept alive for the whole test process.
+struct HermeticRoot {
+    _root: tempfile::TempDir,
+}
+
+fn hermetic_env(root: &tempfile::TempDir) -> Vec<(String, String)> {
+    let home = root.path().join("home");
+    let xdg_config = root.path().join("xdg-config");
+    let xdg_data = root.path().join("xdg-data");
+    let config = root.path().join("pangram.toml");
+    let data = root.path().join("data");
+    for directory in [&home, &xdg_config, &xdg_data, &data] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    [
+        ("HOME", home.to_str().unwrap()),
+        ("XDG_CONFIG_HOME", xdg_config.to_str().unwrap()),
+        ("XDG_DATA_HOME", xdg_data.to_str().unwrap()),
+        ("PANGRAM_CONFIG", config.to_str().unwrap()),
+        ("PANGRAM_DATA_DIR", data.to_str().unwrap()),
+        ("CI", "true"),
+        ("TERM", "dumb"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect()
+}
+
+fn hermetic_root() -> &'static HermeticRoot {
+    static ROOT: OnceLock<HermeticRoot> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = tempfile::tempdir().unwrap();
+        HermeticRoot { _root: root }
+    })
+}
+
+fn pangram() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pangram"));
+    // Hermetic by default: remove any inherited credential override and root
+    // all config/data/home state in a private temporary directory so no
+    // stored credential or production billing path is reachable. A test that
+    // needs a key sets it deliberately on the child it spawns.
+    command.env_remove("PANGRAM_API_KEY");
+    let root = hermetic_root();
+    for (key, value) in hermetic_env(&root._root) {
+        command.env(key, value);
+    }
+    command
+}
+
 const HELP: &str = "\
 Unofficial Pangram terminal client
 
-Usage: pangram [OPTIONS] [COMMAND]
+Usage: pangram [OPTIONS] [TEXT] [COMMAND]
 
 Commands:
   auth    Manage the locally stored Pangram API key
   config  Inspect and edit the local Pangram configuration
   doctor  Run local diagnostics without network access or credential validation
+  detect  Detect AI-generated text through Pangram 4
   help    Print this message or the help of the given subcommand(s)
 
+Arguments:
+  [TEXT]  Bare text analyzes it through AI detection; the literal `-` reads stdin
+
 Options:
-      --config <PATH>    Explicit configuration file path for this invocation
-      --data-dir <PATH>  Explicit history and state directory for this invocation
-  -h, --help             Print help
-  -V, --version          Print version
+      --config <PATH>          Explicit configuration file path for this invocation
+      --data-dir <PATH>        Explicit history and state directory for this invocation
+      --error-format <FORMAT>  Surface failures as a JSON envelope or a text message [possible values: json, text]
+      --no-color               Disable terminal color in pretty output
+  -h, --help                   Print help
+  -V, --version                Print version
 ";
 
 const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
@@ -29,7 +89,6 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "analyze",
     "bulk",
     "completions",
-    "detect",
     "history",
     "mcp",
     "plagiarism",
@@ -38,28 +97,34 @@ const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "update",
 ];
 
-// Phase 1 runtime dependencies: the Phase 0 set plus the local-setup core
-// (platform paths, secret handling, TOML, and the masked terminal prompt)
-// plus the Windows credential ACL binding (a target-specific runtime dep).
-const PHASE_1_RUNTIME_DEPENDENCIES: &[&str] = &[
+// Phase 2 runtime dependencies: the Phase 1 set plus the async analysis core
+// (Tokio runtime utilities, the rustls-only Reqwest client, and
+// CancellationToken support). The analysis module owns every network path.
+// `toon-format` joins for the canonical TOON projection of the JSON envelope.
+const PHASE_2_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
     "directories",
     "jiff",
+    "reqwest",
     "rpassword",
     "schemars",
     "secrecy",
     "serde",
     "serde_json",
     "sha2",
+    "signal-hook",
     "thiserror",
+    "toon-format",
+    "tokio",
+    "tokio-util",
     "toml",
+    "url",
     "uuid",
     "windows-sys",
     "zeroize",
 ];
 
 const FORBIDDEN_NETWORK_APIS: &[&str] = &[
-    "reqwest::",
     "hyper::",
     "ureq::",
     "curl::",
@@ -83,20 +148,6 @@ const FORBIDDEN_NETWORK_ENDPOINTS: &[&str] = &[
     "plagiarism.api.pangram.com",
     "github.com/Microck/pangram-cli/releases/latest/download",
 ];
-
-fn pangram() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_pangram"))
-}
-
-fn planned_command_error(command: &str) -> String {
-    format!(
-        "error: unrecognized subcommand '{command}'\n\
-         \n\
-         Usage: pangram [OPTIONS] [COMMAND]\n\
-         \n\
-         For more information, try '--help'.\n"
-    )
-}
 
 fn command(path: &[&str]) -> &'static CommandSpec {
     FULL_GRAMMAR
@@ -171,6 +222,21 @@ fn help_lists_only_implemented_command_entries() {
     assert!(output.stderr.is_empty());
 }
 
+/// F5: every compiled-binary spawn in this file is credential/environment
+/// hermetic. The shared `pangram()` builder removes any inherited
+/// `PANGRAM_API_KEY` and roots config, data, and home state in a private
+/// temporary directory, so no stored credential or host environment can
+/// reach a production billing path. A bare `auth status` must report no
+/// configured credential rather than any stored key.
+#[test]
+fn spawns_are_credential_and_environment_hermetic() {
+    let output = pangram().arg("auth").arg("status").output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["data"]["configured"], false);
+    assert_eq!(body["data"]["source"], "none");
+}
+
 #[test]
 fn short_help_matches_the_exact_help_contract() {
     let output = pangram().arg("-h").output().unwrap();
@@ -181,12 +247,21 @@ fn short_help_matches_the_exact_help_contract() {
 }
 
 #[test]
-fn bare_invocation_prints_help_successfully() {
+fn bare_invocation_with_an_empty_stdin_is_input_required_not_help() {
+    // A compiled-binary spawn gets a non-TTY (null) stdin: bare dispatch
+    // evaluates the source before any help surface, so an empty stdin is the
+    // canonical input_required usage error (exit 2), never help text. The
+    // all-TTY help fallback cannot be exercised without a real terminal; the
+    // PTY harness owns that path.
     let output = pangram().output().unwrap();
 
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), HELP);
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("Usage:"), "not help:\n{stdout}");
+    let body: Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(body["command"], "detect");
+    assert_eq!(body["error"]["code"], "input_required");
 }
 
 #[test]
@@ -208,7 +283,7 @@ fn short_version_reports_the_package_version() {
 }
 
 #[test]
-fn every_planned_top_level_command_is_rejected_before_runtime_work() {
+fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
     let planned_commands: BTreeSet<_> = FULL_GRAMMAR
         .commands
         .iter()
@@ -219,15 +294,17 @@ fn every_planned_top_level_command_is_rejected_before_runtime_work() {
 
     assert_eq!(planned_commands, expected);
     for command in planned_commands {
+        // A bare token spelling a planned command name is literal text for
+        // detection, not a rejected subcommand (contracts.md 14.1). Without a
+        // configured key it reaches the canonical missing-credential failure.
         let output = pangram().arg(command).output().unwrap();
 
-        assert_eq!(output.status.code(), Some(2), "{command}");
-        assert!(output.stdout.is_empty(), "{command}");
-        assert_eq!(
-            String::from_utf8(output.stderr).unwrap(),
-            planned_command_error(command),
-            "{command}"
-        );
+        assert_eq!(output.status.code(), Some(4), "{command}");
+        assert!(output.stderr.is_empty(), "{command}");
+        let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["command"], "detect", "{command}");
+        assert_eq!(body["error"]["code"], "missing_api_key", "{command}");
+
         // The planned command must not be advertised as an available command
         // entry. (An arbitrary substring match cannot be used: the `--data-dir`
         // help legitimately contains the word "history".)
@@ -241,6 +318,38 @@ fn every_planned_top_level_command_is_rejected_before_runtime_work() {
             !listed_commands.clone().any(|name| name == command),
             "{command} must not appear in the help Commands listing"
         );
+    }
+}
+
+/// N4: `--save` stays in the normative grammar (Phase 4 history) but is not
+/// an available Phase 2 capability: the generated reference marks it planned,
+/// and the compiled runtime rejects it before any billable work.
+#[test]
+fn save_is_planned_in_the_reference_and_rejected_at_runtime() {
+    let save = argument(command(&["detect"]), "--save");
+    assert_eq!(save.availability, Availability::Planned);
+
+    let output = pangram()
+        .args(["detect", "--save", "some text"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn hyphen_leading_unknown_flags_are_usage_errors() {
+    for output in [
+        pangram().arg("--frobnicate").output().unwrap(),
+        pangram()
+            .args(["detect", "--no-such-flag"])
+            .output()
+            .unwrap(),
+    ] {
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("unexpected argument"), "{stderr}");
     }
 }
 
@@ -367,22 +476,27 @@ fn cargo_metadata_reports_the_exact_phase_one_runtime_dependencies() {
         .filter(|dependency| dependency["kind"].is_null())
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
-    let expected: BTreeSet<_> = PHASE_1_RUNTIME_DEPENDENCIES.iter().copied().collect();
+    let expected: BTreeSet<_> = PHASE_2_RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
 }
 
+/// HTTP client construction is allowed only inside the analysis module, the
+/// sole owner of Pangram protocol behavior.
 #[test]
-fn phase_one_runtime_source_contains_no_network_path() {
+fn http_client_paths_live_in_the_analysis_module_only() {
     let mut violations = Vec::new();
 
     for path in rust_source_paths() {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "analysis")
+        {
+            continue;
+        }
         let source = fs::read_to_string(&path).unwrap();
         for (line_index, line) in source.lines().enumerate() {
             let code = code_before_line_comment(line);
-            for forbidden in FORBIDDEN_NETWORK_APIS
-                .iter()
-                .chain(FORBIDDEN_NETWORK_ENDPOINTS)
-            {
+            for forbidden in ["reqwest::"] {
                 if code.contains(forbidden) {
                     violations.push(format!(
                         "{}:{} contains {forbidden:?}",
@@ -396,7 +510,117 @@ fn phase_one_runtime_source_contains_no_network_path() {
 
     assert!(
         violations.is_empty(),
-        "Phase 0 runtime source contains network paths:\n{}",
+        "HTTP client paths outside src/analysis:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn source_uses_no_bypassing_network_path() {
+    let mut violations = Vec::new();
+
+    for path in rust_source_paths() {
+        let source = fs::read_to_string(&path).unwrap();
+        for (line_index, line) in source.lines().enumerate() {
+            let code = code_before_line_comment(line);
+            for forbidden in FORBIDDEN_NETWORK_APIS {
+                if code.contains(forbidden) {
+                    violations.push(format!(
+                        "{}:{} contains {forbidden:?}",
+                        path.display(),
+                        line_index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "runtime source contains bypassing network paths:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// Production endpoints are owned by the analysis module as compile-time
+/// constants. No environment, flag, or configuration path may select them.
+#[test]
+fn production_endpoints_are_analysis_owned_constants() {
+    let analysis_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("analysis");
+    let mut endpoint_sites = Vec::new();
+    let mut override_violations = Vec::new();
+
+    // Scan every Rust source under src/analysis, including any future nested
+    // submodule, so the no-network-override guard follows the module tree
+    // rather than only the top level.
+    for path in rust_source_paths() {
+        if !path.starts_with(&analysis_dir) {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        for endpoint in FORBIDDEN_NETWORK_ENDPOINTS {
+            if source.contains(endpoint) {
+                endpoint_sites.push(format!("{}: {endpoint}", path.display()));
+            }
+        }
+        for (line_index, line) in source.lines().enumerate() {
+            let code = code_before_line_comment(line);
+            for forbidden in ["PANGRAM_ENDPOINT", "PANGRAM_API_URL", "endpoint_override"] {
+                if code.contains(forbidden) {
+                    override_violations.push(format!(
+                        "{}:{} contains {forbidden:?}",
+                        path.display(),
+                        line_index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        !endpoint_sites.is_empty(),
+        "the analysis module must own the production endpoint constants"
+    );
+    assert!(
+        override_violations.is_empty(),
+        "endpoint override paths are forbidden:\n{}",
+        override_violations.join("\n")
+    );
+}
+
+/// The CLI interruption path must compile on every supported target.
+/// `signal_hook::iterator` (the `Signals` blocking driver) is gated
+/// `#[cfg(all(not(windows), feature = "iterator"))]`, so referencing it from
+/// shared source fails the Windows build with E0433 even though it compiles
+/// on Unix. The Phase 2 SIGINT flow must use the cross-platform
+/// `signal_hook::low_level::register` handler instead. This guard asserts the
+/// Unix-only API is never written in non-comment source so the native Windows
+/// CI leg never regresses on it again.
+#[test]
+fn source_avoids_unix_only_signal_hook_iterator() {
+    let mut violations = Vec::new();
+
+    for path in rust_source_paths() {
+        let source = fs::read_to_string(&path).unwrap();
+        for (line_index, line) in source.lines().enumerate() {
+            let code = code_before_line_comment(line);
+            for forbidden in ["signal_hook::iterator", "Signals::new", "signals.forever("] {
+                if code.contains(forbidden) {
+                    violations.push(format!(
+                        "{}:{} contains Unix-only signal API {forbidden:?}",
+                        path.display(),
+                        line_index + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "shared source must use the cross-platform signal_hook::low_level::register, not the Unix-only iterator driver:\n{}",
         violations.join("\n")
     );
 }

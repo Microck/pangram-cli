@@ -162,8 +162,8 @@ approved contracts.
 | --- | --- |
 | 0 | Complete |
 | 1 | Complete |
-| 2 | Not started |
-| 3 | Not started |
+| 2 | Complete |
+| 3 | Not started (documented entry contract resolved) |
 | 4 | Not started |
 | 5 | Not started |
 | 6 | Not started |
@@ -245,8 +245,16 @@ Requires explicit authority:
   and architecture contracts have completed their pre-Phase-0 correction pass.
 - File and plagiarism response shapes need live confirmation.
 - Pangram 4 is the only intended text model. Its published model card defines
-  result semantics, but the public REST reference does not yet document the
-  model-selection request field or updated bulk billing contract.
+  result semantics. The Pangram SDK v1.0.0 tag documents the text and job-wide
+  bulk model-selection request field (`model` set to `pangram-4`). Pangram's
+  official API reference documents per-item started-100-word bulk billing and
+  the 1,000-unit request limit.
+- The Pangram 4 text request selector is resolved. The Pangram SDK v1.0.0 tag
+  (`ca42297`, 2026-07-29) documents `POST
+  https://text.external-api.pangram.com/task` with JSON field `model` set to
+  `pangram-4`, optional `public_dashboard_link`, `x-api-key` auth, poll `GET
+  /task/{id}`, success version `4.0`, and `is_humanized` plus `humanizer_score`
+  on every Pangram 4 window.
 - The intro behavior is locked. The agent owns its initial visual baseline and
   autonomous acceptance. The user reviews the quality of the final product,
   not individual baseline snapshots.
@@ -265,8 +273,6 @@ Requires explicit authority:
 1. What is the SHA-256 and provenance of the replacement fox source geometry?
 2. Which stable RMCP 3 release and resulting minimum Rust version are current
    when Phase 6 begins?
-3. What exact documented request field selects Pangram 4?
-4. What billing unit and request ceiling apply to Pangram 4 bulk work?
 
 ### Unknown knowns
 
@@ -313,10 +319,26 @@ behavior enters this queue before implementation continues through that seam.
   for literal seed equivalence would violate the observable contract. They
   were corrected before ownership transfer completed and are covered by
   current-only regressions.
-- 2026-07-29: Pangram 4 launched before its public REST reference and SDK
-  documented the selection field and updated bulk billing contract. Pangram
-  CLI now targets Pangram 4 only and blocks text and bulk submission rather
-  than relying on Pangram 3 default routing or old billing assumptions.
+- 2026-07-29: Pangram 4 launched before its rendered public REST reference and
+  SDK release documented the selection field and updated bulk billing
+  contract. The initial correction targeted Pangram 4 only and blocked text
+  and bulk submission rather than relying on Pangram 3 default routing or old
+  billing assumptions.
+- 2026-07-31: The Pangram SDK v1.0.0 tag (`ca42297`) documented the Pangram 4
+  text and job-wide bulk selection field (`model` set to `pangram-4`) while the
+  rendered REST reference still omitted it. Text submission was unblocked
+  contract-first and pinned to the explicit selector, the no-default/no-fallback
+  rule was kept, and the domain gained the canonical started-100-word text
+  billable-unit rule (`text_billable_units`) used later by CLI preflight and
+  the Analyzer. The bulk billing source had not yet been located in this
+  research pass.
+- 2026-07-31: The locked v1 output-projection contract includes TOON, but the
+  pinned `toon-format 0.5.0` requires Rust 1.87 (its decode parser uses
+  `unsigned_is_multiple_of`, stabilized in 1.87.0, and fails on 1.85 with
+  `E0658`). Applying the architecture's lowest-dependency-compatible
+  `rust-version` rule, the package MSRV rose from 1.85 to the exact minimum
+  1.87.0 rather than to the RMCP 1.88 prerelease floor, and the CI MSRV leg
+  moved with it. Current stable remains 1.97.1.
 
 ## Progress log
 
@@ -359,7 +381,8 @@ behavior enters this queue before implementation continues through that seam.
   repeated analysis results.
 - 2026-07-28: Revalidated the Rust toolchain and Phase 0 dependency baseline.
   Current stable is Rust 1.97.1, and the lowest selected direct-dependency MSRV
-  remains Rust 1.85.
+  is Rust 1.87 (raised from 1.85 on 2026-07-31 when `toon-format 0.5.0` set the
+  floor; see the deviation log and evidence ledger).
 - 2026-07-28: Retargeted the planned stdio server to MCP 2026-07-28 before MCP
   implementation began. File access now requires explicit startup-approved
   roots, the removed initialization lifecycle has no compatibility path, and
@@ -369,8 +392,9 @@ behavior enters this queue before implementation continues through that seam.
   contract set, and a shared transfer corpus passes against every baseline seed
   and generated schema. Current-only regressions record the two documented
   contract-first seed corrections. Formatting, strict Clippy, Rust 1.85
-  compatibility, repository hygiene, dependency audit, license policy, secret
-  scanning, and workflow linting are green.
+  compatibility (the MSRV at that time, now 1.87), repository hygiene,
+  dependency audit, license policy, secret scanning, and workflow linting are
+  green.
 - 2026-07-30: Phase 1 implementation is in place. Strict configuration,
   atomic credential persistence with Unix `0600` and owner-only protected
   Windows ACL enforcement, the `auth`, `config`, and non-billable `doctor`
@@ -395,6 +419,50 @@ behavior enters this queue before implementation continues through that seam.
   cross-compiled target with the `windows-latest` native CI gate configured.
   Independent review returned READY with no unresolved P0 or P1 findings, so
   Phase 1 moves to Complete.
+- 2026-07-31: Phase 2 contract and domain foundation lands. The Pangram SDK
+  v1.0.0 tag documented the Pangram 4 text selector, so the normative
+  contract, architecture, and product text were unblocked for text only and
+  pinned to `model` = `pangram-4` with the no-default/no-fallback rule kept,
+  the rendered-docs staleness was recorded as a caveat rather than a protocol
+  unknown, and the evidence ledger gained sourced protocol and bulk-blocker
+  rows. The domain gained the canonical `text_billable_units` rule with
+  property and overflow-boundary tests. Phase 3 remained out of this Phase 2
+  packet, so Phase 2 stayed In progress.
+- 2026-07-31: Phase 2 independent-review remediation landed contract-first
+  and test-first. Bare piped stdin now detects (the `--help` fallback moved
+  behind bare dispatch; empty or whitespace-only pipes return
+  `input_required`), the undocumented 300-second default wait ceiling was
+  removed in favor of the documented unbounded wait, and cancellation of an
+  issued billable POST now reports the canonical `submission_outcome_unknown`
+  reconciliation outcome instead of a false definite no-remote-action claim
+  while SIGINT still exits 130. Repeated files under an explicit
+  single-document format render one ordered array envelope instead of failing
+  after billable work; an upstream terminal `STAGE_FAILED` exits 6 per its
+  upstream category; explicit `--format pretty` failures surface as sanitized
+  stderr text with empty stdout; the `--timeout` grammar rejects whitespace,
+  exponent, non-finite, zero, and out-of-range forms; `--save` is planned in
+  the generated reference and rejected by the runtime until Phase 4 history;
+  the README reflects the compiled surface; and the protocol suite was
+  decomposed into submission/observation/contract-matrix modules below the
+  hygiene threshold. Remote Yoga smoke, MSRV (1.87), and gate (fmt, full
+  tests, strict clippy) passes are green together with drift, hygiene,
+  audit/deny, gitleaks, and tegami-shape checks.
+- 2026-07-31: Phase 2 moves to Complete. The compiled CLI completes Pangram 4
+  text detection against the real loopback fixture server through `detect`
+  and bare input, every adapter-visible result renders from the canonical
+  typed envelope (JSON, JSONL, TOON, Markdown, pretty), and no adapter
+  contains Pangram protocol logic, proving the roadmap's Phase 2 exit
+  criteria. Independent review returned READY with no P0, P1, or P2 findings;
+  remote Yoga current/MSRV/gate, generated drift, hygiene, supply-chain,
+  gitleaks, and the no-network policy are green, and the native Windows ACL
+  and generated/supply-chain CI gates are exercised on the delivery pull
+  request. Phase 3 remains separate planned work rather than a Phase 2 gap.
+- 2026-07-31: Pangram's official Mintlify API source at `eb214f4` resolves the
+  Phase 3 external entry contract. A Pangram 4 bulk job uses one selector for
+  the whole request, bills each valid item in started 100-word units with a
+  minimum of one, and accepts at most 1,000 billable units. No separate item
+  count limit is documented. Phase 3 may proceed with loopback implementation;
+  public support still requires live conformance.
 
 ## Out of scope
 

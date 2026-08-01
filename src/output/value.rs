@@ -419,6 +419,22 @@ impl EnvelopeMeta {
         self.duration_ms = Some(duration_ms);
         self
     }
+
+    pub const fn started_at(&self) -> Option<UtcTimestamp> {
+        self.started_at
+    }
+
+    pub const fn completed_at(&self) -> Option<UtcTimestamp> {
+        self.completed_at
+    }
+
+    pub const fn failed_at(&self) -> Option<UtcTimestamp> {
+        self.failed_at
+    }
+
+    pub const fn duration_ms(&self) -> Option<u64> {
+        self.duration_ms
+    }
 }
 
 /// A non-empty ordered set produced by repeated-file commands.
@@ -470,6 +486,20 @@ impl AnalysisOutput {
 
     pub fn many(analyses: Vec<Analysis<CanonicalError>>) -> Result<Self, OutputValidationError> {
         NonEmptyAnalyses::new(analyses).map(Self::Many)
+    }
+
+    /// One analysis becomes `One`; a non-empty series becomes `Many` in
+    /// submission order. An empty series is the caller's bug and rejected.
+    pub fn from_analyses(
+        analyses: Vec<Analysis<CanonicalError>>,
+    ) -> Result<Self, OutputValidationError> {
+        match analyses.len() {
+            0 => Err(OutputValidationError::EmptyValue("analysis output")),
+            1 => Ok(Self::one(
+                analyses.into_iter().next().expect("one analysis"),
+            )),
+            _ => Self::many(analyses),
+        }
     }
 }
 
@@ -580,6 +610,37 @@ impl CommandEnvelope {
             command,
             error,
             meta,
+        }
+    }
+
+    /// The resolved command, read from the data variant or the failure branch.
+    pub const fn command(&self) -> ResolvedCommand {
+        match self {
+            Self::Success { data, .. } => data.command(),
+            Self::Failure { command, .. } => *command,
+        }
+    }
+
+    /// Timing metadata shared by both envelope branches.
+    pub const fn meta(&self) -> &EnvelopeMeta {
+        match self {
+            Self::Success { meta, .. } | Self::Failure { meta, .. } => meta,
+        }
+    }
+
+    /// Success data, when this is a success envelope.
+    pub const fn data(&self) -> Option<&CommandData> {
+        match self {
+            Self::Success { data, .. } => Some(data),
+            Self::Failure { .. } => None,
+        }
+    }
+
+    /// The canonical error, when this is a failure envelope.
+    pub const fn error(&self) -> Option<&CanonicalError> {
+        match self {
+            Self::Failure { error, .. } => Some(error),
+            Self::Success { .. } => None,
         }
     }
 }

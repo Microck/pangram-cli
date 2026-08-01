@@ -127,6 +127,14 @@ Bare piped detection uses `detect`.
 A success envelope contains `data` and MUST NOT contain `error`, even when the
 extra `error` value would not validate as a canonical error.
 
+For every repeated-file run the analyses are one canonical ordered series.
+Single-document success formats (JSON, TOON, Markdown, and pretty) place the
+whole series inside one success envelope whose `data` is the ordered analysis
+array, so an explicit non-JSONL format never performs billable work and then
+fails to render. JSONL is the only repeated-file streaming projection: it
+emits one ordered success envelope per analyzed file, one per line. The
+ordered-series rule is stable for schema major `"1"` (section 1).
+
 JSON envelope commands and their `data` roots are closed:
 
 | Commands | `data` root |
@@ -171,9 +179,51 @@ extra `data` value would not validate for the resolved command.
 
 ### 3.3 Partial success
 
-Partial combined and bulk output uses the success envelope. `data.status` is
-`partial`, successful data remains present, and failed checks or items contain
-canonical errors. The process exits 3.
+Partial combined, bulk, and repeated-file output uses the success envelope.
+Successful data remains present, failed checks or items contain canonical
+errors, and the process exits 3. For a single analysis or bulk collection the
+`data` object carries `status: partial`. A repeated-file run renders `data` as
+the canonical ordered analysis *array* (section 3.1): an untagged JSON array
+carries no envelope-level `status`, so the run's partial nature is conveyed by
+exit 3 and by each member analysis's own `status` field.
+
+Repeated single-document files form one ordered series, each member one
+analysis. Only an *ambiguous* mid-run submission preserves the run as a
+partial series: a billable submission POST that was issued but whose
+acceptance became uncertain (for example a dropped connection after the
+send). Three other failure classes behave differently and abort the run with
+their canonical top-level failure envelope: a deterministic pre-billing
+rejection (authentication, payment, usage, or a provably unreached send), an
+accepted task's local observation failure (wait timeout, contract drift, or
+transport), and a genuine SIGINT interruption, which always exits 130. An
+ambiguous submission never discards the analyses already completed; the run
+continues with the remaining files, and the ambiguous-submission file is
+represented in the ordered series by one synthesized analysis member whose:
+
+- `id` is the local `AnalysisId` generated for that file's request, so the
+  member is reconcilable to the exact request that failed
+- `input` carries the file's real `TextInput` (`origin`, `name`, `sha256`,
+  `byte_count`, `word_count`, and `text` only when `--include-input`), so
+  source identity and order metadata are preserved without fabrication
+- single `ai_detection` check is `failed` with the canonical
+  `submission_outcome_unknown` error
+- `save_state` is `ephemeral`
+- `submission_outcome` is `acceptance_unknown`, with
+  `submission_outcome_unknown` reconciliation details (request `sha256`, and
+  the `analysis_id`); the run never replays the ambiguous billable POST and
+  reports the ambiguous outcome so the operator reconciles it
+- `provenance` carries only upstream identity facts that actually exist; the
+  synthesized member never fabricates `result`, upstream identity, or other
+  remote detail, and carries no task id because acceptance was never reached
+
+The envelope's parent `status` is `partial` (mixed succeeded and failed
+members; section 4.1), and the process exits 3. JSONL preserves the ordered
+series as one envelope per line, with the failed member emitted as its own
+line in submission order; single-document formats (JSON, TOON, Markdown,
+pretty) emit the whole ordered series inside one success envelope. Because
+the ambiguous member's outcome is uncertain, reconciliation guidance is
+emitted on stderr with the local reconciliation identity and the fixed
+duplicate-billing recovery reminder.
 
 ## 4. Analysis model
 
@@ -402,8 +452,10 @@ create one.
 ```
 
 The canonical field is `plagiarized_sentence_count`. The initial response
-normalizer accepts a numeric upstream `plagiarized_sentences`. A list triggers
-`upstream_contract_changed` until the live contract is resolved.
+normalizer accepts the numeric upstream `plagiarized_sentences` documented by
+the current official API reference. A list or missing value triggers
+`upstream_contract_changed`. Live conformance must confirm the numeric shape
+before public support.
 
 Source URLs preserve the raw provider string and are not required to validate as
 a URI. The runtime MUST NOT fetch them automatically. It offers an open action
@@ -415,7 +467,7 @@ user confirmation.
 ```json
 {
   "provider": "pangram",
-  "upstream_version": "4",
+  "upstream_version": "4.0",
   "upstream_task_ids": ["task-123"],
   "upstream_bulk_id": "blk-123",
   "submitted_at": "2026-07-23T12:00:00Z",
@@ -518,10 +570,20 @@ manifest invariants to the Rust verifier.
 
 `updated_at` is required and changes whenever counters or state change.
 `estimated_billable_units` records the estimate calculated under the
-documented billing rule for the selected Pangram operation. Pangram has not
-published a Pangram 4 bulk rule or confirmed the earlier 1,000-unit maximum.
-Bulk remains blocked until then. Estimates MUST NOT be presented as exact
-charges.
+documented billing rule for the selected Pangram operation. Pangram 4 bulk
+selection uses one job-wide JSON `model` field with the exact value
+`pangram-4`; per-item model selectors are not supported. Each valid item costs
+one unit per started 100-word block, with a minimum of one unit per item. The
+job estimate is the sum of those per-item units. Pangram accepts at most 1,000
+billable units in one bulk request and documents no separate item-count limit.
+Normal request-body limits still apply.
+
+The effective local ceiling is the smaller of the required caller-supplied
+`max_billable_units` and Pangram's 1,000-unit request limit. An estimate above
+that ceiling fails with `bulk_limit_exceeded` before credential or network
+work. An unexpected upstream `413 Payload Too Large` for a submitted bulk
+request maps to the same code and retains sanitized `http_status: 413` detail.
+Estimates MUST NOT be presented as exact charges.
 
 Bulk timestamps from Pangram are Unix epoch seconds encoded as strings. The
 normalizer converts them to RFC 3339 UTC.
@@ -621,9 +683,25 @@ Initial stable codes:
 auth headers, submitted content, segment text, plagiarism matches, or raw
 response bodies.
 
+Upstream-reported messages (for example `upstream_message` on
+`upstream_analysis_failed`) are reduced before they enter `details`: terminal
+control sequences are stripped, non-printable and non-ASCII characters are
+removed, and the retained text is truncated to a short bounded prefix.
+Provider messages are untrusted and can echo submitted content; callers MUST
+NOT surface raw upstream text to the terminal or serialized error output.
+
 `network_timeout` is retryable only when no billable body was sent or the
 operation is a safe read. A timeout after an ambiguous billable send maps to
 `submission_outcome_unknown`.
+
+The client paces every Pangram request with one shared time-based issue gate:
+request issue times are spaced at least `1/network.max_requests_per_second`
+apart, so no burst exceeds the hard 5-requests-per-second ceiling. This is
+enforced on request issue timing (not completion). Safe-GET retry chains are
+bounded by the attempt cap, a cumulative retry-time budget, and the caller's
+wait deadline: a wait-timeout or cancellation interrupts pending retry sleeps
+promptly, and the cumulative budget prevents bounded-but-large `Retry-After`
+hints from delaying interruption indefinitely.
 
 ## 12. Exit codes
 
@@ -632,7 +710,7 @@ operation is a safe read. A timeout after an ambiguous billable send maps to
 | 0 | Success, accepted asynchronous work, or no update needed |
 | 1 | General operation failure not covered below |
 | 2 | Usage or local input error |
-| 3 | Partial combined or bulk result |
+| 3 | Partial combined, bulk, or repeated-file result |
 | 4 | Authentication or permission failure |
 | 5 | Payment, quota, or rate-limit failure |
 | 6 | Network or upstream failure |
@@ -641,12 +719,49 @@ operation is a safe read. A timeout after an ambiguous billable send maps to
 
 An accepted detached or bulk submission exits 0.
 
+A failure exit derives from the canonical error object's category everywhere
+it surfaces: as a top-level command failure envelope, and as the terminal
+check `error` carried inside a canonical failed analysis. The category-to-exit
+mapping is identical in both positions. In particular:
+
+- an upstream terminal task failure (`STAGE_FAILED`) is an upstream analysis
+  failure: the check carries `upstream_analysis_failed` (category `upstream`),
+  and the command exits 6 (network or upstream failure), never general exit 1
+- a failed analysis whose check error is a local usage or authentication
+  failure exits per that error's category instead
+- process interruption stays exit 130 per section 19
+
+For a repeated-file ordered series the run's exit follows the parent-status
+derivation of section 4.1 applied across the members: a `partial` run (mixed
+member outcomes, or any individually `partial` member) exits 3, while a run
+whose members are ALL `failed` exits per the first failed member's
+check-error category under the identical mapping above. This precedence is one
+shared rule used by every repeated-output projection.
+
+### 12.1 Cancellation and the billable-submission boundary
+
+Local cancellation before the billable submit request is issued completes no
+remote action and reports exactly that (a local stop; with history disabled the
+process exits per the mapping above). Once the submit request is issued, the
+send is ambiguous: the body may have reached Pangram. Cancellation or any
+failure after issue therefore reports the canonical `submission_outcome_unknown`
+acceptance (section 4.5) with the local analysis ID, the request SHA-256, any
+known upstream IDs, the last observed state, and the fixed reconciliation
+recovery. An ambiguous billable send is never replayed, and the process must
+not claim either certain delivery or certain non-delivery.
+
+Signal-driven interruption of the CLI (Ctrl+C/SIGINT) still exits 130 as
+locked; the distinction above governs the identity reported alongside that
+exit and the canonical outcome recorded in the final output.
+
 ## 13. Output projections
 
 ### JSON
 
 One canonical envelope. For repeated files, explicit `--format json` returns an
-ordered array inside `data`.
+ordered array inside `data`. The same one-envelope ordered-series rule applies
+to every other single-document format (TOON, Markdown, pretty); only JSONL
+streams one envelope per analyzed file.
 
 ### JSONL
 
@@ -685,17 +800,51 @@ GLOBAL:
 
 Resolution:
 
-- no command, no input, and stdin, stdout, and stderr all TTYs: TUI
-- no command, literal text: detect
-- no command, non-TTY stdin with content: detect
-- no command, empty stdin or any redirected terminal stream: `input_required`
+- no command, no input, and stdin, stdout, and stderr all TTYs: TUI (the TUI
+  arrives in Phase 5; before it is compiled, that otherwise-TUI launch falls
+  back to successful help text exactly as bare `pangram --help`)
+- no command, literal text: detect. Every bare token that is not a compiled
+  subcommand and does not begin with `-` is literal text, including tokens
+  that spell planned (not yet compiled) command names; those are analyzed as
+  text. Only a hyphen-leading unknown remains a Clap usage error.
+- no command, non-TTY stdin (a pipe or redirection) with content: detect, and
+  the resolved `command` is `detect`
+- no command, non-TTY stdin that decodes to no detectable text (an empty or
+  whitespace-only pipe): the canonical `input_required` usage error (exit 2),
+  never the help surface
+- no command, a TTY stdin, and any other redirected stream: `input_required`
 - literal `-`: stdin
+
+Bare dispatch evaluates the source before any help or usage surface: a bare
+piped stdin never prints help, and only the all-TTY bare launch uses the
+pre-TUI successful-help fallback.
+
+Source-category and content rules:
+
+- `word_count` is the adapter-computed count of Unicode whitespace-separated
+  tokens (`str::split_whitespace`), the canonical count shown in input
+  summaries and used for the text billing estimate.
+- Empty or whitespace-only literal text and empty or whitespace-only piped
+  stdin are the canonical `input_required` usage error: no content was
+  supplied to detect. An executable stdin (TTY, or a pipe that decodes to
+  nothing) is also `input_required`.
+- `--file` reads UTF-8 text files only in schema major 1. A path that cannot
+  be read is `input_required`; a file whose bytes are not UTF-8, or whose
+  decoded text carries no detectable words, is `unsupported_input`, both
+  before any submission. Binary document (PDF, DOCX, RTF) detection is a
+  later-phase workflow and is not inferred client side.
 
 Defaults:
 
 - noninteractive commands default to JSON success and JSON errors
 - an explicitly selected pretty format defaults to text errors
 - `--error-format` overrides those defaults
+- the resolved error surface applies to every failure of the invocation,
+  including failures raised before billable work (plan validation,
+  credential resolution, and client construction): an explicit
+  `--format pretty` surfaces a sanitized text message on stderr with empty
+  stdout and the category-derived exit, unless `--error-format json`
+  overrides it back to a stdout JSON envelope
 - `--progress auto` emits human progress only when stderr is a TTY and the
   selected output is pretty; otherwise it emits no progress
 - JSONL progress requires explicit `--progress jsonl`
@@ -720,6 +869,12 @@ Common applicable flags:
 --max-billable-units N
 ```
 
+`--save` is a later-phase flag: local history arrives in Phase 4. It remains in
+the normative grammar so the Phase 4 surface is fixed now, but until history is
+compiled the flag is not advertised in runtime help or the generated reference,
+and passing it is rejected as an unknown-argument usage error (exit 2) before
+any billable work. It must not be presented as an available Phase 2 capability.
+
 Rules:
 
 - exactly one source category: positional text, stdin, or files
@@ -733,14 +888,32 @@ Rules:
 - binary file plagiarism and combined analysis fail before submission
 - timeout stops waiting, not upstream work
 - `--max-billable-units` rejects a locally estimated request above the ceiling
-  before submission; MCP billable tools require the same field
+  before submission; MCP billable tools require the same field. Each analyzed
+  text contributes its own started-100-word estimate, so repeated `--file`
+  inputs are summed and compared against the single ceiling before any
+  submission.
 - text detection estimates one billable unit per started 100-word block, with
   a minimum of one
 
+Wait and completion:
+
+- `--timeout DURATION` accepts a non-negative decimal count of seconds (`30`,
+  `0.5`), optionally followed by exactly one ASCII unit suffix `s`, `ms`,
+  `m`, or `h` (`500ms`, `2m`, `1h`). A missing unit means seconds. The grammar
+  is exact: no whitespace is allowed between the count and the suffix, an
+  exponent or non-finite form (`1e2`, `inf`, `nan`) is rejected, the count
+  must not be negative, and a count of `0` (or any value that truncates to
+  zero) is rejected as a usage error because it would not bound any wait. The
+  scaled value must fit the supported duration range.
+- when `--timeout` is not supplied, `detect` waits for the analysis to reach a
+  terminal state without a local wait deadline; there is no hidden wait
+  ceiling. A caller bounds an observation only by passing `--timeout`.
+
 Pangram 4 is the only production text model. The CLI has no model-selection
-flag. The analysis module MUST send Pangram's documented Pangram 4 selector
-and MUST NOT rely on the temporary Pangram 3 default. Submission remains
-blocked until Pangram publishes that field.
+flag. The analysis module MUST send Pangram's documented Pangram 4 selector,
+JSON request field `model` with the exact value `pangram-4`, and MUST NOT
+omit `model` or otherwise rely on the temporary Pangram 3 default routing
+that Pangram retires on 2026-09-30.
 
 There is no image-detection command, schema, or MCP tool. Invitation-only
 preview access does not qualify as a public documented API contract.
@@ -752,7 +925,6 @@ pangram bulk submit [JSONL_PATH|-]
   --max-billable-units N
   [--dry-run]
   [--wait]
-  [--public-link]
   [--format FORMAT]
   [--progress auto|never|jsonl]
 
@@ -768,6 +940,8 @@ JSONL item:
 ```
 
 Unknown item fields and duplicate caller IDs fail whole-file validation.
+Pangram's Bulk API does not document a public-dashboard-link request or
+response field, so bulk submission has no `--public-link` option.
 
 ### 14.4 Task
 

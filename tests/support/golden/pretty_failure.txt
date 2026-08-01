@@ -1,0 +1,12 @@
+Pangram
+  schema_version: 1
+  command: detect
+  failed_at: 2026-07-23T12:00:00Z
+
+Error
+  code: missing_api_key
+  category: authentication
+  message: No Pangram API key is configured.
+  retryable: false
+  recovery: Configure a persistent key or set PANGRAM_API_KEY.
+  recovery_command: pangram auth

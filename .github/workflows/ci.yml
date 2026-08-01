@@ -23,7 +23,7 @@ jobs:
             manifest: rust-toolchain.toml
             table: toolchain
             key: channel
-          - toolchain: "1.85.0"
+          - toolchain: "1.87.0"
             manifest: Cargo.toml
             table: package
             key: rust-version
@@ -162,6 +162,12 @@ jobs:
         run: cargo audit
       - name: Enforce dependency license policy
         run: |
+          # The allow-list is the authoritative license policy. ISC and
+          # BSD-3-Clause were admitted 2026-07-31 with the Phase 2 rustls
+          # graph (rustls-webpki ISC, aws-lc-rs/aws-lc-sys ISC options,
+          # brotli closure BSD-3-Clause); CDLA-Permissive-2.0 covers
+          # Mozilla's webpki root certificate data; MIT-0 only appears as
+          # an aws-lc-sys OR alternative. Evidence: docs/evidence-ledger.md
           license_policy="$RUNNER_TEMP/cargo-deny.toml"
           printf '%s\n' \
             '[graph]' \
@@ -174,6 +180,10 @@ jobs:
             '  "Unlicense",' \
             '  "Zlib",' \
             '  "MPL-2.0",' \
+            '  "ISC",' \
+            '  "BSD-3-Clause",' \
+            '  "MIT-0",' \
+            '  "CDLA-Permissive-2.0",' \
             ']' \
             '[licenses.private]' \
             'ignore = true' \

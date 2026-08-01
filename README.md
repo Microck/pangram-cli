@@ -1,16 +1,21 @@
 # Pangram CLI
 
-`pangram` is a planned terminal client for Pangram AI detection and plagiarism
-checking. It is designed for interactive TUI use, shell pipelines, and AI
-agents that need stable JSON and MCP contracts.
+`pangram` is an unofficial terminal client for Pangram AI detection and
+plagiarism checking. It is designed for interactive TUI use, shell pipelines,
+and AI agents that need stable JSON and MCP contracts.
 
 > [!NOTE]
-> This repository has a Phase 0 executable contract scaffold. The compiled
-> binary currently exposes only `--help` and `--version`. The analysis, TUI, and
-> MCP commands below remain planned and are not available yet.
+> The runtime is mid-build: the compiled binary currently ships working
+> `auth` (persistent API-key setup and status), `config` (list/get/set/path),
+> `doctor` (local diagnostics), and `detect` (Pangram 4 text AI detection,
+> including bare literal text, `-`, and piped stdin). Plagiarism and combined
+> analysis, bulk submission, `task`, `history`, and the TUI and stdio MCP
+> server remain planned and are not available yet. Live Pangram conformance is
+> pending; compiled contract and loopback protocol tests are the current
+> correctness gates.
 
-The project will use Pangram's documented API-key-authenticated REST endpoints.
-It will not use browser sessions, private dashboard routes, or scraping.
+The project uses Pangram's documented API-key-authenticated REST endpoints. It
+does not use browser sessions, private dashboard routes, or scraping.
 
 ## Why
 
@@ -26,19 +31,26 @@ agent workflows need a different interface:
 AI detection is the primary planned workflow. Plagiarism is planned as an
 independent check and as an explicit combined analysis.
 
-## Planned quickstart
+## Quickstart
 
-Install a release, configure a Pangram API key, and open the TUI:
+Install a release, configure a Pangram API key, and run your first detection:
 
 ```bash
 pangram auth
-pangram
+pangram detect 'Text to analyze'
 ```
 
-Analyze text in a shell pipeline:
+Detect text in a shell pipeline (a bare launch reads piped stdin):
 
 ```bash
 printf 'Text to analyze' | pangram
+```
+
+Open the interactive terminal interface (planned; the all-TTY bare launch
+currently falls back to help):
+
+```bash
+pangram
 ```
 
 Request human-readable output:
@@ -48,18 +60,19 @@ pangram detect --format pretty 'Text to analyze'
 ```
 
 The default noninteractive output is JSON. Repeated files default to JSONL so
-each result remains independently streamable. `--format toon`, `markdown`, and
-`jsonl` provide alternate projections of the same canonical result.
+each result remains independently streamable; passing an explicit single-
+document format (`--format json`, `toon`, `markdown`, or `pretty`) wraps the
+repeated results in one ordered array instead.
 
 ## Authentication
 
-The guided setup command will be:
+Guided setup stores a Pangram API key in the protected local credential file:
 
 ```bash
 pangram auth
 ```
 
-Persistent noninteractive setup will also be supported:
+Persistent noninteractive setup is also available:
 
 ```bash
 pangram auth set --api-key VALUE
@@ -75,27 +88,35 @@ Create a Pangram API key and add prepaid credits:
 
 https://www.pangram.com/apikey
 
-`PANGRAM_API_KEY` will override the stored key for ephemeral CI and agent
+`PANGRAM_API_KEY` overrides the stored key for ephemeral CI and agent
 environments. Passing a key on the command line can expose it through shell
 history and process listings.
 
-## Planned command surface
+## Command surface
+
+Available today:
 
 | Command | Purpose |
 | --- | --- |
-| `pangram` | Launch the TUI when all standard streams are TTYs, or detect piped/provided text |
-| `pangram detect` | Run AI detection |
+| `pangram` | Bare literal text or piped stdin runs AI detection; an all-TTY launch falls back to help until the TUI arrives |
+| `pangram detect` | Run Pangram 4 AI text detection |
+| `pangram auth` | Configure and inspect API-key authentication |
+| `pangram config` | Inspect and update non-secret configuration |
+| `pangram doctor` | Run local, non-billable diagnostics |
+
+Planned:
+
+| Command | Purpose |
+| --- | --- |
+| `pangram` (TUI) | Launch the interactive terminal interface |
 | `pangram plagiarism` | Run plagiarism checking |
 | `pangram analyze` | Run AI detection and plagiarism together |
 | `pangram bulk` | Submit and inspect asynchronous bulk detection |
 | `pangram task` | Inspect or wait for a Pangram text task |
 | `pangram history` | Manage optional local analysis history |
-| `pangram auth` | Configure and inspect API-key authentication |
 | `pangram mcp` | Run or install the typed stdio MCP server |
 | `pangram agent` | Print the embedded agent usage guide |
 | `pangram skills` | List and load version-matched embedded skills |
-| `pangram config` | Inspect and update non-secret configuration |
-| `pangram doctor` | Run local, non-billable diagnostics |
 | `pangram completions` | Generate shell completions |
 | `pangram update` | Check for or install an eligible direct update |
 
@@ -135,9 +156,9 @@ retention, and unsupported-parity boundaries.
 
 ## Architecture
 
-The shipped runtime will use Rust. A single deep analysis module will own
-Pangram HTTP behavior, polling, normalization, retries, and task state. The CLI,
-TUI, and MCP server will be adapters over that module.
+The runtime uses Rust. A single deep analysis module owns Pangram HTTP
+behavior, polling, normalization, retries, and task state. The CLI, and later
+the TUI and MCP server, are adapters over that module.
 
 Fumadocs will live in a separate TypeScript workspace and consume generated
 schemas and reference material rather than duplicating runtime contracts.

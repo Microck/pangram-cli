@@ -57,8 +57,10 @@ Use property tests for:
 - any terminal child-state combination derives the documented parent state
 - Pangram 4 text billable units equal one started 100-word block with a minimum
   of one
-- bulk billing properties remain disabled until Pangram documents the Pangram
-  4 unit and request ceiling
+- Pangram 4 bulk billable units equal the sum of each valid item's started
+  100-word units, with a minimum of one per item
+- bulk preflight rejects an estimate above either the caller's ceiling or the
+  1,000-unit upstream request limit
 - pagination visits each item once in order
 - accepted UUIDv7 IDs round-trip
 - malformed IDs do not parse
@@ -94,16 +96,18 @@ Fixture scenarios:
 - additive optional fields
 - duplicate and out-of-order bulk pages
 - partial bulk results
-- plagiarism sentence-count/list conflict
-- both documented file-response shapes
+- required integer `plagiarized_sentences`; list or missing values fail
+  upstream contract validation
+- both conflicting official file-response shapes
 
 Tests assert exact request method, path, header, JSON, multipart fields, and
 whether retry occurred.
 
-The text request fixture must assert Pangram's documented Pangram 4 selector.
-No fixture may encode an inferred field or accept a request that relies on
-Pangram's temporary Pangram 3 default. Bulk request fixtures remain blocked
-until Pangram publishes the Pangram 4 billing and limit contract.
+Text and bulk request fixtures must assert Pangram's documented Pangram 4
+selector. No fixture may encode an inferred field or accept a request that
+relies on Pangram's temporary Pangram 3 default. Bulk fixtures must also assert
+the per-item 100-word billing calculation, the 1,000-unit request limit, and
+the absence of per-item model selectors.
 
 Ambiguous-send tests assert `submission_outcome_unknown`, `retryable: false`,
 the sanitized local operation reference, and zero automatic POST replay.

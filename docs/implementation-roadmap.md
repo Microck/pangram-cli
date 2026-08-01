@@ -146,7 +146,9 @@ CLI before expanding breadth.
 
 Entry gate: Pangram must document the Pangram 4 request selector. The exact
 field and selected upstream version must be captured in the evidence ledger
-before protocol implementation starts.
+before protocol implementation starts. Resolved 2026-07-31: the Pangram SDK
+v1.0.0 tag documents the selector (`model` set to `pangram-4`); see the
+evidence ledger.
 
 ### Files
 
@@ -192,9 +194,12 @@ before protocol implementation starts.
 Goal: add long-running and batch behavior without creating a second polling
 path.
 
-Entry gate: Pangram must document Pangram 4 bulk selection, billable-unit
-calculation, and the current request ceiling. Do not reuse the Pangram 3-era
-1,000-word unit or 1,000-unit maximum.
+Entry gate resolved 2026-07-31: official Pangram sources document one job-wide
+JSON `model` field set to `pangram-4`, one billable unit per started 100-word
+block per valid item with a minimum of one, and a 1,000-unit request limit.
+There is no per-item selector or separate item-count limit. Do not reuse the
+Pangram 3-era 1,000-word unit. Live conformance remains required before public
+support, but it does not block loopback implementation.
 
 ### Files
 
@@ -209,15 +214,20 @@ calculation, and the current request ceiling. Do not reuse the Pangram 3-era
 1. Add typed bulk submission, status, wait, item, and result-page models.
 2. Derive billable-unit estimates before submission.
 3. Require `--max-billable-units` for every bulk submission.
-4. Preserve input ordering and caller IDs.
-5. Implement `bulk submit|status|wait|results`.
-6. Implement `task status|wait`.
-7. Preserve successful child results when a bulk operation is partial.
+4. Remove the planned bulk `--public-link` flag and `submit_bulk.public_link`
+   input before implementation. The official Bulk API documents no public
+   dashboard request or response field; do not infer parity with text or file
+   submission.
+5. Preserve input ordering and caller IDs.
+6. Implement `bulk submit|status|wait|results`.
+7. Implement `task status|wait`.
+8. Preserve successful child results when a bulk operation is partial.
 
 ### Tests
 
 - JSONL whole-file validation
 - billable-unit properties
+- absence of bulk public-link inputs in CLI and MCP schemas
 - pagination ordering and duplicate-page rejection
 - local timeout without remote cancellation
 - partial and terminal parent-state derivation
@@ -409,8 +419,8 @@ Goal: complete documented parity only after upstream conflicts are measured.
 
 1. Run one billable-unit live file scenario for each supported file family.
 2. Resolve the two documented file response shapes.
-3. Run one plagiarism scenario that can resolve the
-   `plagiarized_sentences` conflict.
+3. Run one plagiarism scenario that confirms the documented numeric
+   `plagiarized_sentences` field.
 4. Update canonical contracts before implementation.
 5. Add file detection, plagiarism, and combined text analysis.
 6. Keep binary plagiarism and binary combined analysis rejected before send

@@ -235,7 +235,8 @@ combined analysis without separate orchestration methods.
 
 The request does not carry a user-selectable Pangram model. The production
 analyzer is fixed to Pangram 4 and must serialize Pangram's documented model
-selector. It must not depend on the temporary Pangram 3 default or retain a
+selector, JSON request field `model` with the exact value `pangram-4`. It
+must not omit `model`, depend on the temporary Pangram 3 default, or retain a
 second model path.
 
 `BulkRequest` carries validated ordered items and the mandatory billable-unit
@@ -311,12 +312,18 @@ All requests use `x-api-key`.
 Production configuration cannot override these values. Test-only constructors
 accept loopback endpoint sets.
 
-Pangram's Pangram 4 launch did not publish the exact request selector and the
-current REST reference still describes Pangram 3-era request and bulk billing
-contracts. Production text and bulk submission remain unimplemented until the
-Pangram 4 fields are documented and represented in exact loopback request
-fixtures. Do not infer the selector from dashboard traffic or rely on default
-routing.
+The Pangram SDK v1.0.0 tag documents the exact text and job-wide bulk request
+selector (`model` set to `pangram-4`) even though the rendered public REST
+reference still describes the Pangram 3-era request. Production text
+submission sends that explicit selector and never relies on default routing;
+do not infer the selector from dashboard traffic. A future bulk submission
+uses the same job-wide selector and never places a selector on individual
+items. Each valid item contributes one unit per started 100-word block, with a
+minimum of one; the job estimate is their sum. The upstream request limit is
+1,000 billable units with no separate item-count limit. Do not reuse the
+Pangram 3-era 1,000-word unit. Bulk remains unimplemented until Phase 3, and
+both paths must be represented in exact loopback request fixtures before their
+adapters use them. Live conformance remains a public-support gate.
 
 ### 8.2 Reqwest configuration
 
@@ -333,8 +340,13 @@ Do not provide an insecure TLS option.
 
 ### 8.3 Rate and retry policy
 
-Use one shared rate limiter with a hard maximum of 5 requests per second.
-Configuration may lower but not raise it.
+Use one shared time-based issue gate with a hard maximum of 5 requests per
+second. Every Pangram request (submit and poll) is issued only after the gate
+releases it, so request issue times are spaced at least `1/rate` apart and no
+burst can exceed the pacing. Rate limiting is enforced on request issue
+timing, not request completion. Configuration may lower the rate but never
+raise it above 5. The gate schedule is shared across all callers of one
+client (one owner, not a per-request or per-sender limiter).
 
 Retry policy:
 
@@ -348,6 +360,16 @@ Retry policy:
 
 Honor `Retry-After`. Use bounded exponential backoff with jitter for eligible
 GET requests. Poll intervals and HTTP retry backoff are separate concepts.
+
+Safe-GET retry chains observe the caller's wait deadline and a cumulative
+retry-time budget in addition to the per-attempt cap. The total time spent
+sleeping between retry attempts must not exceed the cumulative budget, and a
+caller wait/cancellation deadline interrupts the retry prompt sleep promptly
+(even through repeated `429`/`503` responses carrying `Retry-After` hints).
+Retry attempts remain bounded; the budget and deadline add interruption
+semantics, they do not extend the attempt count. The jitter used to
+decorrelate backoff schedules advances once per draw (atomically per caller)
+so concurrent callers can never produce identical lockstep retry schedules.
 
 ### 8.4 Error mapping
 
@@ -820,14 +842,23 @@ enters Phase 6. Its dependency-compatible Rust version becomes the package
 `rust-version` in that phase. The 2026-07-28-capable RMCP 3 prerelease requires
 Rust 1.88, but a prerelease is evidence, not an approved dependency pin.
 
+Phase 2 applies the same dependency-driven `rust-version` rule to the locked v1
+TOON projection. `toon-format 0.5.0` requires Rust 1.87: its decode parser uses
+`unsigned_is_multiple_of` (stabilized in Rust 1.87.0) and fails to compile on
+Rust 1.85 with `E0658`. Because TOON is part of the locked projection contract
+and the lowest selected direct-dependency-compatible toolchain becomes the
+package `rust-version`, Phase 2 raises `rust-version` from 1.85 to 1.87 (not to
+the RMCP 1.88 prerelease floor, which is not yet a selected dependency).
+
 Later tests add real Axum loopback servers, snapshots, PTYs, and the pinned
 Terminal Control harness when the corresponding behavior exists. Exact
 research snapshots live in [evidence-ledger.md](evidence-ledger.md), not in
 this normative architecture.
 
 The workspace pins current stable Rust for development and records the lowest
-dependency-compatible Rust 2024 toolchain as `rust-version`. Phase 0 MUST prove
-both toolchains before the manifest is accepted. Direct dependency upgrades are
+dependency-compatible Rust 2024 toolchain as `rust-version`. Each phase MUST
+prove both the current stable toolchain and the pinned `rust-version`
+toolchain before its manifest is accepted. Direct dependency upgrades are
 intentional changes.
 
 ## 18. Documentation workspace baseline

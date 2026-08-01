@@ -4,8 +4,8 @@ use microck_pangram_cli::domain::{
     AiDetectionResult, Analysis, AnalysisId, AnalysisInput, AnalysisStatus, BulkCollection,
     BulkCounters, BulkId, BulkItem, BulkItemState, BulkPage, Check, CheckKind, CheckState,
     CheckStatus, FileInput, LocalOperationId, OrderedChecks, Provenance, Sha256Hash,
-    SubmissionOutcome, SubmissionOutcomeUnknownDetails, UpstreamBulkId, UpstreamIdentity,
-    UpstreamTaskIds, UtcTimestamp, derive_parent_status,
+    SubmissionOutcome, SubmissionOutcomeUnknownDetails, TEXT_BILLING_UNIT_WORDS, UpstreamBulkId,
+    UpstreamIdentity, UpstreamTaskIds, UtcTimestamp, derive_parent_status, text_billable_units,
 };
 use proptest::prelude::*;
 use schemars::schema_for;
@@ -47,6 +47,28 @@ fn local_ids_reject_wrong_prefix_case_and_uuid_version() {
 }
 
 proptest! {
+    #[test]
+    // Pangram 4 text billing is one unit per started 100-word block, minimum
+    // one. Regression pins the documented boundaries: 0, 1, 99, 100, and 101
+    // words, and a large value. The generator is bounded to `u64::MAX - 99`
+    // because the implementation computes `words.saturating_add(99) / 100`;
+    // above that bound the saturating offset and the exact oracle diverge
+    // by one for inputs that cannot arise from real text (word count is
+    // derived from a u64 byte length, so u64::MAX-scale word counts are
+    // unreachable). Regression pins the documented overflow boundary directly
+    // below.
+    fn text_billable_units_match_started_100_word_blocks(
+        words in 0_u64..=(u64::MAX - (TEXT_BILLING_UNIT_WORDS - 1)),
+    ) {
+        // Independent oracle: compute the ceiling quotient in i128 space so no
+        // u64 offset can wrap, then clamp to the minimum unit.
+        let expected = (i128::from(words) + i128::from(TEXT_BILLING_UNIT_WORDS) - 1)
+            .div_euclid(i128::from(TEXT_BILLING_UNIT_WORDS))
+            .max(1);
+
+        prop_assert_eq!(i128::from(text_billable_units(words)), expected);
+    }
+
     #[test]
     fn arbitrary_strings_never_parse_unless_they_match_the_local_id_contract(value in "\\PC{0,100}") {
         if let Ok(id) = AnalysisId::from_str(&value) {
@@ -121,6 +143,32 @@ proptest! {
             serde_json::from_value::<SubmissionOutcomeUnknownDetails>(value).is_ok(),
             analysis_identity ^ bulk_identity
         );
+    }
+}
+
+#[test]
+fn text_billable_units_pinned_boundaries() {
+    let cases: &[(u64, u64)] = &[
+        (0, 1),
+        (1, 1),
+        (19, 1),
+        (99, 1),
+        (100, 1),
+        (101, 2),
+        (199, 2),
+        (200, 2),
+        (201, 3),
+        (1_000_000, 10_000),
+        // Overflow boundary: the 99-word ceiling offset reaches u64::MAX
+        // without wrapping, so the largest representable counts still bill
+        // the exact precomputed ceiling quotient floor(u64::MAX / 100).
+        (u64::MAX - 99, 184_467_440_737_095_516),
+        (u64::MAX - 98, 184_467_440_737_095_516),
+        (u64::MAX, 184_467_440_737_095_516),
+    ];
+
+    for (words, expected) in cases {
+        assert_eq!(text_billable_units(*words), *expected, "words = {words}");
     }
 }
 
