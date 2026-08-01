@@ -129,10 +129,11 @@ async fn bulk_wait_succeeded_exits_0() {
 #[tokio::test(flavor = "multi_thread")]
 async fn bulk_wait_timeout_exits_6_with_wait_timeout() {
     let fixture = ProtocolFixture::start().await;
-    // A non-terminal job stays running forever; the first poll is consumed
-    // and the second scripted response holds the loop near the deadline.
+    // A non-terminal job stays running forever; the first poll consumes a
+    // running snapshot and the second scripted response holds until the local
+    // deadline so a finite queue can never run dry before the wait budget.
     fixture.on_bulk_status(Step::Json(status_body("running", 1, 1, 0, 0)));
-    fixture.on_bulk_status(Step::Json(status_body("running", 1, 1, 0, 0)));
+    fixture.on_bulk_status(Step::Hang);
     let isolated = Isolated::new();
     let output = isolated
         .command(fixture.base_url())
@@ -648,8 +649,10 @@ async fn task_wait_reaches_succeeded() {
 #[tokio::test(flavor = "multi_thread")]
 async fn task_wait_timeout_exits_6_with_wait_timeout() {
     let fixture = ProtocolFixture::start().await;
+    // The first poll observes one stage-bearing snapshot; the second holds
+    // until the local deadline so the finite queue can never run dry.
     fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
-    fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
+    fixture.on_poll(Step::Hang);
     let isolated = Isolated::new();
     let output = isolated
         .command(fixture.base_url())

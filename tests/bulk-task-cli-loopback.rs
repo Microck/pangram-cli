@@ -251,12 +251,21 @@ async fn bulk_submit_rejects_a_zero_ceiling_before_work() {
 async fn bulk_submit_rejects_an_estimate_over_the_request_cap() {
     let fixture = ProtocolFixture::start().await;
     let isolated = Isolated::new();
-    // 101 words each over 11 items -> 2 units per item -> 22 > ceiling 21,
-    // and the local ceiling also likes less than the 1000-unit cap.
-    let input = jsonl(&[("row-001", &"word ".repeat(101))]);
+    // 101 words over 501 items -> 2 units per item = 1002 > 1000-unit cap,
+    // so rejection comes from the request cap, not the caller ceiling (set
+    // above the cap). The started-100-word rule bills 101 words as 2 units.
+    let text = "word ".repeat(101);
+    let owned: Vec<(String, String)> = (0..501)
+        .map(|index| (format!("row-{index:03}"), text.clone()))
+        .collect();
+    let refs: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(id, words)| (id.as_str(), words.as_str()))
+        .collect();
+    let input = jsonl(&refs);
     let output = spawn_with_stdin(
         isolated.command_without_key(fixture.base_url()),
-        &["bulk", "submit", "-", "--max-billable-units", "1"],
+        &["bulk", "submit", "-", "--max-billable-units", "2000"],
         input.as_bytes(),
     );
     assert_eq!(output.status.code(), Some(2));

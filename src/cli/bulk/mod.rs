@@ -84,6 +84,7 @@ pub(super) fn prepare(
 /// projection handoff. The exit code derives from the canonical content
 /// before rendering ever runs.
 pub(super) fn succeed(
+    command: ResolvedCommand,
     data: CommandData,
     exit_code: ExitCode,
     output: detect::ResolvedOutput,
@@ -93,7 +94,7 @@ pub(super) fn succeed(
         .with_started_at(started)
         .with_duration_ms(detect::elapsed_ms(started));
     let envelope = CommandEnvelope::success(data, meta);
-    detect::primary_outcome(&envelope, output, exit_code.as_u8(), started)
+    detect::primary_outcome(command, &envelope, output, exit_code.as_u8(), started)
 }
 
 /// Builds the single-threaded async runtime one bulk/task invocation blocks

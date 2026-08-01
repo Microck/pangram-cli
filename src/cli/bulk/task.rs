@@ -52,7 +52,13 @@ pub(super) fn task_status(
     match result {
         Ok(analysis) => {
             let exit = task_exit(&analysis);
-            succeed(CommandData::TaskStatus(analysis), exit, output, started)
+            succeed(
+                resolved,
+                CommandData::TaskStatus(analysis),
+                exit,
+                output,
+                started,
+            )
         }
         Err(failure) => detect::failure_outcome(resolved, output, started, failure.into_error()),
     }
@@ -116,13 +122,22 @@ pub(super) fn task_wait(
     match result {
         Ok(analysis) => {
             let exit = task_exit(&analysis);
-            succeed(CommandData::TaskWait(analysis), exit, output, started)
+            succeed(
+                resolved,
+                CommandData::TaskWait(analysis),
+                exit,
+                output,
+                started,
+            )
         }
         Err(failure) => {
             let error = failure.into_error();
             if matches!(error.code(), ErrorCode::NetworkUnavailable) && stop.token().is_cancelled()
             {
-                let note = format!("interrupted; upstream task id {}", task_id);
+                let note = format!(
+                    "interrupted; upstream task id {}",
+                    detect::sanitize_for_stderr(task_id.as_str())
+                );
                 return detect::interrupted_outcome(resolved, output, started, error, note);
             }
             detect::failure_outcome(resolved, output, started, error)

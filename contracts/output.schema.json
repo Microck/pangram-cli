@@ -1849,14 +1849,16 @@
           "$ref": "#/$defs/Sha256Hash"
         },
         "estimated_billable_units": {
+          "description": "Always at least 1: `text_billable_units` never returns 0 and the plan\nrejects an empty item list (contracts.md 9.2).",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 1
         },
         "item_count": {
+          "description": "Always at least 1: `BulkSubmissionPlan::new` rejects an empty list.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 1
         }
       },
       "required": [

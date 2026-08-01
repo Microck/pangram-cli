@@ -23,12 +23,16 @@ accepted`, omits `provenance.submitted_at`, and derives its input
 descriptor only from the terminal document Pangram attested.
 
 Every envelope routes through the canonical projection and error owners:
-a partial collection or analysis exits 3, a local observation failure
-after acceptance exits 1 through an accepted status-changed envelope, and
-SIGINT during a wait exits 130 with the identity tuple on stderr. Progress
-on `bulk wait` and `task wait` follows the shared `auto|never|jsonl`
-policy. Bulk submission carries no `--public-link` option, matching the
-documented Bulk API.
+a terminal `partial` collection or analysis reported by `bulk status`,
+`bulk wait`, or `task status`/`task wait` exits 3, a local observation
+failure after acceptance exits 1 through an accepted status-changed
+envelope, and SIGINT during a wait exits 130 with the identity tuple on
+stderr. A successfully normalized mixed-acceptance `bulk submit` and a
+successful `bulk results` page or fetch-all read exit 0 regardless of
+failed children (contracts.md 12/14.3); exit 3 applies only to the terminal
+observation outcome. Progress on `bulk wait` and `task wait` follows the
+shared `auto|never|jsonl` policy. Bulk submission carries no `--public-link`
+option, matching the documented Bulk API.
 
 ## Fixed
 

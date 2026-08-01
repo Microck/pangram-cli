@@ -58,6 +58,7 @@ pub(super) fn success_outcome(
                 CommandEnvelope::success(CommandData::Detect(AnalysisOutput::one(analysis)), meta);
             let exit_code = output_exit_code(&envelope).as_u8();
             emit_primary(
+                ResolvedCommand::Detect,
                 std::slice::from_ref(&envelope),
                 output,
                 exit_code,
@@ -87,17 +88,24 @@ pub(super) fn success_outcome(
                             )
                         })
                         .collect();
-                    emit_primary(&envelopes, output, exit_code, started_at)
+                    emit_primary(
+                        ResolvedCommand::Detect,
+                        &envelopes,
+                        output,
+                        exit_code,
+                        started_at,
+                    )
                 }
                 _ => {
                     let data = match AnalysisOutput::from_analyses(analyses) {
                         Ok(data) => data,
                         Err(_) => {
-                            return internal_outcome(output, started_at);
+                            return internal_outcome(ResolvedCommand::Detect, output, started_at);
                         }
                     };
                     let envelope = CommandEnvelope::success(CommandData::Detect(data), meta);
                     emit_primary(
+                        ResolvedCommand::Detect,
                         std::slice::from_ref(&envelope),
                         output,
                         exit_code,
@@ -272,12 +280,14 @@ pub(crate) fn interrupted_outcome(
 /// projection owner. Shared by detection, bulk, and task commands so every
 /// projection boundary stays identical.
 pub(crate) fn primary_outcome(
+    command: ResolvedCommand,
     envelope: &CommandEnvelope,
     output: ResolvedOutput,
     exit_code: u8,
     started_at: crate::domain::UtcTimestamp,
 ) -> DetectOutcome {
     emit_primary(
+        command,
         std::slice::from_ref(envelope),
         output,
         exit_code,
@@ -290,6 +300,7 @@ pub(crate) fn primary_outcome(
 /// also go to stdout because they are the requested primary output. A write
 /// or flush failure degrades the exit to 1 rather than reporting success.
 fn emit_primary(
+    command: ResolvedCommand,
     envelopes: &[CommandEnvelope],
     output: ResolvedOutput,
     exit_code: u8,
@@ -304,7 +315,7 @@ fn emit_primary(
             envelopes: vec![],
             rendered: true,
         },
-        Err(_) => internal_outcome(output, started_at),
+        Err(_) => internal_outcome(command, output, started_at),
     }
 }
 
@@ -371,11 +382,12 @@ pub(crate) fn identity_note(identity: &crate::analysis::OperationIdentity) -> St
 }
 
 fn internal_outcome(
+    command: ResolvedCommand,
     output: ResolvedOutput,
     started_at: crate::domain::UtcTimestamp,
 ) -> DetectOutcome {
     failure_outcome(
-        ResolvedCommand::Detect,
+        command,
         output,
         started_at,
         internal_error("the result could not be rendered honestly"),

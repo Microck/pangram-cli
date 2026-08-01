@@ -51,7 +51,13 @@ pub(super) fn bulk_status(
     match result {
         Ok(collection) => {
             let exit = collection_exit(&collection);
-            succeed(CommandData::BulkStatus(collection), exit, output, started)
+            succeed(
+                resolved,
+                CommandData::BulkStatus(collection),
+                exit,
+                output,
+                started,
+            )
         }
         Err(failure) => detect::failure_outcome(resolved, output, started, failure.into_error()),
     }
@@ -113,7 +119,13 @@ pub(super) fn bulk_wait(
     match result {
         Ok(Ok(collection)) => {
             let exit = collection_exit(&collection);
-            succeed(CommandData::BulkWait(collection), exit, output, started)
+            succeed(
+                resolved,
+                CommandData::BulkWait(collection),
+                exit,
+                output,
+                started,
+            )
         }
         Ok(Err(failure)) => {
             detect::failure_outcome(resolved, output, started, failure.into_error())

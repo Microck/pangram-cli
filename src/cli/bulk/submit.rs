@@ -146,7 +146,13 @@ pub(super) fn bulk_submit(
         Analyzed::Accepted(running) => submit_accepted_outcome(&running, output, started),
         Analyzed::Observed(Ok(Ok(collection))) => {
             let exit = super::status_wait::collection_exit(&collection);
-            succeed(CommandData::BulkWait(collection), exit, output, started)
+            succeed(
+                resolved,
+                CommandData::BulkWait(collection),
+                exit,
+                output,
+                started,
+            )
         }
         Analyzed::Observed(Ok(Err(failure))) => {
             let error = failure.into_error();
@@ -319,6 +325,7 @@ fn submit_accepted_outcome(
         }
     };
     succeed(
+        ResolvedCommand::BulkSubmit,
         CommandData::BulkSubmit(crate::output::BulkSubmitOutput::collection(collection)),
         ExitCode::Success,
         output,
@@ -352,5 +359,11 @@ fn dry_run_outcome(
         CommandData::BulkSubmit(crate::output::BulkSubmitOutput::dry_run(dry_run)),
         meta,
     );
-    detect::primary_outcome(&envelope, output, ExitCode::Success.as_u8(), started)
+    detect::primary_outcome(
+        ResolvedCommand::BulkSubmit,
+        &envelope,
+        output,
+        ExitCode::Success.as_u8(),
+        started,
+    )
 }

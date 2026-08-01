@@ -163,7 +163,7 @@ approved contracts.
 | 0 | Complete |
 | 1 | Complete |
 | 2 | Complete |
-| 3 | In progress (documented entry contract resolved) |
+| 3 | Complete |
 | 4 | Not started |
 | 5 | Not started |
 | 6 | Not started |
@@ -544,6 +544,42 @@ behavior enters this queue before implementation continues through that seam.
   `STAGE_FAILED` exits 6 per its upstream category. The minor Tegami bump is
   set for both packages. Phase 3 stays In progress; public bulk/task support
   still requires live conformance.
+- 2026-08-01: The final Phase 3 remediation packet landed contract-first and
+  test-first over the packet-3/4 surface. Observed bulk child analyses are
+  now `accepted`, never `terminal` (contracts.md 4.6): the resumed plan=None
+  results/items builders in `src/analysis/bulk/assemble.rs` emit observed
+  success and observed failed children with the attested upstream identity, so
+  a valid failed child or a text-less succeeded child no longer fails as
+  `upstream_contract_changed`. `bulk submit` without `--wait` projects the
+  validated HTTP 202 acceptance snapshot (truthful
+  accepted/failed counters and derived collection status) instead of
+  fabricating an all-queued-zero state, and any successfully normalized 202
+  exits 0. A successful `bulk results` page or fetch-all read exits 0
+  regardless of failed children on the returned window (one page is not
+  authoritative for whole-job terminal state), and fetch-all reassembles one
+  canonical aggregate window (`offset: 0`, `limit: max(1, total_items)`
+  bounded by 1,000, no `next_offset`). The README lists bulk and task as
+  compiled and available with the live-conformance caveat, and a compiled
+  contract test pins the README availability list to the Rust-owned grammar.
+- 2026-08-01: Phase 3 moves to Complete. The compiled CLI activates every
+  contracted bulk and task surface against the real loopback fixture server
+  (`bulk submit` with required `--max-billable-units` whole-file preflight,
+  `bulk status|wait|results` with safe-GET paging, and `task status|wait`), so
+  no bulk request starts without a validated cost ceiling, task and bulk
+  waiting reuse the one analysis progress model behind the single
+  adapter-facing `Analyzer`, a terminal `partial` result exits 3 through the
+  status/wait surfaces while a successful page/fetch-all read stays
+  machine-readable at exit 0 regardless of failed children (the documented
+  exit mapping), proving the roadmap's Phase 3 exit criteria.
+  Independent complete-chain review returned READY with no unresolved P0, P1,
+  or warranted P2 findings; the safe static gates (fmt, hygiene/ASCII,
+  one-package, audit/deny, gitleaks, workflow and no-network policy, Tegami
+  shape, GOAL/contracts/evidence coherence) are green. The authoritative broad
+  gates (current Rust, MSRV 1.87, generated drift, native Windows ACL, supply
+  chain) are exercised on the delivery pull request because the remote Yoga
+  lease is held by another checkout and must not be reclaimed. Public bulk
+  support, live Pangram bulk conformance, and any public release stay gated.
+  Phase 4 remains planned, separate work.
 
 ## Out of scope
 

@@ -88,7 +88,12 @@ pub struct BulkDryRun {
     status: AnalysisStatus,
     submission_outcome: SubmissionOutcome,
     plan_sha256: Sha256Hash,
+    /// Always at least 1: `text_billable_units` never returns 0 and the plan
+    /// rejects an empty item list (contracts.md 9.2).
+    #[schemars(range(min = 1))]
     estimated_billable_units: u64,
+    /// Always at least 1: `BulkSubmissionPlan::new` rejects an empty list.
+    #[schemars(range(min = 1))]
     item_count: u64,
 }
 

@@ -723,6 +723,15 @@ impl<C: Clock> BulkAnalyzer<C> {
         let mut total: Option<u64> = None;
         let mut offset = 0_u64;
         let mut reads = 0_u64;
+        // Report one truthful observed state on fetch-all progress: capture
+        // the handle's current counters once before the walk and reuse that
+        // for every emitted event. `running.last_state()` only advances when
+        // `observe`/`snapshot` refresh it, so per-page reads through
+        // `bulk_results_page` never move it; emitting it per page would claim
+        // the handle's initial (possibly placeholder) state was newly observed
+        // work. A single captured snapshot stays honest without paying an
+        // extra status round-trip on every page (CodeRabbit finding).
+        let (status, counters) = running.last_state();
 
         loop {
             if cancel.is_cancelled() {
@@ -736,10 +745,14 @@ impl<C: Clock> BulkAnalyzer<C> {
                 ));
             }
             if reads >= max_reads {
+                // The read bound is a local policy limit, not a transport
+                // problem: the network was available and every page read
+                // succeeded. Report the usage-scoped code consistently with
+                // the `max_reads == 0` caller-validation case above.
                 return Err(BulkAnalysisError::new(
                     running.bulk_id(),
                     CanonicalError::new(
-                        ErrorCode::NetworkUnavailable,
+                        ErrorCode::InputRequired,
                         "The bulk results fetch-all exceeded its read bound.",
                     )
                     .expect("static template"),
@@ -800,7 +813,6 @@ impl<C: Clock> BulkAnalyzer<C> {
                 all_items.push(item.clone());
             }
 
-            let (status, counters) = running.last_state();
             on_progress(&BulkProgress {
                 bulk_id: running.bulk_id(),
                 status,

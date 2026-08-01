@@ -9,7 +9,7 @@ and AI agents that need stable JSON and MCP contracts.
 > `auth` (persistent API-key setup and status), `config` (list/get/set/path),
 > `doctor` (local diagnostics), `detect` (Pangram 4 text AI detection,
 > including bare literal text, `-`, and piped stdin), `bulk` (submit, status,
-> wait, items, and results for asynchronous bulk detection), and `task`
+> wait, and results for asynchronous bulk detection), and `task`
 > (status and wait for one Pangram text task) are compiled and available.
 > Plagiarism and combined analysis, `history`, and the TUI and stdio MCP
 > server remain planned and are not available yet. Live Pangram conformance

@@ -419,8 +419,9 @@ impl<C: Clock> UpstreamClient<C> {
     }
 
     /// The one shared safe-GET retry chain used by task polling and bulk page
-    /// fetches. Returns a 2xx response or, when the status map is task/poll
-    /// scoped, a 404 sentinel. Retries bounded transient failures and
+    /// fetches. Returns a 2xx response or a 404 sentinel for every status map
+    /// (task- and bulk-scoped alike): a missing resource short-circuits
+    /// before any status mapping runs. Retries bounded transient failures and
     /// 429/5xx, honoring `Retry-After` and clamping every sleep to the
     /// cumulative budget and the caller's wait `deadline`.
     async fn safe_get(

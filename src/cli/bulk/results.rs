@@ -124,6 +124,7 @@ fn succeed_page(
     started: UtcTimestamp,
 ) -> DetectOutcome {
     succeed(
+        ResolvedCommand::BulkResults,
         CommandData::BulkResults(page_result.page),
         ExitCode::Success,
         output,

@@ -237,6 +237,15 @@ pub(in crate::analysis) struct NormalizedBulkPlanStatus {
 /// A larger reported count fails closed as contract drift; the client never
 /// allocates from an unchecked count (contracts section 9.1).
 fn validate_untrusted_total_items(total: u64) -> Result<u64, CanonicalError> {
+    // The item-count ceiling deliberately reuses the billable-unit limit: the
+    // bound holds only while every item bills at least one unit (contracts
+    // 9.1), so a future billing-rule change could silently change the item
+    // ceiling. Assert the coupling in one place so the invariant is explicit
+    // and any divergence fails a test rather than slipping through.
+    const _: () = assert!(
+        crate::domain::MIN_ITEM_BILLABLE_UNITS == 1,
+        "the 1,000-item ceiling assumes every item bills at least one unit"
+    );
     if total > crate::domain::BULK_BILLABLE_UNIT_LIMIT {
         return Err(contract_changed(
             "total_items",
@@ -446,10 +455,11 @@ pub(in crate::analysis) fn normalize_items_page(
     header.validate_window(expected_offset, expected_limit, expected_total)?;
     // Never index the caller's plan from an unchecked count: bound the
     // reported total before any in-window position reaches `plan_item_at`.
-    validate_total_within_window(&header.total_items)?;
+    validate_total_within_window(header.total_items)?;
     validate_ascending(response.items.iter().map(|item| item.index))?;
     let mut outcomes = Vec::with_capacity(response.items.len());
     for item in &response.items {
+        validate_index_in_window(item.index, header.offset, header.limit, header.total_items)?;
         outcomes.push(item_outcome(
             item.index,
             item.task_id.as_ref(),
@@ -484,11 +494,17 @@ pub(in crate::analysis) fn normalize_results_page(
     header.validate_window(expected_offset, expected_limit, expected_total)?;
     // Never index the caller's plan from an unchecked count: bound the
     // reported total before any in-window position reaches `plan_item_at`.
-    validate_total_within_window(&header.total_items)?;
+    validate_total_within_window(header.total_items)?;
     // Each list is strictly ascending on its own; cross-list integrity is
     // disjointness (checked below), not a chained ordering across the lists.
     validate_ascending(response.items.iter().map(|item| item.index))?;
     validate_ascending(response.failed_items.iter().map(|item| item.index))?;
+    for index in response.items.iter().map(|item| item.index) {
+        validate_index_in_window(index, header.offset, header.limit, header.total_items)?;
+    }
+    for index in response.failed_items.iter().map(|item| item.index) {
+        validate_index_in_window(index, header.offset, header.limit, header.total_items)?;
+    }
 
     let mut succeeded = HashMap::with_capacity(response.items.len());
     for item in &response.items {
@@ -575,8 +591,32 @@ pub(in crate::analysis) fn normalize_results_page(
 /// against the documented job cap only when no trusted plan count is known;
 /// this second check is a defense-in-depth ceiling applied to every page so
 /// a window item can never drive `plan_item_at` out of a trusted plan.
-fn validate_total_within_window(total_items: &u64) -> Result<(), CanonicalError> {
-    validate_untrusted_total_items(*total_items).map(|_| ())
+fn validate_total_within_window(total_items: u64) -> Result<(), CanonicalError> {
+    validate_untrusted_total_items(total_items).map(|_| ())
+}
+
+/// Every reported position must lie inside the requested window
+/// (`offset..min(offset + limit, total_items)`) and below the validated
+/// `total_items`. An out-of-window or at-or-above-total position is contract
+/// drift; without this bound a page read of a remotely authored job could
+/// feed an unchecked index (including `u64::MAX`) into the assembler's
+/// `next_offset` (which computes `max + 1`) and into the caller's reassembled
+/// set. Applied to every items entry and to both results lists so all page
+/// reads fail closed (contracts 9.1).
+fn validate_index_in_window(
+    index: u64,
+    offset: u64,
+    limit: u64,
+    total_items: u64,
+) -> Result<(), CanonicalError> {
+    let end = offset.saturating_add(limit).min(total_items);
+    if index < offset || index >= end {
+        return Err(contract_changed(
+            "index",
+            format!("source position {index} is outside the requested window {offset}..{end}"),
+        ));
+    }
+    Ok(())
 }
 
 /// One items-page entry or failed entry shared outcome. `task_id` is

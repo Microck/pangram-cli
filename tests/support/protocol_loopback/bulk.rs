@@ -33,10 +33,14 @@ fn pop(
     pick: impl FnOnce(&mut BulkQueues) -> &mut VecDeque<Step>,
     what: &str,
 ) -> Step {
-    let mut guard = state.lock().expect("fixture state");
-    pick(guard.bulk_queues())
-        .pop_front()
-        .unwrap_or_else(|| panic!("an unscripted {what} reached the fixture"))
+    // Take the step under the lock, release the guard, then decide. Panicking
+    // while the guard is alive would poison the fixture mutex and hide the
+    // original cause behind an unrelated poison panic on the next call.
+    let step = {
+        let mut guard = state.lock().expect("fixture state");
+        pick(guard.bulk_queues()).pop_front()
+    };
+    step.unwrap_or_else(|| panic!("an unscripted {what} reached the fixture"))
 }
 
 async fn handle_bulk_submit(

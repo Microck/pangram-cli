@@ -92,13 +92,7 @@ pub(super) fn assemble_results_page(
                 NormalizedItemResult::Succeeded(success) => {
                     let now = UtcTimestamp::now();
                     let task_id = success.task_id.clone();
-                    let caller_id = plan
-                        .and_then(|plan| {
-                            plan.items()
-                                .get(usize::try_from(index).ok()?)
-                                .and_then(|item| item.caller_id())
-                        })
-                        .map(|id| id.as_str().to_owned());
+                    let caller_id = caller_id_at(plan, index);
                     let analysis = match plan {
                         Some(plan) => build_terminal_success_analysis(
                             plan_item_at(plan, index)?,
@@ -125,13 +119,7 @@ pub(super) fn assemble_results_page(
                     // read the worker identity is the only provenance.
                     items.push(BulkItem {
                         index,
-                        caller_id: plan
-                            .and_then(|plan| {
-                                plan.items()
-                                    .get(usize::try_from(index).ok()?)
-                                    .and_then(|item| item.caller_id())
-                            })
-                            .map(|id| id.as_str().to_owned()),
+                        caller_id: caller_id_at(plan, index),
                         analysis_id: None,
                         upstream_task_id: task_id,
                         state: crate::domain::BulkItemState::Running,
@@ -145,13 +133,7 @@ pub(super) fn assemble_results_page(
             };
             items.push(BulkItem {
                 index,
-                caller_id: plan
-                    .and_then(|plan| {
-                        plan.items()
-                            .get(usize::try_from(index).ok()?)
-                            .and_then(|item| item.caller_id())
-                    })
-                    .map(|id| id.as_str().to_owned()),
+                caller_id: caller_id_at(plan, index),
                 analysis_id: Some(analysis.id),
                 upstream_task_id: outcome.task_id.clone(),
                 state: crate::domain::BulkItemState::Failed {
@@ -183,13 +165,7 @@ pub(super) fn assemble_items_metadata_page(
             task_id,
             error,
         } = outcome;
-        let caller_id = plan
-            .and_then(|plan| {
-                plan.items()
-                    .get(usize::try_from(index).ok()?)
-                    .and_then(|item| item.caller_id())
-            })
-            .map(|id| id.as_str().to_owned());
+        let caller_id = caller_id_at(plan, index);
         match error {
             Some(_) => {
                 let outcome = NormalizedBulkItemOutcome {
@@ -500,6 +476,19 @@ fn outcome_error(outcome: &NormalizedBulkItemOutcome) -> CanonicalError {
     .and_then(|error| error.with_contextual_retryability(false))
     .and_then(|error| error.with_details(details))
     .expect("static template")
+}
+
+/// Resolves one item's caller ID from the trusted local plan. A resumed
+/// observation has no plan, so no caller ID is available; an unchecked index
+/// that cannot address the plan also resolves to `None` (contract drift
+/// handling elsewhere never builds from it).
+pub(super) fn caller_id_at(plan: Option<&BulkSubmissionPlan>, index: u64) -> Option<String> {
+    plan.and_then(|plan| {
+        plan.items()
+            .get(usize::try_from(index).ok()?)
+            .and_then(|item| item.caller_id())
+    })
+    .map(|id| id.as_str().to_owned())
 }
 
 /// Validates one explicit caller page request's `limit`. A malformed page

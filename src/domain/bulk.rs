@@ -28,6 +28,12 @@ pub const BULK_MODEL: &str = "pangram-4";
 /// Pangram's documented maximum billable units per bulk request.
 pub const BULK_BILLABLE_UNIT_LIMIT: u64 = 1000;
 
+/// The documented minimum billable units one valid item costs: one started
+/// 100-word block, with a hard floor of one unit per item (contracts 9.1).
+/// The shared item-count ceiling derivation in the analysis normalizer
+/// relies on this staying at least 1.
+pub const MIN_ITEM_BILLABLE_UNITS: u64 = 1;
+
 /// The documented maximum `limit` on item and result pages.
 pub const BULK_PAGE_LIMIT_MAX: u64 = 1000;
 
@@ -302,7 +308,9 @@ pub struct BulkFailedItem {
     #[serde(default, deserialize_with = "super::deserialize_missing_only")]
     pub id: Option<NonEmptyString>,
     pub task_id: Option<NonEmptyString>,
-    #[serde(default, deserialize_with = "super::deserialize_missing_only")]
+    /// A failed entry accepts `null` or any string `stage` (contracts.md 9.1);
+    /// `stage` is provider diagnostic evidence only, never protocol state.
+    #[serde(default)]
     pub stage: Option<NonEmptyString>,
     #[serde(default, deserialize_with = "super::deserialize_missing_only")]
     pub error: Option<String>,
@@ -346,7 +354,9 @@ pub struct BulkItemMetadata {
     /// Documented as null for items that failed immediate validation.
     #[serde(default)]
     pub task_id: Option<NonEmptyString>,
-    #[serde(default, deserialize_with = "super::deserialize_missing_only")]
+    /// Provider diagnostic evidence only; accepts `null` or any string like a
+    /// failed entry (contracts.md 9.1), never protocol state.
+    #[serde(default)]
     pub stage: Option<NonEmptyString>,
     #[serde(default)]
     pub error: Option<String>,
@@ -374,7 +384,9 @@ pub struct BulkResultItem {
     pub id: Option<NonEmptyString>,
     #[serde(default)]
     pub task_id: Option<NonEmptyString>,
-    #[serde(default, deserialize_with = "super::deserialize_missing_only")]
+    /// Provider diagnostic evidence only; accepts `null` or any string like a
+    /// failed entry (contracts.md 9.1), never protocol state.
+    #[serde(default)]
     pub stage: Option<NonEmptyString>,
     #[serde(default)]
     pub error: Option<String>,
