@@ -552,9 +552,11 @@ fn production_endpoints_are_analysis_owned_constants() {
     let mut endpoint_sites = Vec::new();
     let mut override_violations = Vec::new();
 
-    for entry in fs::read_dir(&analysis_dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+    // Scan every Rust source under src/analysis, including any future nested
+    // submodule, so the no-network-override guard follows the module tree
+    // rather than only the top level.
+    for path in rust_source_paths() {
+        if !path.starts_with(&analysis_dir) {
             continue;
         }
         let source = fs::read_to_string(&path).unwrap();

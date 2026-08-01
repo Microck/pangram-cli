@@ -2,7 +2,8 @@
 //! fixtures deterministically with:
 //!
 //! ```text
-//! cargo test --features dev-tools --test projection-contract-golden -- --nocapture
+//! PANGRAM_REGENERATE_GOLDENS=1 \
+//!   cargo test --features dev-tools --test projection-contract-golden -- --nocapture
 //! ```
 //!
 //! The fixture module is shared with the contract tests, so several fixture
@@ -26,6 +27,14 @@ fn render_to(format: OutputFormat, color: ColorPolicy, envelope: &CommandEnvelop
 
 #[test]
 fn print_goldens() {
+    // Regeneration is opt-in on PANGRAM_REGENERATE_GOLDENS=1 so the
+    // `--all-features` CI sweep never rewrites the committed goldens in
+    // place; a masked renderer regression would otherwise go unnoticed.
+    if std::env::var_os("PANGRAM_REGENERATE_GOLDENS").as_deref() != Some(std::ffi::OsStr::new("1"))
+    {
+        eprintln!("skipping golden regeneration; set PANGRAM_REGENERATE_GOLDENS=1 to overwrite");
+        return;
+    }
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/golden");
     let write = |name: &str, content: &str| {
         std::fs::write(root.join(name), content).unwrap();

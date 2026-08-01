@@ -138,7 +138,9 @@ pub enum AnalysisError {
     ResponseTooLarge,
     #[error("the response body was not valid JSON: {0}")]
     MalformedBody(String),
-    #[error("the task state was cancelled locally; no remote action was taken")]
+    #[error(
+        "the task was cancelled locally after the request was issued; the remote outcome is unknown"
+    )]
     Cancelled,
     #[error("canonical output validation failed: {0}")]
     OutputValidation(#[from] OutputValidationError),
@@ -516,7 +518,10 @@ pub enum PollError {
 }
 
 /// A safe-read transport exhaustion mapped onto the canonical vocabulary:
-/// timeouts are retryable because no billable body was sent.
+/// timeouts and plain connectivity failures are retryable because no billable
+/// body was sent and no contract-bearing document was received. Only a
+/// response that arrived but violated the pinned shape (malformed JSON, an
+/// over-large body) is a contract symptom.
 fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
     match error {
         AnalysisError::TransportTimeout(_) => CanonicalError::new(
@@ -525,6 +530,17 @@ fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
         )
         .and_then(|error| error.with_contextual_retryability(true))
         .expect("static template"),
+        AnalysisError::Transport(detail) => {
+            // A connection failure or reset never produced a document, so
+            // nothing about the contract changed: mirror the submit path's
+            // network-unavailable classification (CodeRabbit finding).
+            CanonicalError::new(
+                ErrorCode::NetworkUnavailable,
+                format!("Pangram could not be reached: {detail}"),
+            )
+            .and_then(|error| error.with_contextual_retryability(true))
+            .expect("static template")
+        }
         other => contract_symptom_error(other),
     }
 }

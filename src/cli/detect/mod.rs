@@ -35,7 +35,6 @@ use crate::output::{CanonicalError, ColorPolicy, ErrorCode, OutputFormat, Progre
 
 use super::StreamTty;
 
-use client::set_active_cancel;
 use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
 use render::{
     DETACH_NOTE, identity_note, internal_error, interrupted_outcome, note_stderr,
@@ -236,11 +235,18 @@ pub(crate) fn execute(
     };
 
     let stop = StopObserving::new();
-    let _cancel_guard = set_active_cancel(stop.token());
+    // Install the SIGINT driver once; the child task that cancels this run's
+    // token from the recorded flag is spawned inside the runtime below.
+    client::install_sigint_driver();
 
     let outcome = runtime.block_on(async {
+        // A lock-free SIGINT bridge: the low-level handler only sets an
+        // atomic flag (async-signal-safe); this task translates it into the
+        // shared observation token cancel outside signal context.
+        let bridge = tokio::spawn(client::bridge_sigint(stop.token().clone()));
         let mut members: Vec<crate::domain::Analysis<CanonicalError>> =
             Vec::with_capacity(plan.inputs.len());
+        let mut run = Ok(());
         for input in &plan.inputs {
             match analyze_one(
                 &analyzer,
@@ -260,11 +266,17 @@ pub(crate) fn execute(
                 // local interruption unwinds the whole run with its canonical
                 // envelope; these already-reported billable members are not
                 // re-rendered (their costs are logged in history later).
-                Err(flow) => return Err(flow),
+                Err(flow) => {
+                    run = Err(flow);
+                    break;
+                }
             }
         }
-        Ok(members)
+        bridge.abort();
+        run.map(|_| members)
     });
+    // A finished flow must not leak its interrupt into the next run.
+    client::reset_sigint_flag();
 
     match outcome {
         Ok(members) => success_outcome(output, started_at, members),

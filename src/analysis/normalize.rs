@@ -62,11 +62,18 @@ pub(crate) fn sanitize_upstream_message(raw: &str) -> String {
 }
 
 /// A sanitized contract violation. Details carry only the field path, the
-/// offending scalar token or structural shape; never text content.
+/// offending scalar token or structural shape; never text content. The token
+/// can be provider-controlled (`stage`, `version`, `confidence`, `label`), so
+/// it is reduced through the same bounded sanitizer as any other upstream
+/// string before it crosses into the canonical error, covering every caller
+/// in one place.
 fn contract_changed(field: &'static str, token: impl Into<String>) -> CanonicalError {
     let mut details = std::collections::BTreeMap::new();
     details.insert("field".to_owned(), serde_json::Value::from(field));
-    details.insert("token".to_owned(), serde_json::Value::from(token.into()));
+    details.insert(
+        "token".to_owned(),
+        serde_json::Value::from(sanitize_upstream_message(&token.into())),
+    );
     CanonicalError::new(
         ErrorCode::UpstreamContractChanged,
         "Pangram returned a document outside the pinned Pangram 4 contract.",

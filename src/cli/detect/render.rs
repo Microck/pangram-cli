@@ -308,11 +308,11 @@ fn emit_error_text(envelope: &CommandEnvelope) -> bool {
     ok && stderr.flush().is_ok()
 }
 
-/// Strips control characters from a message before it reaches stderr.
+/// Strips control characters from a message before it reaches stderr. One
+/// owner: this delegates to the projection-owned terminal sanitizer so both
+/// write boundaries strip exactly the same scalars and can never diverge.
 pub(super) fn sanitize_for_stderr(text: &str) -> String {
-    text.chars()
-        .map(|ch| if ch.is_control() { '\u{FFFD}' } else { ch })
-        .collect()
+    crate::output::sanitize_terminal(text)
 }
 
 /// An advisory diagnostic note always goes to stderr, TTY or not, per the

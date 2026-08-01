@@ -180,8 +180,12 @@ extra `data` value would not validate for the resolved command.
 ### 3.3 Partial success
 
 Partial combined, bulk, and repeated-file output uses the success envelope.
-`data.status` is `partial`, successful data remains present, and failed checks
-or items contain canonical errors. The process exits 3.
+Successful data remains present, failed checks or items contain canonical
+errors, and the process exits 3. For a single analysis or bulk collection the
+`data` object carries `status: partial`. A repeated-file run renders `data` as
+the canonical ordered analysis *array* (section 3.1): an untagged JSON array
+carries no envelope-level `status`, so the run's partial nature is conveyed by
+exit 3 and by each member analysis's own `status` field.
 
 Repeated single-document files form one ordered series, each member one
 analysis. Only an *ambiguous* mid-run submission preserves the run as a

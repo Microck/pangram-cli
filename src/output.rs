@@ -23,6 +23,7 @@ pub use value::{
 
 mod projection;
 
+pub(crate) use projection::sanitize_terminal;
 pub use projection::{ColorPolicy, OutputFormat, ProjectionCause, render};
 
 /// An output value could not satisfy its public serialization contract.

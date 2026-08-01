@@ -93,7 +93,7 @@ pub enum ColorPolicy {
 /// Printable text, including the ordinary space and all non-control Unicode,
 /// passes through unchanged. Machine projections do not call this; they emit
 /// the canonical value exactly.
-fn sanitize_terminal(text: &str) -> String {
+pub(crate) fn sanitize_terminal(text: &str) -> String {
     text.chars()
         .map(|ch| if ch.is_control() { '\u{FFFD}' } else { ch })
         .collect()
