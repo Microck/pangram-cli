@@ -56,15 +56,21 @@ pub struct Pacemaker<C> {
 impl<C: Clock> Pacemaker<C> {
     /// Builds a gate pacing requests at `max_requests_per_second`. The
     /// configured rate is validated at the config boundary (`0 < rate <= 5`),
-    /// so the interval here is always finite and positive. The first request
-    /// may issue immediately.
+    /// which remains the single documented enforcement seam. As release-path
+    /// defense-in-depth (a `debug_assert!` is compiled out), the effective
+    /// rate is clamped into the documented ceiling and any non-finite or
+    /// non-positive input falls back to the safe maximum rather than letting
+    /// `Duration::from_secs_f64` panic or a too-large rate exceed the hard
+    /// 5-requests-per-second ceiling. The first request may issue immediately.
     #[must_use]
     pub fn new(max_requests_per_second: f64, clock: C) -> Self {
-        debug_assert!(
-            max_requests_per_second.is_finite() && max_requests_per_second > 0.0,
-            "the config layer validates a positive finite rate"
-        );
-        let interval = Duration::from_secs_f64(1.0 / max_requests_per_second);
+        let rate = if max_requests_per_second.is_finite() && max_requests_per_second > 0.0 {
+            max_requests_per_second.min(crate::config::MAX_REQUESTS_PER_SECOND)
+        } else {
+            // Fail closed to the documented ceiling pacing, never a burst.
+            crate::config::MAX_REQUESTS_PER_SECOND
+        };
+        let interval = Duration::from_secs_f64(1.0 / rate);
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 next_issue: clock.now(),
@@ -291,5 +297,50 @@ mod tests {
             Gate::Released,
             "the schedule was not advanced by the lapsed-deadline stop"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_above_the_ceiling_is_clamped_to_the_documented_pacing() {
+        // Release-path defense-in-depth: a caller that bypasses config
+        // validation with 10 rps must not exceed the hard 5 rps ceiling.
+        let clock = SystemClock;
+        let gate = Pacemaker::new(10.0, clock);
+        let cancel = CancellationToken::new();
+        let start = clock.now();
+
+        assert_eq!(gate.hurdle(&cancel, NO_DEADLINE).await, Gate::Released);
+        assert_eq!(gate.hurdle(&cancel, NO_DEADLINE).await, Gate::Released);
+        let elapsed = clock
+            .now()
+            .checked_duration_since(start)
+            .expect("monotonic");
+        assert_eq!(
+            elapsed.as_millis(),
+            INTERVAL_MS,
+            "an over-ceiling rate is clamped to the 200 ms ceiling spacing"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn non_finite_or_non_positive_rates_fail_closed_to_the_ceiling() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            let clock = SystemClock;
+            // Must not panic in `Duration::from_secs_f64`; falls back to the
+            // documented 200 ms ceiling spacing.
+            let gate = Pacemaker::new(bad, clock);
+            let cancel = CancellationToken::new();
+            let start = clock.now();
+            assert_eq!(gate.hurdle(&cancel, NO_DEADLINE).await, Gate::Released);
+            assert_eq!(gate.hurdle(&cancel, NO_DEADLINE).await, Gate::Released);
+            let elapsed = clock
+                .now()
+                .checked_duration_since(start)
+                .expect("monotonic");
+            assert_eq!(
+                elapsed.as_millis(),
+                INTERVAL_MS,
+                "rate {bad} fails closed to the ceiling pacing"
+            );
+        }
     }
 }
