@@ -609,6 +609,10 @@ impl<C: super::config::Clock> Analyzer<C> {
         let local_id = crate::domain::AnalysisId::new();
         let clock = self.client.config().clock();
         let deadline = options.timeout.map(|timeout| clock.now() + timeout);
+        // Track the last observed upstream stage so a local wait timeout
+        // preserves it for reconciliation, matching the shared running
+        // observation path (Greptile P2).
+        let mut observed_stage: Option<NonEmptyString> = None;
         loop {
             if cancel.is_cancelled() || stop.token().is_cancelled() {
                 return Err(TaskError::new(local_id, cancelled_error()));
@@ -620,7 +624,7 @@ impl<C: super::config::Clock> Analyzer<C> {
                         wait_timeout_error(&OperationIdentity {
                             analysis_id: local_id,
                             task_id: Some(task_id.clone()),
-                            last_stage: None,
+                            last_stage: observed_stage.clone(),
                         }),
                     ));
                 }
@@ -637,6 +641,7 @@ impl<C: super::config::Clock> Analyzer<C> {
                             ));
                         }
                     };
+                    observed_stage = Some(stage.clone());
                     on_progress(&AnalysisProgress {
                         analysis_id: local_id,
                         task_id: task_id.clone(),
@@ -685,7 +690,7 @@ impl<C: super::config::Clock> Analyzer<C> {
                         wait_timeout_error(&OperationIdentity {
                             analysis_id: local_id,
                             task_id: Some(task_id.clone()),
-                            last_stage: None,
+                            last_stage: observed_stage.clone(),
                         }),
                     ));
                 }

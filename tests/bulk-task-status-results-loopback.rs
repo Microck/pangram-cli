@@ -664,6 +664,12 @@ async fn task_wait_timeout_exits_6_with_wait_timeout() {
     let envelope = stdout_envelope(&output);
     assert_eq!(envelope["error"]["code"], "wait_timeout");
     assert!(envelope["error"]["details"]["upstream_task_id"].is_string());
+    // The timeout envelope preserves the last observed stage for
+    // reconciliation, matching the shared `RunningAnalysis` observation path.
+    assert_eq!(
+        envelope["error"]["details"]["last_stage"], "STAGE_INFERENCE",
+        "a timed-out observed wait retains the last upstream stage"
+    );
     assert_eq!(fixture.post_count(), 0, "a wait never replays a send");
     assert!(fixture.get_count() >= 1, "at least one poll fired");
     assert_no_leak(&output);
