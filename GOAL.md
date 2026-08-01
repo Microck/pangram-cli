@@ -163,7 +163,7 @@ approved contracts.
 | 0 | Complete |
 | 1 | Complete |
 | 2 | Complete |
-| 3 | Not started (documented entry contract resolved) |
+| 3 | In progress (documented entry contract resolved) |
 | 4 | Not started |
 | 5 | Not started |
 | 6 | Not started |
@@ -463,6 +463,18 @@ behavior enters this queue before implementation continues through that seam.
   minimum of one, and accepts at most 1,000 billable units. No separate item
   count limit is documented. Phase 3 may proceed with loopback implementation;
   public support still requires live conformance.
+- 2026-08-01: The first bounded Phase 3 packet corrects the bulk-submit seed
+  grammar. The Rust-owned grammar had drifted from the normative contract by
+  seeding a `--public-link` bulk-submit flag, while contracts.md 14.3 and
+  docs/mcp-contract.md lock bulk against Pangram's Bulk API, which documents no
+  public-dashboard-link request or response field. The contradictory seed is
+  removed contract-first and test-first; bulk and task surfaces remain planned
+  (the compiled help/runtime still exposes none of them), detect's contracted
+  `--public-link` is unchanged, and the generated reference was regenerated
+  through the official generator. No MCP tool schemas exist yet, so docs/
+  mcp-contract.md remains the sole MCP bulk surface contract. Phase 3 stays In
+  progress; public support still requires implementation plus live
+  conformance.
 
 ## Out of scope
 

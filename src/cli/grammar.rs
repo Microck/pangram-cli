@@ -338,13 +338,15 @@ const BULK_SOURCE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
     implicit_members: &["stdin"],
 }];
 
+// Pangram's Bulk API documents no public-dashboard-link request or response
+// field, so bulk submission has no `--public-link` option (contracts.md
+// 14.3). The flag exists only on detect (available) and analyze (planned).
 #[rustfmt::skip]
 const BULK_SUBMIT_ARGUMENTS: &[ArgumentSpec] = &[
     positional("JSONL_PATH", &[], false, false, Phase::BulkAndTasks).in_group("bulk_source").with_stdin_marker("-"),
     option("--max-billable-units", "N", &[], true, false, Phase::BulkAndTasks),
     flag("--dry-run", Phase::BulkAndTasks),
     flag("--wait", Phase::BulkAndTasks),
-    flag("--public-link", Phase::BulkAndTasks),
     option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::BulkAndTasks),
     option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::BulkAndTasks),
 ];

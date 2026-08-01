@@ -276,6 +276,105 @@ fn output_schema_parent_status_matches_the_canonical_derivation() {
 // any invented cross-field arithmetic keyword would be silently ignored by
 // validators and must never appear (PR #14 review d). Cross-field arithmetic
 // bounds remain constructor-owned (see contracts.md section 9).
+/// The generated CLI grammar reference must keep `bulk submit` free of any
+/// `--public-link` argument: contracts.md 14.3 and docs/mcp-contract.md lock
+/// bulk submission against Pangram's Bulk API, which documents no
+/// public-dashboard-link request or response field. The assertion runs against
+/// the real generator output (which the drift test proves byte-identical to
+/// the committed artifact), so a grammar regression cannot be hidden by a
+/// stale committed file.
+#[test]
+fn generated_cli_reference_keeps_bulk_submit_free_of_public_link() {
+    let GeneratedArtifact { bytes, .. } = generated_artifacts()
+        .unwrap()
+        .into_iter()
+        .find(|artifact| artifact.path == "generated/cli-reference.json")
+        .expect("the CLI reference is a generated artifact");
+    let reference: Value = serde_json::from_slice(&bytes).unwrap();
+
+    let commands = reference["commands"]
+        .as_array()
+        .expect("cli-reference.json has a commands array");
+    let bulk_submit = commands
+        .iter()
+        .find(|command| command["path"] == json!(["bulk", "submit"]))
+        .expect("cli-reference.json contains the bulk submit command");
+
+    let arguments = bulk_submit["arguments"]
+        .as_array()
+        .expect("bulk submit has an arguments array");
+    assert!(
+        !arguments
+            .iter()
+            .any(|argument| argument["name"] == json!("--public-link")),
+        "generated cli-reference.json must not list --public-link for bulk submit"
+    );
+
+    // The corrected grammar matches contracts.md 14.3 exactly: a JSONL path
+    // or implicit stdin, the required ceiling, one output format, and
+    // progress control. No flag beyond that contract may reseed itself.
+    let names: Vec<&str> = arguments
+        .iter()
+        .map(|argument| argument["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "JSONL_PATH",
+            "--max-billable-units",
+            "--dry-run",
+            "--wait",
+            "--format",
+            "--progress"
+        ]
+    );
+
+    // The contracted detect `--public-link` stays available; the correction
+    // removes only the bulk seed entry.
+    let detect = commands
+        .iter()
+        .find(|command| command["path"] == json!(["detect"]))
+        .expect("cli-reference.json contains the detect command");
+    let detect_public_link = detect["arguments"]
+        .as_array()
+        .expect("detect has an arguments array")
+        .iter()
+        .find(|argument| argument["name"] == json!("--public-link"))
+        .expect("detect keeps its contracted --public-link flag");
+    assert_eq!(detect_public_link["availability"], json!("available"));
+
+    // Bulk submit itself must remain planned: this packet fixes the seed
+    // grammar only and activates no Phase 3 surface.
+    assert_eq!(bulk_submit["availability"], json!("planned"));
+}
+
+// The generated help fixture lists only implemented (available) top-level
+// commands; the planned Phase 3 bulk and task namespaces must not surface
+// anywhere in it.
+#[test]
+fn generated_cli_help_lists_no_planned_bulk_or_task_surface() {
+    let GeneratedArtifact { bytes, .. } = generated_artifacts()
+        .unwrap()
+        .into_iter()
+        .find(|artifact| artifact.path == "generated/cli-help.txt")
+        .expect("the CLI help fixture is a generated artifact");
+    let help = String::from_utf8(bytes).unwrap();
+    let listed: Vec<&str> = help
+        .lines()
+        .skip_while(|line| *line != "Commands:")
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+
+    for name in ["bulk", "task"] {
+        assert!(
+            !listed.contains(&name),
+            "generated cli-help.txt must not list the planned {name} command"
+        );
+    }
+}
+
 #[test]
 fn output_schema_declares_no_nonstandard_keywords() {
     let schema = output_schema_value();

@@ -431,6 +431,86 @@ fn bulk_submit_requires_a_path_or_implicit_stdin() {
     assert_eq!(jsonl_path.stdin_marker, Some("-"));
 }
 
+/// contracts.md 14.3 and docs/mcp-contract.md lock bulk submission with no
+/// public-dashboard-link field: Pangram's Bulk API documents no
+/// public-dashboard-link request or response field. The Rust-owned grammar
+/// must not carry a bulk `--public-link`, while the contracted analysis flags
+/// (detect now, analyze when Phase 7 arrives) stay untouched.
+#[test]
+fn bulk_submit_has_no_public_link_in_the_rust_owned_grammar() {
+    let bulk = command(&["bulk", "submit"]);
+    assert!(
+        !bulk
+            .arguments
+            .iter()
+            .any(|argument| argument.name == "--public-link"),
+        "bulk submit must not carry --public-link (contracts.md 14.3)"
+    );
+
+    let detect = argument(command(&["detect"]), "--public-link");
+    assert_eq!(detect.availability, Availability::Available);
+    let analyze = argument(command(&["analyze"]), "--public-link");
+    assert_eq!(analyze.availability, Availability::Planned);
+
+    // No bulk or task command accepts the flag.
+    for path in [
+        ["bulk", "submit"].as_slice(),
+        ["bulk", "status"].as_slice(),
+        ["bulk", "wait"].as_slice(),
+        ["bulk", "results"].as_slice(),
+        ["task", "status"].as_slice(),
+        ["task", "wait"].as_slice(),
+    ] {
+        let spec = command(path);
+        assert!(
+            !spec
+                .arguments
+                .iter()
+                .any(|argument| argument.name == "--public-link"),
+            "{path:?} must not carry --public-link"
+        );
+    }
+}
+
+/// Phase 3 has not activated any bulk or task surface: the grammar keeps
+/// every bulk and task entry planned, and the compiled help/runtime exposes
+/// none of them. A bare token spelling one is literal detect text, never a
+/// dispatched subcommand.
+#[test]
+fn bulk_and_task_commands_remain_planned_at_the_packet_boundary() {
+    for path in [
+        ["bulk"].as_slice(),
+        ["bulk", "submit"].as_slice(),
+        ["bulk", "status"].as_slice(),
+        ["bulk", "wait"].as_slice(),
+        ["bulk", "results"].as_slice(),
+        ["task"].as_slice(),
+        ["task", "status"].as_slice(),
+        ["task", "wait"].as_slice(),
+    ] {
+        let spec = command(path);
+        assert_eq!(
+            spec.availability,
+            Availability::Planned,
+            "{path:?} must remain planned until the Phase 3 activation packet"
+        );
+    }
+
+    let listed_commands: Vec<&str> = HELP
+        .lines()
+        .skip_while(|line| *line != "Commands:")
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+    for name in ["bulk", "task"] {
+        assert!(
+            !listed_commands.contains(&name),
+            "{name} must not appear in the compiled help Commands listing"
+        );
+    }
+}
+
 #[test]
 fn mcp_history_mutations_require_history_access() {
     let history_mutations = argument(command(&["mcp"]), "--allow-history-mutations");
