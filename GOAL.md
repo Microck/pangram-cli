@@ -502,6 +502,27 @@ behavior enters this queue before implementation continues through that seam.
   show no drift: the new wire types are fixture spines, not public output
   schema types. Phase 3 stays In progress; public support still requires the
   production analysis client and live conformance.
+- 2026-08-01: The third Phase 3 packet review remediation landed
+  contract-first and test-first. The bulk core and upstream client are
+  decomposed below the 1,000-line hygiene gate (the bulk observation/paging
+  pipeline into `src/analysis/bulk/{mod,assemble}.rs`, the bulk submit/page
+  client into `src/analysis/upstream/bulk.rs`), the unrequested implementation
+  diary is removed, and the bulk surface is folded behind the single
+  adapter-facing `Analyzer` so adapters never own a second protocol client.
+  The wire core pins bulk submit success to exactly HTTP 202 (any other 2xx
+  is never replayed and surfaces the ambiguous `submission_outcome_unknown`),
+  validates the 202 acceptance `status` token against the closed `queued`
+  value, normalizes documented `result: null` results-page entries to the
+  canonical `running` state, treats per-item `stage` as sanitized
+  diagnostic-only evidence, and bounds every coverage allocation by the
+  validated plan count (or, for a resumed remote handle, by the documented
+  job cap); the fetch-all walk uses the conservative bounded 100-item page
+  while explicit one-page reads keep `1..=1,000`. New loopback tests cover
+  the documented GET status/error matrix with retry/no-retry proof, the
+  202-only and undecodable-202 ambiguity, a failed index 0 plus succeeded
+  index 1 window, and the hostile `u64::MAX`/plan-mismatch allocation guards.
+  contracts.md and the shared fragment were updated contract-first. Phase 3
+  stays In progress; public bulk support still requires live conformance.
 
 ## Out of scope
 

@@ -41,9 +41,10 @@ mod pacemaker;
 mod task;
 mod upstream;
 
+pub use crate::domain::BulkSubmissionPlan;
 pub use bulk::{
-    BulkAnalysisError, BulkAnalysisRequest, BulkAnalyzer, BulkOperationIdentity, BulkPageResult,
-    BulkProgress, InterruptedBulk, RunningBulk,
+    BulkAnalysisError, BulkAnalysisRequest, BulkOperationIdentity, BulkPageResult, BulkProgress,
+    InterruptedBulk, RunningBulk,
 };
 pub use config::{AnalysisConfig, PollPolicy, RetryPolicy, WaitOptions};
 pub use handle::{

@@ -31,6 +31,15 @@ pub const BULK_BILLABLE_UNIT_LIMIT: u64 = 1000;
 /// The documented maximum `limit` on item and result pages.
 pub const BULK_PAGE_LIMIT_MAX: u64 = 1000;
 
+/// The page size the fetch-all walk requests internally. Explicit one-page
+/// item/result requests may use any `limit` in `1..=BULK_PAGE_LIMIT_MAX`;
+/// only the internal fetch-all walk is capped to this smaller, conservative
+/// bound so a single received results page stays well below the client's
+/// 16 MiB hard response cap. The walk iterates multiple pages until it
+/// covers every position; a smaller page size only changes the number of
+/// round trips, never correctness (contracts section 9.1).
+pub const BULK_FETCH_ALL_PAGE_SIZE: u64 = 100;
+
 /// The fixed production bulk base URL. All bulk routes join beneath it.
 pub const PRODUCTION_BULK_URL: &str = "https://text.external-api.pangram.com/bulk";
 

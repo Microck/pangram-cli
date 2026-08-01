@@ -23,8 +23,11 @@ use crate::output::{CanonicalError, ErrorCode, OutputValidationError};
 
 use super::config::{AnalysisConfig, Clock, Duration, Instant};
 use super::http::{self, HttpClient, Response, SendOutcome};
-use super::pacemaker::Pacemaker;
+use super::pacemaker::{Gate as PaceGate, Pacemaker};
 use super::task::TaskError;
+
+mod bulk;
+pub use bulk::{AcceptedBulk, BulkPageFetch};
 
 /// The fixed production submit URL. Never construct it from configuration.
 const PRODUCTION_SUBMIT_URL: &str = "https://text.external-api.pangram.com/task";
@@ -260,18 +263,6 @@ struct TaskCreatedWire {
     task_id: String,
 }
 
-/// A validated bulk acceptance: the upstream job identity plus the raw
-/// documented 202 acceptance document. `total_items` and the accepted/failed
-/// item lists are cross-checked against the plan's validated count by the
-/// normalizer; the analysis core never fabricates task IDs or acceptance
-/// certainty beyond this document.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AcceptedBulk {
-    pub bulk_id: crate::domain::UpstreamBulkId,
-    /// The documented 202 acceptance body, preserved exactly as decoded.
-    pub acceptance: crate::domain::BulkSubmitResponse,
-}
-
 /// The concrete client. Cloning shares the connection pool and pacing gate.
 #[derive(Clone)]
 pub struct UpstreamClient<C = super::config::SystemClock> {
@@ -383,8 +374,8 @@ impl<C: Clock> UpstreamClient<C> {
         // token is the only early release. Distinct deadline semantics live
         // on the observation path where the caller supplies a wait budget.
         match self.pacemaker.hurdle(cancel, None).await {
-            super::pacemaker::Gate::Released => {}
-            super::pacemaker::Gate::Cancelled | super::pacemaker::Gate::DeadlinePassed => {
+            PaceGate::Released => {}
+            PaceGate::Cancelled | PaceGate::DeadlinePassed => {
                 return Err(SubmitOutcome::Cancelled);
             }
         }
@@ -421,76 +412,6 @@ impl<C: Clock> UpstreamClient<C> {
         }
     }
 
-    /// Submits one validated Pangram 4 bulk request exactly once. This is
-    /// billable: on any ambiguous outcome the caller produces
-    /// `submission_outcome_unknown` rather than replaying (contracts section
-    /// 12.1). The plan is pre-validated by its constructor, so the ceiling
-    /// preflight has already run before this call issues any request.
-    pub async fn submit_bulk(
-        &self,
-        plan: &crate::domain::BulkSubmissionPlan,
-        cancel: &CancellationToken,
-    ) -> Result<AcceptedBulk, SubmitOutcome> {
-        let body = plan.submit_body();
-        match self.pacemaker.hurdle(cancel, None).await {
-            super::pacemaker::Gate::Released => {}
-            super::pacemaker::Gate::Cancelled | super::pacemaker::Gate::DeadlinePassed => {
-                return Err(SubmitOutcome::Cancelled);
-            }
-        }
-        let outcome = self
-            .http
-            .post_json(
-                &self.endpoints.bulk_submit_url(),
-                &self.api_key,
-                &body,
-                cancel,
-            )
-            .await;
-        match outcome {
-            SendOutcome::Responded(response) => classify_bulk_submit(response),
-            SendOutcome::Cancelled { issued } => {
-                if issued {
-                    Err(SubmitOutcome::Ambiguous(AnalysisError::Cancelled))
-                } else {
-                    Err(SubmitOutcome::Cancelled)
-                }
-            }
-            SendOutcome::Failed {
-                delivered_may_have_occurred,
-                error,
-            } => {
-                if delivered_may_have_occurred {
-                    Err(SubmitOutcome::Ambiguous(error))
-                } else {
-                    Err(SubmitOutcome::Failed(Box::new(map_transport_failure(
-                        &error,
-                    ))))
-                }
-            }
-        }
-    }
-
-    /// Fetches one bulk status, items, or results page through the shared
-    /// safe-GET retry chain (pacing, bounded backoff, `Retry-After`, caller
-    /// deadline, and the cumulative retry budget). The returned response is
-    /// validated by the bulk normalizer. A 404 maps to `BulkPage::NotFound`;
-    /// failure statuses use the bulk matrix (413 -> `bulk_limit_exceeded`).
-    pub async fn fetch_bulk_page(
-        &self,
-        url: String,
-        cancel: &CancellationToken,
-        deadline: Option<Instant>,
-    ) -> Result<BulkPageFetch, PollError> {
-        match self
-            .safe_get(url.as_str(), cancel, deadline, StatusMap::Bulk)
-            .await?
-        {
-            SafeGet::TwoHundred(response) => Ok(BulkPageFetch::Page(Box::new(response))),
-            SafeGet::NotFound => Ok(BulkPageFetch::NotFound),
-        }
-    }
-
     /// The one shared safe-GET retry chain used by task polling and bulk page
     /// fetches. Returns a 2xx response or, when the status map is task/poll
     /// scoped, a 404 sentinel. Retries bounded transient failures and
@@ -511,11 +432,11 @@ impl<C: Clock> UpstreamClient<C> {
 
         loop {
             match self.pacemaker.hurdle(cancel, deadline).await {
-                super::pacemaker::Gate::Released => {}
-                super::pacemaker::Gate::Cancelled => return Err(PollError::Cancelled),
+                PaceGate::Released => {}
+                PaceGate::Cancelled => return Err(PollError::Cancelled),
                 // The caller's wait budget ran out before the next request
                 // could issue: surface the wait timeout, not an interruption.
-                super::pacemaker::Gate::DeadlinePassed => {
+                PaceGate::DeadlinePassed => {
                     return Err(PollError::DeadlineExceeded);
                 }
             }
@@ -590,7 +511,7 @@ impl<C: Clock> UpstreamClient<C> {
             }
             let failure = match status_map {
                 StatusMap::Task => classify_http_failure(&response, None),
-                StatusMap::Bulk => bulk_http_failure(&response),
+                StatusMap::Bulk => bulk::bulk_http_failure(&response),
             };
             return Err(PollError::Failed(Box::new(failure)));
         }
@@ -626,13 +547,45 @@ impl<C: Clock> UpstreamClient<C> {
             SafeGet::NotFound => Ok(TaskPoll::NotFound),
         }
     }
+
+    /// Issues the shared safe-GET chain with the caller's status map. The
+    /// bulk module consumes this through `fetch_bulk_page`; it is the one
+    /// shared retry/pacing window.
+    pub(super) async fn get(
+        &self,
+        url: &str,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+        map: StatusMap,
+    ) -> Result<SafeGet, PollError> {
+        self.safe_get(url, cancel, deadline, map).await
+    }
+
+    /// The shared pacing gate for one request issue.
+    pub(super) async fn pace(
+        &self,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> PaceGate {
+        self.pacemaker.hurdle(cancel, deadline).await
+    }
+
+    /// Sends one JSON POST for the billable submission paths.
+    pub(super) async fn post(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        cancel: &CancellationToken,
+    ) -> SendOutcome {
+        self.http.post_json(url, &self.api_key, body, cancel).await
+    }
 }
 
 /// Selects the canonical status-failure mapping for one safe-GET chain. The
 /// task-poll mapping keeps the documented single-text matrix; the bulk
 /// mapping routes 413 through `bulk_limit_exceeded`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StatusMap {
+pub(super) enum StatusMap {
     Task,
     Bulk,
 }
@@ -640,16 +593,8 @@ enum StatusMap {
 /// The classified result of one shared safe-GET chain. `TwoHundred` is the
 /// consumed response for the caller to normalize; `NotFound` is the 404
 /// sentinel the caller maps to its operation-specific not-found outcome.
-enum SafeGet {
+pub(super) enum SafeGet {
     TwoHundred(Response),
-    NotFound,
-}
-
-/// The result of one bulk status/items/results page fetch. `Page` is the
-/// consumed 2xx response handed to the bulk normalizer; `NotFound` is the
-/// documented 404 for an unknown job.
-pub enum BulkPageFetch {
-    Page(Box<Response>),
     NotFound,
 }
 
@@ -728,7 +673,7 @@ pub enum PollError {
 /// body was sent and no contract-bearing document was received. Only a
 /// response that arrived but violated the pinned shape (malformed JSON, an
 /// over-large body) is a contract symptom.
-fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
+pub(super) fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
     match error {
         AnalysisError::TransportTimeout(_) => CanonicalError::new(
             ErrorCode::NetworkTimeout,
@@ -791,41 +736,6 @@ fn classify_submit(response: Response) -> Result<AcceptedTask, SubmitOutcome> {
     Ok(AcceptedTask { task_id })
 }
 
-/// Classifies a bulk submit response. The documented accepted shape is a
-/// `202 Accepted` carrying the full acceptance document; a `200` carrying an
-/// initial status document is synthesized into the same acceptance view so
-/// both non-error shapes normalize through one path. A non-2xx status maps
-/// through the bulk HTTP matrix (413 -> `bulk_limit_exceeded`); a 2xx body
-/// that cannot decode into the documented acceptance is ambiguous (the job
-/// may exist remotely).
-fn classify_bulk_submit(response: Response) -> Result<AcceptedBulk, SubmitOutcome> {
-    let status = response.status();
-    if !(200..300).contains(&status) {
-        return Err(SubmitOutcome::Failed(Box::new(bulk_http_failure(
-            &response,
-        ))));
-    }
-    // Both accepted shapes arrive as a JSON body; the submit/status wire
-    // documents overlap enough that one decode covers the 202 case and the
-    // 200-initial-status case. Any 2xx body is an acceptance signal (the job
-    // was created), so a decode failure is ambiguous rather than a contract
-    // change: the caller must not replay the send.
-    let wire: crate::domain::BulkSubmitResponse = response.json().map_err(|error| {
-        SubmitOutcome::Ambiguous(AnalysisError::MalformedBody(format!(
-            "{error} (bulk acceptance malformed; the job may exist remotely)"
-        )))
-    })?;
-    let bulk_id = crate::domain::UpstreamBulkId::new(wire.bulk_id.as_str()).map_err(|_| {
-        SubmitOutcome::Ambiguous(AnalysisError::MalformedBody(
-            "the bulk acceptance carried an empty bulk_id; the job may exist remotely".into(),
-        ))
-    })?;
-    Ok(AcceptedBulk {
-        bulk_id,
-        acceptance: wire,
-    })
-}
-
 /// Classifies a 2xx poll response. Non-terminal stages stay in-progress;
 /// terminal stages are handed to the caller untouched.
 fn classify_poll(response: Response, _task_id: &UpstreamTaskId) -> Result<TaskPoll, AnalysisError> {
@@ -869,7 +779,10 @@ fn classify_poll(response: Response, _task_id: &UpstreamTaskId) -> Result<TaskPo
 /// Maps an HTTP failure status onto the canonical error vocabulary once.
 /// All messages are fixed sanitized templates; details carry only the status
 /// integer and safe rate-limit metadata.
-fn classify_http_failure(response: &Response, task_id: Option<&UpstreamTaskId>) -> CanonicalError {
+pub(super) fn classify_http_failure(
+    response: &Response,
+    task_id: Option<&UpstreamTaskId>,
+) -> CanonicalError {
     let status = response.status();
     let build = |code: ErrorCode, message: &str| -> Result<CanonicalError, OutputValidationError> {
         let mut details = std::collections::BTreeMap::new();
@@ -944,33 +857,11 @@ fn classify_http_failure(response: &Response, task_id: Option<&UpstreamTaskId>) 
     })
 }
 
-/// The bulk failure matrix shares [`classify_http_failure`] except for 413,
-/// which is the documented bulk over-limit status and must surface the
-/// canonical `bulk_limit_exceeded` (contracts section 9.1) rather than the
-/// single-text usage code. Every bulk submit/page error funnels through this
-/// one override so the code is never double-mapped.
-fn bulk_http_failure(response: &Response) -> CanonicalError {
-    if response.status() == 413 {
-        let mut details = std::collections::BTreeMap::new();
-        details.insert(
-            "http_status".to_owned(),
-            serde_json::Value::from(u64::from(response.status())),
-        );
-        return CanonicalError::new(
-            ErrorCode::BulkLimitExceeded,
-            "Pangram rejected the bulk submission as over the billable-unit or request-size limit.",
-        )
-        .and_then(|error| error.with_details(details))
-        .expect("the bulk-limit template is statically valid");
-    }
-    classify_http_failure(response, None)
-}
-
-fn timed_out(error: &AnalysisError) -> bool {
+pub(super) fn timed_out(error: &AnalysisError) -> bool {
     matches!(error, AnalysisError::TransportTimeout(_))
 }
 
-fn map_transport_failure(error: &AnalysisError) -> CanonicalError {
+pub(super) fn map_transport_failure(error: &AnalysisError) -> CanonicalError {
     let message = match error {
         AnalysisError::Transport(detail) | AnalysisError::TransportTimeout(detail) => {
             detail.clone()

@@ -33,42 +33,37 @@
 //! `CanonicalError` is 224 bytes wide because it is the adapter-facing
 //! canonical object: bulk paths return it directly rather than boxing every
 //! intermediate, matching the rest of the analysis framework.
-//!
-//! Architectural note (line budget): this module intentionally exceeds
-//! 1,000 lines. The bulk surface is one cohesive pipeline — submit, observe
-//! loop, terminal projection, then typed page reads — and splitting it into
-//! submodules would force cross-file plumbing of the private `RunningBulk`
-//! state (plan, accepted acceptance, live counters, paging scratch) purely
-//! for the line count, obscuring the single-owner observation invariants
-//! listed above. The normalization rules that grow independently already
-//! live in [`crate::analysis::normalize::bulk`]; what remains here is the
-//! protocol-adjacent orchestration. Splits stay cheap later because all
-//! helpers are free functions with no shared mutable state.
 #![allow(clippy::result_large_err)]
+
+mod assemble;
 
 use std::fmt;
 
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::{
-    Analysis, AnalysisId, AnalysisInput, AnalysisStatus, BulkCollection, BulkCounters, BulkId,
-    BulkItem, BulkItemState, BulkPage, BulkSubmissionPlan, Check, CheckState, LocalOperationId,
-    NonEmptyString, OrderedChecks, Provenance, Provider, SaveState, Sha256Hash, SubmissionOutcome,
-    SubmissionOutcomeUnknownDetails, TextInput, TextOrigin, UpstreamBulkId, UpstreamIdentity,
-    UpstreamTaskId, UtcTimestamp,
+    AnalysisStatus, BulkCollection, BulkId, BulkItem, BulkPage, BulkSubmissionPlan,
+    LocalOperationId, NonEmptyString, Sha256Hash, SubmissionOutcomeUnknownDetails, UpstreamBulkId,
+    UtcTimestamp,
 };
 use crate::output::{CanonicalError, ErrorCode};
 
 use super::config::Clock;
-use super::normalize::bulk::{
-    self, NormalizedBulkItemOutcome, NormalizedBulkPlan, NormalizedBulkStatus, NormalizedItemsPage,
-    NormalizedResultsPage,
-};
+use super::normalize::bulk::{self, NormalizedBulkStatus};
 use super::upstream::{PollError, SubmitOutcome, UpstreamClient};
 use super::{StopObserving, WaitOptions};
 
-/// The maximum `limit` the client requests on a page (the documented cap).
-const BULK_FETCH_PAGE_LIMIT: u64 = crate::domain::BULK_PAGE_LIMIT_MAX;
+use assemble::{
+    assemble_collection, assemble_items_metadata_page, assemble_results_page, initial_counters,
+    next_offset, validate_page_request,
+};
+
+/// The page size the fetch-all walk requests internally. This is the
+/// conservative bounded fetch-all page size (contracts section 9.1): explicit
+/// one-page requests may still use the documented `1..=1,000` window, but the
+/// internal walk never requests the maximum page, so one received results
+/// page stays well below the client's 16 MiB hard response cap.
+const FETCH_ALL_PAGE_SIZE: u64 = crate::domain::BULK_FETCH_ALL_PAGE_SIZE;
 
 /// One validated bulk-analysis request. The plan carries the constructor-
 /// enforced ceiling preflight; the local bulk ID is generated here so it
@@ -152,7 +147,7 @@ pub struct InterruptedBulk {
 pub struct BulkProgress {
     pub bulk_id: BulkId,
     pub status: AnalysisStatus,
-    pub counters: BulkCounters,
+    pub counters: crate::domain::BulkCounters,
 }
 
 /// A validation failure of one bulk operation: the canonical error plus the
@@ -195,12 +190,26 @@ pub struct BulkPageResult {
     pub upstream_bulk_id: UpstreamBulkId,
 }
 
-/// A normalized status snapshot bundled for canonical-collection assembly.
-/// The `created_at`/`completed_at` timestamps are authoritative from
-/// upstream; `updated_at` is the local observation time.
+/// One validated normalized status snapshot: the fields collection assembly
+/// reads. Private to the pipeline; the normalized status is validated before
+/// it reaches this shape.
 #[derive(Debug)]
-struct StatusBundle {
-    status: NormalizedBulkStatus,
+pub(super) struct StatusSnapshot {
+    pub(super) status: AnalysisStatus,
+    pub(super) counters: crate::domain::BulkCounters,
+    pub(super) created_at: UtcTimestamp,
+    pub(super) completed_at: Option<UtcTimestamp>,
+}
+
+impl StatusSnapshot {
+    fn from_normalized(normalized: NormalizedBulkStatus) -> Self {
+        Self {
+            status: normalized.status,
+            counters: normalized.counters,
+            created_at: normalized.created_at,
+            completed_at: normalized.completed_at,
+        }
+    }
 }
 
 /// The running bulk operation returned by [`BulkAnalyzer::submit_bulk`]. Its
@@ -213,7 +222,7 @@ pub struct RunningBulk<C = super::config::SystemClock> {
     bulk_id: BulkId,
     upstream_bulk_id: UpstreamBulkId,
     plan: BulkSubmissionPlan,
-    last: BulkCounters,
+    last: crate::domain::BulkCounters,
     last_status: AnalysisStatus,
 }
 
@@ -241,29 +250,23 @@ impl<C: Clock> RunningBulk<C> {
     }
 
     #[must_use]
+    pub const fn plan(&self) -> &BulkSubmissionPlan {
+        &self.plan
+    }
+
+    /// The most recent observed status/counter state (for fetch-all
+    /// progress reporting).
+    #[must_use]
+    pub(super) const fn last_state(&self) -> (AnalysisStatus, crate::domain::BulkCounters) {
+        (self.last_status, self.last)
+    }
+
+    #[must_use]
     pub fn identity(&self) -> BulkOperationIdentity {
         BulkOperationIdentity {
             bulk_id: self.bulk_id,
             upstream_bulk_id: Some(self.upstream_bulk_id.clone()),
         }
-    }
-
-    /// Assembles the canonical collection from a normalized status snapshot.
-    /// `updated_at` is the observation time (the state change is local); the
-    /// upstream `created_at`/`completed_at` are authoritative.
-    fn assemble(&self, bundle: &StatusBundle, updated_at: UtcTimestamp) -> BulkCollection {
-        BulkCollection::new(
-            self.bulk_id,
-            Some(self.upstream_bulk_id.clone()),
-            bundle.status.status,
-            SubmissionOutcome::Accepted,
-            bundle.status.counters,
-            self.plan.estimated_billable_units(),
-            bundle.status.created_at,
-            updated_at,
-            bundle.status.completed_at,
-        )
-        .expect("a validated status snapshot always satisfies collection invariants")
     }
 
     /// Issues the shared safe-GET status read and normalizes the document,
@@ -274,7 +277,7 @@ impl<C: Clock> RunningBulk<C> {
         &self,
         cancel: &CancellationToken,
         deadline: Option<super::Instant>,
-    ) -> Result<StatusBundle, PollError> {
+    ) -> Result<StatusSnapshot, PollError> {
         let url = self.client.bulk_status_url(self.upstream_bulk_id.as_str());
         let fetch = self.client.fetch_bulk_page(url, cancel, deadline).await?;
         let super::upstream::BulkPageFetch::Page(response) = fetch else {
@@ -299,9 +302,7 @@ impl<C: Clock> RunningBulk<C> {
                 "status identity does not match the queried job",
             ))));
         }
-        Ok(StatusBundle {
-            status: normalized.status,
-        })
+        Ok(StatusSnapshot::from_normalized(normalized.status))
     }
 
     /// Polls until terminal, the local timeout, or local cancellation. This
@@ -335,16 +336,16 @@ impl<C: Clock> RunningBulk<C> {
             }
 
             match self.fetch_status(&cancel, deadline).await {
-                Ok(bundle) => {
-                    self.last = bundle.status.counters;
-                    self.last_status = bundle.status.status;
-                    let collection = self.assemble(&bundle, UtcTimestamp::now());
-                    match bundle.status.status {
+                Ok(snapshot) => {
+                    self.last = snapshot.counters;
+                    self.last_status = snapshot.status;
+                    let collection = assemble_collection(&self, &snapshot, UtcTimestamp::now());
+                    match snapshot.status {
                         AnalysisStatus::Queued | AnalysisStatus::Running => {
                             on_progress(&BulkProgress {
                                 bulk_id: self.bulk_id,
-                                status: bundle.status.status,
-                                counters: bundle.status.counters,
+                                status: snapshot.status,
+                                counters: snapshot.counters,
                             });
                         }
                         // Terminal (succeeded/failed/partial): return the
@@ -391,10 +392,10 @@ impl<C: Clock> RunningBulk<C> {
         deadline: Option<super::Instant>,
     ) -> Result<BulkCollection, BulkAnalysisError> {
         match self.fetch_status(cancel, deadline).await {
-            Ok(bundle) => {
-                self.last = bundle.status.counters;
-                self.last_status = bundle.status.status;
-                Ok(self.assemble(&bundle, UtcTimestamp::now()))
+            Ok(snapshot) => {
+                self.last = snapshot.counters;
+                self.last_status = snapshot.status;
+                Ok(assemble_collection(&self, &snapshot, UtcTimestamp::now()))
             }
             Err(PollError::Cancelled) => Err(BulkAnalysisError::new(
                 self.bulk_id,
@@ -418,7 +419,9 @@ impl<C: Clock> RunningBulk<C> {
 }
 
 /// Owns construction of bulk operations over one shared client. Cloning
-/// shares the connection pool and the time-based pacing gate.
+/// shares the connection pool and the time-based pacing gate. Internal to
+/// the analysis module: adapters enter through the `Analyzer` facade, which
+/// exposes the bulk surface over this one shared client.
 #[derive(Clone)]
 pub struct BulkAnalyzer<C = super::config::SystemClock> {
     client: UpstreamClient<C>,
@@ -426,7 +429,7 @@ pub struct BulkAnalyzer<C = super::config::SystemClock> {
 
 impl<C: Clock> BulkAnalyzer<C> {
     #[must_use]
-    pub fn from_client(client: UpstreamClient<C>) -> Self {
+    pub(super) fn from_client(client: UpstreamClient<C>) -> Self {
         Self { client }
     }
 
@@ -487,26 +490,9 @@ impl<C: Clock> BulkAnalyzer<C> {
         &self,
         request: BulkAnalysisRequest,
         upstream_bulk_id: UpstreamBulkId,
-        normalized: &NormalizedBulkPlan,
+        normalized: &super::normalize::bulk::NormalizedBulkPlan,
     ) -> RunningBulk<C> {
-        let accepted_count = u64::try_from(normalized.accepted.len()).unwrap_or(u64::MAX);
-        let failed_count = u64::try_from(normalized.failed.len()).unwrap_or(u64::MAX);
-        let total = u64::try_from(request.plan().items().len()).unwrap_or(u64::MAX);
-        // The acceptance already validated counters; the initial last-state
-        // reflects immediate failures and any not-yet-finished accepted work.
-        let counters = BulkCounters::new(total, accepted_count, 0, failed_count)
-            .expect("validated acceptance counters satisfy bounds");
-        let initial_status = if counters.is_terminal() {
-            if failed_count == total {
-                AnalysisStatus::Failed
-            } else if failed_count > 0 {
-                AnalysisStatus::Partial
-            } else {
-                AnalysisStatus::Succeeded
-            }
-        } else {
-            AnalysisStatus::Queued
-        };
+        let (counters, initial_status) = initial_counters(request.plan(), normalized);
         RunningBulk {
             client: self.client.clone(),
             bulk_id: request.id(),
@@ -518,9 +504,8 @@ impl<C: Clock> BulkAnalyzer<C> {
     }
 
     /// Rehydrates a running handle for an already-accepted job (for example a
-    /// `bulk_status`-style read of a job submitted earlier). `total_items`
-    /// and `estimated_billable_units` are the caller's honest values; the
-    /// initial state re-polls on observation.
+    /// `bulk_status`-style read of a job submitted earlier). The caller's
+    /// plan is retained so per-item input descriptors stay trusted-local.
     #[must_use]
     pub fn resume(
         &self,
@@ -529,8 +514,8 @@ impl<C: Clock> BulkAnalyzer<C> {
         plan: BulkSubmissionPlan,
     ) -> RunningBulk<C> {
         let total = u64::try_from(plan.items().len()).unwrap_or(u64::MAX);
-        let counters =
-            BulkCounters::new(total, 0, 0, 0).expect("a total-only counter set is valid");
+        let counters = crate::domain::BulkCounters::new(total, 0, 0, 0)
+            .expect("a total-only counter set is valid");
         RunningBulk {
             client: self.client.clone(),
             bulk_id,
@@ -552,11 +537,11 @@ impl<C: Clock> BulkAnalyzer<C> {
         limit: u64,
         cancel: &CancellationToken,
     ) -> Result<BulkPageResult, BulkAnalysisError> {
-        validate_page_request(offset, limit)
-            .map_err(|error| BulkAnalysisError::new(running.bulk_id, error))?;
+        validate_page_request(limit)
+            .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let url = self
             .client
-            .bulk_items_url(running.upstream_bulk_id.as_str(), offset, limit);
+            .bulk_items_url(running.upstream_bulk_id().as_str(), offset, limit);
         let fetch = self
             .client
             .fetch_bulk_page(url, cancel, None)
@@ -564,7 +549,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             .map_err(|error| page_poll_error(running, error))?;
         let super::upstream::BulkPageFetch::Page(response) = fetch else {
             return Err(BulkAnalysisError::new(
-                running.bulk_id,
+                running.bulk_id(),
                 CanonicalError::new(
                     ErrorCode::UpstreamNotFound,
                     "Pangram does not recognize the bulk job.",
@@ -574,7 +559,10 @@ impl<C: Clock> BulkAnalyzer<C> {
         };
         let response = *response;
         let wire: crate::domain::BulkItemsPage = response.json().map_err(|error| {
-            BulkAnalysisError::new(running.bulk_id, contract_symptom("body", error.to_string()))
+            BulkAnalysisError::new(
+                running.bulk_id(),
+                contract_symptom("body", error.to_string()),
+            )
         })?;
         let mut expected_total: Option<u64> = None;
         let (header, page) = bulk::normalize_items_page(
@@ -584,23 +572,24 @@ impl<C: Clock> BulkAnalyzer<C> {
             limit,
             &mut expected_total,
         )
-        .map_err(|error| BulkAnalysisError::new(running.bulk_id, error))?;
+        .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let total = header.total_items;
-        let items = assemble_items_metadata_page(&running_plan(running), page)
-            .map_err(|error| BulkAnalysisError::new(running.bulk_id, error))?;
-        let next = next_offset(offset, &items, total);
+        let items = assemble_items_metadata_page(running.plan(), page)
+            .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
+        let next = next_offset(&items, total);
         Ok(BulkPageResult {
             page: BulkPage::new(items, offset, limit, next)
-                .map_err(|error| bulk_domain_error(running.bulk_id, error))?,
+                .map_err(|error| bulk_domain_error(running.bulk_id(), error))?,
             total_items: total,
-            upstream_bulk_id: running.upstream_bulk_id.clone(),
+            upstream_bulk_id: running.upstream_bulk_id().clone(),
         })
     }
 
     /// Fetches one validated typed results page (read-only). Succeeded items
     /// carry a canonical analysis built from the local plan's trusted input;
-    /// failed items carry the sanitized upstream error. The canonical page
-    /// strictly ascends by source index.
+    /// in-progress (`result: null`) items surface as running children; failed
+    /// items carry the sanitized upstream error. The canonical page strictly
+    /// ascends by source index.
     pub async fn bulk_results_page(
         &self,
         running: &RunningBulk<C>,
@@ -608,11 +597,11 @@ impl<C: Clock> BulkAnalyzer<C> {
         limit: u64,
         cancel: &CancellationToken,
     ) -> Result<BulkPageResult, BulkAnalysisError> {
-        validate_page_request(offset, limit)
-            .map_err(|error| BulkAnalysisError::new(running.bulk_id, error))?;
+        validate_page_request(limit)
+            .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let url = self
             .client
-            .bulk_results_url(running.upstream_bulk_id.as_str(), offset, limit);
+            .bulk_results_url(running.upstream_bulk_id().as_str(), offset, limit);
         let fetch = self
             .client
             .fetch_bulk_page(url, cancel, None)
@@ -620,7 +609,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             .map_err(|error| page_poll_error(running, error))?;
         let super::upstream::BulkPageFetch::Page(response) = fetch else {
             return Err(BulkAnalysisError::new(
-                running.bulk_id,
+                running.bulk_id(),
                 CanonicalError::new(
                     ErrorCode::UpstreamNotFound,
                     "Pangram does not recognize the bulk job.",
@@ -630,7 +619,10 @@ impl<C: Clock> BulkAnalyzer<C> {
         };
         let response = *response;
         let wire: crate::domain::BulkResultsPage = response.json().map_err(|error| {
-            BulkAnalysisError::new(running.bulk_id, contract_symptom("body", error.to_string()))
+            BulkAnalysisError::new(
+                running.bulk_id(),
+                contract_symptom("body", error.to_string()),
+            )
         })?;
         let mut expected_total: Option<u64> = None;
         let (header, page) = bulk::normalize_results_page(
@@ -640,16 +632,16 @@ impl<C: Clock> BulkAnalyzer<C> {
             limit,
             &mut expected_total,
         )
-        .map_err(|error| BulkAnalysisError::new(running.bulk_id, error))?;
+        .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
         let total = header.total_items;
-        let items = assemble_results_page(&running_plan(running), page)
-            .map_err(|error| BulkAnalysisError::new(running.bulk_id, error))?;
-        let next = next_offset(offset, &items, total);
+        let items = assemble_results_page(running.plan(), page)
+            .map_err(|error| BulkAnalysisError::new(running.bulk_id(), error))?;
+        let next = next_offset(&items, total);
         Ok(BulkPageResult {
             page: BulkPage::new(items, offset, limit, next)
-                .map_err(|error| bulk_domain_error(running.bulk_id, error))?,
+                .map_err(|error| bulk_domain_error(running.bulk_id(), error))?,
             total_items: total,
-            upstream_bulk_id: running.upstream_bulk_id.clone(),
+            upstream_bulk_id: running.upstream_bulk_id().clone(),
         })
     }
 
@@ -660,8 +652,12 @@ impl<C: Clock> BulkAnalyzer<C> {
     /// assembled page over the whole covered set.
     ///
     /// There is no aggregate endpoint; this is iteration over documented
-    /// pages only (contracts section 9.1). Cancellation stops the walk
-    /// between page reads.
+    /// pages only (contracts section 9.1). The walk requests the conservative
+    /// bounded fetch-all page size (never the 1,000 maximum), so one received
+    /// page stays well below the 16 MiB hard response cap. Completion
+    /// requires exact coverage of `0..total_items`; an empty page while
+    /// positions remain uncovered is non-advancing drift. Cancellation stops
+    /// the walk between page reads.
     pub async fn bulk_results_all(
         &self,
         running: &RunningBulk<C>,
@@ -671,7 +667,7 @@ impl<C: Clock> BulkAnalyzer<C> {
     ) -> Result<BulkPageResult, BulkAnalysisError> {
         if max_reads == 0 {
             return Err(BulkAnalysisError::new(
-                running.bulk_id,
+                running.bulk_id(),
                 CanonicalError::new(
                     ErrorCode::InputRequired,
                     "fetch-all requires a positive read bound.",
@@ -688,7 +684,7 @@ impl<C: Clock> BulkAnalyzer<C> {
         loop {
             if cancel.is_cancelled() {
                 return Err(BulkAnalysisError::new(
-                    running.bulk_id,
+                    running.bulk_id(),
                     CanonicalError::new(
                         ErrorCode::NetworkUnavailable,
                         "The bulk fetch-all was cancelled locally; no remote action was taken.",
@@ -698,7 +694,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             }
             if reads >= max_reads {
                 return Err(BulkAnalysisError::new(
-                    running.bulk_id,
+                    running.bulk_id(),
                     CanonicalError::new(
                         ErrorCode::NetworkUnavailable,
                         "The bulk results fetch-all exceeded its read bound.",
@@ -707,7 +703,7 @@ impl<C: Clock> BulkAnalyzer<C> {
                 ));
             }
             let page = self
-                .bulk_results_page(running, offset, BULK_FETCH_PAGE_LIMIT, cancel)
+                .bulk_results_page(running, offset, FETCH_ALL_PAGE_SIZE, cancel)
                 .await?;
             reads += 1;
 
@@ -715,11 +711,15 @@ impl<C: Clock> BulkAnalyzer<C> {
             match total {
                 None => {
                     total = Some(page_total);
+                    // Bound the coverage bitmap by the validated page total.
+                    // `validate_window` already rejected any count above the
+                    // documented job cap, so this allocation never grows from
+                    // an unchecked u64.
                     covered = vec![false; usize::try_from(page_total).unwrap_or(0)];
                 }
                 Some(total) if total != page_total => {
                     return Err(BulkAnalysisError::new(
-                        running.bulk_id,
+                        running.bulk_id(),
                         contract_symptom("total_items", "results pages disagree on the job total"),
                     ));
                 }
@@ -732,7 +732,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             for item in page.page.items() {
                 if item.index >= total_value {
                     return Err(BulkAnalysisError::new(
-                        running.bulk_id,
+                        running.bulk_id(),
                         contract_symptom(
                             "index",
                             format!(
@@ -745,7 +745,7 @@ impl<C: Clock> BulkAnalyzer<C> {
                 let slot = &mut covered[usize::try_from(item.index).unwrap_or(usize::MAX)];
                 if *slot {
                     return Err(BulkAnalysisError::new(
-                        running.bulk_id,
+                        running.bulk_id(),
                         contract_symptom(
                             "index",
                             format!("duplicate source position {} across pages", item.index),
@@ -754,29 +754,40 @@ impl<C: Clock> BulkAnalyzer<C> {
                 }
                 *slot = true;
                 page_max = Some(item.index);
-                all_items.push(clone_item(item));
+                all_items.push(item.clone());
             }
 
+            let (status, counters) = running.last_state();
             on_progress(&BulkProgress {
-                bulk_id: running.bulk_id,
-                status: running.last_status,
-                counters: running.last,
+                bulk_id: running.bulk_id(),
+                status,
+                counters,
             });
 
-            // Exhaustion: every position covered, or this page was empty.
+            // Completion requires exact coverage of 0..total_items; an empty
+            // page is never a completion signal while positions remain
+            // uncovered, and it is non-advancing drift when it is.
             let covered_count = covered.iter().filter(|covered| **covered).count();
-            if u64::try_from(covered_count).unwrap_or(u64::MAX) >= total_value || !had_any {
+            if u64::try_from(covered_count).unwrap_or(u64::MAX) >= total_value {
                 break;
             }
-            // Non-advancing protection: without covered positions the walk
-            // cannot progress, and the next offset must strictly advance.
-            let next = match page_max {
-                Some(max) => max + 1,
-                None => offset,
-            };
+            if !had_any {
+                return Err(BulkAnalysisError::new(
+                    running.bulk_id(),
+                    contract_symptom(
+                        "offset",
+                        format!(
+                            "an empty results page at offset {offset} with {covered_count} of {total_value} positions still uncovered"
+                        ),
+                    ),
+                ));
+            }
+            // Non-advancing protection: the next offset must strictly exceed
+            // the request that produced this page.
+            let next = page_max.expect("had_any implies a covered position") + 1;
             if next <= offset {
                 return Err(BulkAnalysisError::new(
-                    running.bulk_id,
+                    running.bulk_id(),
                     contract_symptom("offset", "the results walk did not advance"),
                 ));
             }
@@ -785,313 +796,19 @@ impl<C: Clock> BulkAnalyzer<C> {
 
         let total_value = total.unwrap_or(0);
         Ok(BulkPageResult {
-            page: BulkPage::new(all_items, 0, BULK_FETCH_PAGE_LIMIT, None)
-                .map_err(|error| bulk_domain_error(running.bulk_id, error))?,
+            page: BulkPage::new(all_items, 0, FETCH_ALL_PAGE_SIZE, None)
+                .map_err(|error| bulk_domain_error(running.bulk_id(), error))?,
             total_items: total_value,
-            upstream_bulk_id: running.upstream_bulk_id.clone(),
+            upstream_bulk_id: running.upstream_bulk_id().clone(),
         })
     }
-}
-
-fn running_plan<C: Clock>(running: &RunningBulk<C>) -> BulkSubmissionPlan {
-    running.plan.clone()
-}
-
-/// Builds canonical analyses for a results page: one per succeeded position,
-/// in page order; failed positions become failed analyses carrying the
-/// sanitized upstream error. Input descriptors come only from the local plan.
-fn assemble_results_page(
-    plan: &BulkSubmissionPlan,
-    page: NormalizedResultsPage,
-) -> Result<Vec<BulkItem<CanonicalError>>, CanonicalError> {
-    let NormalizedResultsPage {
-        mut succeeded,
-        failed,
-    } = page;
-    let mut indexes: Vec<u64> = succeeded.keys().chain(failed.keys()).copied().collect();
-    indexes.sort_unstable();
-    indexes.dedup();
-    let mut items = Vec::with_capacity(indexes.len());
-    for index in indexes {
-        let plan_item = plan_item_at(plan, index)?;
-        if let Some(success) = succeeded.remove(&index) {
-            let now = UtcTimestamp::now();
-            let caller_id = plan_item.caller_id().map(|id| id.as_str().to_owned());
-            let task_id = success.task_id.clone();
-            let analysis = build_terminal_success_analysis(
-                plan_item,
-                index,
-                success.task_id.as_ref(),
-                success.task,
-                now,
-            )?;
-            items.push(BulkItem {
-                index,
-                caller_id,
-                analysis_id: Some(analysis.id),
-                upstream_task_id: task_id,
-                state: BulkItemState::Succeeded {
-                    analysis: Box::new(analysis),
-                },
-            });
-        } else if let Some(outcome) = failed.get(&index) {
-            let analysis = build_terminal_failed_analysis(plan_item, index, outcome)?;
-            items.push(BulkItem {
-                index,
-                caller_id: plan_item.caller_id().map(|id| id.as_str().to_owned()),
-                analysis_id: Some(analysis.id),
-                upstream_task_id: outcome.task_id.clone(),
-                state: BulkItemState::Failed {
-                    error: outcome_error(outcome),
-                },
-            });
-        }
-    }
-    Ok(items)
-}
-
-/// Builds canonical bulk items for an items-metadata page: one per reported
-/// position, preserving the worker's in-flight or failed state with the
-/// worker's own task identity. Item order is enforced upstream by the page
-/// validator; each entry only composes the worker's reported outcome.
-fn assemble_items_metadata_page(
-    plan: &BulkSubmissionPlan,
-    page: NormalizedItemsPage,
-) -> Result<Vec<BulkItem<CanonicalError>>, CanonicalError> {
-    let NormalizedItemsPage { outcomes } = page;
-    let mut items = Vec::with_capacity(outcomes.len());
-    for outcome in outcomes {
-        let plan_item = plan_item_at(plan, outcome.index)?;
-        let NormalizedBulkItemOutcome {
-            index,
-            task_id,
-            error,
-        } = outcome;
-        match error {
-            Some(_) => {
-                let outcome = NormalizedBulkItemOutcome {
-                    index,
-                    task_id: task_id.clone(),
-                    error,
-                };
-                let analysis = build_terminal_failed_analysis(plan_item, index, &outcome)?;
-                items.push(BulkItem {
-                    index,
-                    caller_id: plan_item.caller_id().map(|id| id.as_str().to_owned()),
-                    analysis_id: Some(analysis.id),
-                    upstream_task_id: task_id,
-                    state: BulkItemState::Failed {
-                        error: outcome_error(&outcome),
-                    },
-                });
-            }
-            None => {
-                // Accepted in-flight work: a running metadata entry whose
-                // upstream task identity is the worker's. A missing task_id
-                // on accepted work is not asserted here (the metadata page
-                // may carry null task_id for very early items).
-                items.push(BulkItem {
-                    index,
-                    caller_id: plan_item.caller_id().map(|id| id.as_str().to_owned()),
-                    analysis_id: None,
-                    upstream_task_id: task_id,
-                    state: BulkItemState::Running,
-                });
-            }
-        }
-    }
-    Ok(items)
-}
-
-fn plan_item_at(
-    plan: &BulkSubmissionPlan,
-    index: u64,
-) -> Result<&crate::domain::BulkSubmissionItem, CanonicalError> {
-    plan.items()
-        .get(usize::try_from(index).map_err(|_| domain_out_of_range(index))?)
-        .ok_or_else(|| {
-            contract_symptom(
-                "index",
-                format!("no local plan item for source position {index}"),
-            )
-        })
-}
-
-fn domain_out_of_range(index: u64) -> CanonicalError {
-    contract_symptom(
-        "index",
-        format!("source position {index} does not fit usize"),
-    )
-}
-
-/// A canonical terminal-success bulk child analysis. Identity derives from
-/// the local plan (source position is stable); input is the trusted local
-/// descriptor; provenance carries the worker's task identity and version.
-fn build_terminal_success_analysis(
-    plan_item: &crate::domain::BulkSubmissionItem,
-    index: u64,
-    task_id: Option<&UpstreamTaskId>,
-    task: Box<super::normalize::NormalizedTask>,
-    now: UtcTimestamp,
-) -> Result<Analysis<CanonicalError>, CanonicalError> {
-    let input = trusted_text_input(plan_item);
-    let state = CheckState::Succeeded {
-        upstream: Some(UpstreamIdentity {
-            task_id: task_id.cloned(),
-            last_stage: NonEmptyString::new(task.last_stage.clone()).ok(),
-        }),
-        result: task.result,
-    };
-    let checks = OrderedChecks::new([Check::AiDetection(state)]).expect("one check is valid");
-    let provenance = Provenance {
-        provider: Provider::Pangram,
-        upstream_version: Some(task.version.clone()),
-        upstream_task_ids: task_id
-            .map(|id| crate::domain::UpstreamTaskIds::new(vec![id.clone()]).expect("one ID")),
-        upstream_bulk_id: None,
-        submitted_at: Some(now),
-        completed_at: Some(now),
-    };
-    let _ = index;
-    Analysis::new(
-        AnalysisId::new(),
-        SubmissionOutcome::Terminal,
-        AnalysisInput::Text(input),
-        checks,
-        SaveState::Ephemeral,
-        provenance,
-        None,
-        None,
-        now,
-        now,
-        Some(now),
-    )
-    .map_err(|error| {
-        CanonicalError::new(ErrorCode::UpstreamContractChanged, error.to_string())
-            .expect("static template")
-    })
-}
-
-/// A canonical terminal-failure bulk child analysis carrying the sanitized
-/// upstream error.
-fn build_terminal_failed_analysis(
-    plan_item: &crate::domain::BulkSubmissionItem,
-    _index: u64,
-    outcome: &NormalizedBulkItemOutcome,
-) -> Result<Analysis<CanonicalError>, CanonicalError> {
-    let input = trusted_text_input(plan_item);
-    let error = outcome_error(outcome);
-    let state = CheckState::Failed {
-        upstream: Some(UpstreamIdentity {
-            task_id: outcome.task_id.clone(),
-            last_stage: None,
-        }),
-        error,
-    };
-    let checks = OrderedChecks::new([Check::AiDetection(state)]).expect("one check is valid");
-    let now = UtcTimestamp::now();
-    let provenance = Provenance {
-        provider: Provider::Pangram,
-        upstream_version: None,
-        upstream_task_ids: outcome
-            .task_id
-            .as_ref()
-            .map(|id| crate::domain::UpstreamTaskIds::new(vec![id.clone()]).expect("one ID")),
-        upstream_bulk_id: None,
-        submitted_at: Some(now),
-        completed_at: Some(now),
-    };
-    Analysis::new(
-        AnalysisId::new(),
-        SubmissionOutcome::Terminal,
-        AnalysisInput::Text(input),
-        checks,
-        SaveState::Ephemeral,
-        provenance,
-        None,
-        None,
-        now,
-        now,
-        Some(now),
-    )
-    .map_err(|error| {
-        CanonicalError::new(ErrorCode::UpstreamContractChanged, error.to_string())
-            .expect("static template")
-    })
-}
-
-/// The canonical input descriptor for one item, derived ONLY from the
-/// validated local plan: origin, SHA-256, byte/word counts. Upstream result
-/// text is never reparsed as the item's input (contracts section 9.1).
-fn trusted_text_input(plan_item: &crate::domain::BulkSubmissionItem) -> TextInput {
-    let text = plan_item.text();
-    let byte_count = u64::try_from(text.len()).unwrap_or(u64::MAX);
-    TextInput::new(
-        TextOrigin::Literal,
-        None,
-        Sha256Hash::digest(text.as_bytes()),
-        byte_count,
-        plan_item.word_count(),
-        None,
-    )
-    .expect("a local text input descriptor is total")
-}
-
-fn outcome_error(outcome: &NormalizedBulkItemOutcome) -> CanonicalError {
-    let message = outcome
-        .error
-        .as_deref()
-        .unwrap_or("Pangram rejected the item.");
-    let reduced = super::normalize::sanitize_upstream_message(message);
-    let mut details = std::collections::BTreeMap::new();
-    details.insert(
-        "upstream_message".to_owned(),
-        serde_json::Value::from(reduced),
-    );
-    CanonicalError::new(
-        ErrorCode::UpstreamAnalysisFailed,
-        "Pangram could not analyze the submitted text.",
-    )
-    .and_then(|error| error.with_contextual_retryability(false))
-    .and_then(|error| error.with_details(details))
-    .expect("static template")
-}
-
-fn validate_page_request(offset: u64, limit: u64) -> Result<(), CanonicalError> {
-    // A malformed caller page request is a local usage error raised before
-    // any network read. The caller supplies its own operation identity, so
-    // this returns the bare canonical error.
-    if !(1..=BULK_FETCH_PAGE_LIMIT).contains(&limit) {
-        let mut details = std::collections::BTreeMap::new();
-        details.insert("field".to_owned(), serde_json::Value::from("limit"));
-        details.insert("limit".to_owned(), serde_json::Value::from(limit));
-        let error = CanonicalError::new(
-            ErrorCode::InputRequired,
-            "the bulk page limit must be in 1..=1000.",
-        )
-        .and_then(|error| error.with_details(details))
-        .expect("static template");
-        return Err(error);
-    }
-    let _ = offset;
-    Ok(())
-}
-
-fn next_offset(_offset: u64, items: &[BulkItem<CanonicalError>], total: u64) -> Option<u64> {
-    let max = items.iter().map(|item| item.index).max()?;
-    let next = max + 1;
-    if next >= total { None } else { Some(next) }
-}
-
-fn clone_item(item: &BulkItem<CanonicalError>) -> BulkItem<CanonicalError> {
-    item.clone()
 }
 
 fn page_poll_error<C: Clock>(running: &RunningBulk<C>, error: PollError) -> BulkAnalysisError {
     match error {
-        PollError::Failed(error) => BulkAnalysisError::new(running.bulk_id, *error),
+        PollError::Failed(error) => BulkAnalysisError::new(running.bulk_id(), *error),
         PollError::Cancelled => BulkAnalysisError::new(
-            running.bulk_id,
+            running.bulk_id(),
             CanonicalError::new(
                 ErrorCode::NetworkUnavailable,
                 "The bulk page read was cancelled locally; no remote action was taken.",
@@ -1099,7 +816,7 @@ fn page_poll_error<C: Clock>(running: &RunningBulk<C>, error: PollError) -> Bulk
             .expect("static template"),
         ),
         PollError::DeadlineExceeded => {
-            BulkAnalysisError::new(running.bulk_id, running_wait_timeout(running))
+            BulkAnalysisError::new(running.bulk_id(), running_wait_timeout(running))
         }
     }
 }
@@ -1108,11 +825,11 @@ fn running_wait_timeout<C: Clock>(running: &RunningBulk<C>) -> CanonicalError {
     let mut details = std::collections::BTreeMap::new();
     details.insert(
         "bulk_id".to_owned(),
-        serde_json::Value::from(running.bulk_id.to_string()),
+        serde_json::Value::from(running.bulk_id().to_string()),
     );
     details.insert(
         "upstream_bulk_id".to_owned(),
-        serde_json::Value::from(running.upstream_bulk_id.as_str()),
+        serde_json::Value::from(running.upstream_bulk_id().as_str()),
     );
     CanonicalError::new(
         ErrorCode::WaitTimeout,

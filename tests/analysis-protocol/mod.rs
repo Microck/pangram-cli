@@ -6,6 +6,7 @@
 //! below the repository's 800-line decomposition threshold.
 
 mod bulk_analysis;
+mod bulk_analysis_matrix;
 mod bulk_protocol;
 mod contract_matrix;
 mod observation;
@@ -20,8 +21,8 @@ mod support {
         SYNTHETIC_TEXT, Step, TASK_ID, pangram4_failure, pangram4_success,
     };
     pub(crate) use microck_pangram_cli::analysis::{
-        AnalysisRequest, Analyzer, BulkAnalysisRequest, BulkAnalyzer, Duration, PollPolicy,
-        RetryPolicy, StopObserving, WaitOptions,
+        AnalysisRequest, Analyzer, BulkAnalysisRequest, Duration, PollPolicy, RetryPolicy,
+        StopObserving, WaitOptions,
     };
     pub(crate) use microck_pangram_cli::domain::{
         AnalysisStatus, BulkSubmissionItem, BulkSubmissionPlan, NonEmptyString, TextOrigin,

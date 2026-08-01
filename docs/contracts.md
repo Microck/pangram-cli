@@ -622,11 +622,25 @@ Submit is `POST {text-base}/bulk`. The request body carries exactly one of
 - `model` is exactly `pangram-4` for the whole job. No per-item selector
   exists, and there is no public-dashboard-link request field.
 
-The 202 response carries the upstream `bulk_id`, an initial `status`, the
-`total_items` count, an ordered `accepted_items` list (`index`, optional
+Exactly an HTTP `202 Accepted` is the submit success signal. Any other
+status, including another `2xx`, is not an acceptance: a non-`202` `2xx`
+falls into the never-replayed ambiguous class (section 12.1) because the job
+may exist remotely, and a non-`2xx` status maps through the error matrix
+below. The 202 response carries the upstream `bulk_id`, an initial `status`,
+the `total_items` count, an ordered `accepted_items` list (`index`, optional
 `id`, `task_id`), and an ordered `failed_items` list for items rejected by
 immediate validation (`index`, optional `id`, null `task_id`, `stage`,
-`error`).
+`error`). The 202 `status` token is the closed start-of-life marker
+`queued`: the client has no network authority between the acceptance and the
+first status read that could set a later value, so any other token fails
+upstream contract validation. Per-item `stage` fields are provider
+diagnostics, not protocol state: the item's own shape decides its class
+(a `result` document is a success, `result: null` is in-progress, a
+`failed_items` entry is failed), per-item `stage` never carries or gates
+termination, and it is preserved only as sanitized provenance evidence
+(bounded, ASCII-printable, control sequences stripped). A failed entry
+accepts null or any string `stage`; a missing `stage` on a failed entry is
+not contract drift.
 
 Status polling is `GET /bulk/{bulk_id}` and returns the job `bulk_id`, one of
 the closed statuses `queued`/`running`/`succeeded`/`failed`/`partial`, the
@@ -656,22 +670,43 @@ by source `index`, and a fetch-all walk covers each item position in
 `0..total_items` exactly once with a strictly advancing `next_offset` until it
 exhausts the set (the final page's `next_offset` is the end-of-set marker).
 A duplicate, out-of-order, counter-mismatched, identity-mismatched, or
-non-advancing page fails upstream contract validation. The client supplies its
-own constant page `limit` for a fetch-all walk; there is no aggregate
-endpoint.
+non-advancing page fails upstream contract validation. An empty page while
+positions remain uncovered is non-advancing drift; completion requires exact
+coverage of `0..total_items`. The client supplies its own constant page
+`limit` for a fetch-all walk; there is no aggregate endpoint. The fetch-all
+walk uses the conservative bounded page size of 100 rather than the 1,000
+maximum, because every received response body is bounded in memory right up
+to the client's 16 MiB hard response cap and a 1,000-item page is the worst
+case. Explicit one-page `bulk items`/`bulk results` requests may still use
+any `limit` in `1..=1,000`; only the internal fetch-all walk is capped to
+100. A submitted session's response `total_items` MUST equal the validated
+local plan count and is checked before any client-side allocation; a
+mismatch is contract drift. For a status/page read of a job without a local
+plan (a resumed remote handle), the client validates the upstream-reported
+`total_items` against the documented hard bound before any allocation.
+Because a job bills each valid item at a minimum of one unit and a request
+is capped at 1,000 billable units, no valid job exceeds 1,000 items; a
+larger reported `total_items` fails upstream contract validation and the
+client never allocates from an unchecked count.
 
 - the items page returns one `items` list of metadata (`index`, optional
   `id`, `task_id`, `stage`, optional `error`).
 - the results page returns an `items` list for successful or in-progress
   work (completed items add a `result`; in-progress items carry
   `result: null`) plus a separate `failed_items` metadata list for the same
-  page.
+  page. A `result: null` entry normalizes to the canonical bulk item status
+  `running`. Each of the two lists is strictly ascending by source `index`
+  on its own; cross-list integrity is disjointness plus coverage of the
+  requested window, not a chained ordering across the lists.
 
 The documented bulk error matrix is: `401` missing or invalid key, `402`
 insufficient credits, `403` model not enabled or job not owned, `404` unknown
 job, `413` over the billable-unit limit, `422` empty/duplicate-ID/both-shapes/
 invalid-model validation, `500` processing error, and `503` model temporarily
-unavailable. Only the safe GET routes (`GET /bulk/{bulk_id}`, `/items`,
+unavailable. `413` is documented on the submit route; the other statuses bind
+every `/bulk` route that the matrix indicates for them, most importantly the
+safe GET routes whose key, ownership, unknown-job, validation, and server
+failures are exercised by the loopback protocol suite. Only the safe GET routes (`GET /bulk/{bulk_id}`, `/items`,
 `/results`) are eligible for the bounded transient-failure retry policy; the
 billable `POST /bulk` is never replayed after an ambiguous send (section
 12.1).

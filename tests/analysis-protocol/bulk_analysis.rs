@@ -1,6 +1,6 @@
-//! Production bulk-analysis-core protocol tests: one typed `BulkAnalyzer`
-//! over the real loopback fixture. No mocks, no live Pangram, no
-//! credentials. Every queued `Step` is synthetic.
+//! Production bulk-analysis-core protocol tests: one typed `Analyzer` (the
+//! single adapter-facing analysis owner) over the real loopback fixture. No
+//! mocks, no live Pangram, no credentials. Every queued `Step` is synthetic.
 //!
 //! These exercise the production analysis surface the CLI/TUI/MCP adapters
 //! will call: typed submit, the single observation loop (running/partial/
@@ -11,9 +11,9 @@
 use super::support::*;
 use microck_pangram_cli::domain::{AnalysisStatus, BulkItemState};
 
-const BULK_ID: &str = "blk_123";
+pub(super) const BULK_ID: &str = "blk_123";
 
-fn accepted_submit_body() -> serde_json::Value {
+pub(super) fn accepted_submit_body() -> serde_json::Value {
     serde_json::json!({
         "bulk_id": BULK_ID,
         "status": "queued",
@@ -26,7 +26,7 @@ fn accepted_submit_body() -> serde_json::Value {
     })
 }
 
-fn status_body(
+pub(super) fn status_body(
     status: &str,
     total: u64,
     accepted: u64,
@@ -46,7 +46,7 @@ fn status_body(
     })
 }
 
-fn two_item_plan() -> BulkSubmissionPlan {
+pub(super) fn two_item_plan() -> BulkSubmissionPlan {
     bulk_plan(
         vec![
             bulk_item(Some("row-001"), "First text", 1),
@@ -56,7 +56,7 @@ fn two_item_plan() -> BulkSubmissionPlan {
     )
 }
 
-fn success_result(text: &str) -> serde_json::Value {
+pub(super) fn success_result(text: &str) -> serde_json::Value {
     let mut doc = pangram4_success(text);
     doc["stage"] = serde_json::json!("STAGE_SUCCESS");
     doc
@@ -73,7 +73,7 @@ async fn submit_then_wait_reaches_terminal_success_through_one_loop() {
     fixture.on_bulk_status(Step::Json(status_body("running", 2, 2, 1, 0, false)));
     fixture.on_bulk_status(Step::Json(status_body("succeeded", 2, 2, 2, 0, true)));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -123,7 +123,7 @@ async fn terminal_partial_preserves_exact_counters() {
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
     fixture.on_bulk_status(Step::Json(status_body("partial", 2, 2, 1, 1, true)));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -166,7 +166,7 @@ async fn terminal_failure_reports_failed_parent_status() {
     ));
     fixture.on_bulk_status(Step::Json(status_body("failed", 2, 0, 0, 2, true)));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -193,7 +193,7 @@ async fn over_limit_submit_maps_to_bulk_limit_exceeded_without_replay() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(413, None, None));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let result = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -227,7 +227,7 @@ async fn submit_auth_payment_permission_matrix_maps_exactly() {
     ] {
         let fixture = ProtocolFixture::start().await;
         fixture.on_bulk_submit(Step::Status(status, None, None));
-        let analyzer = BulkAnalyzer::from_client(fixture.client());
+        let analyzer = Analyzer::from_client(fixture.client());
         let result = analyzer
             .submit_bulk(
                 BulkAnalysisRequest::new(two_item_plan()),
@@ -249,7 +249,7 @@ async fn ambiguous_bulk_post_reports_outcome_unknown_without_replay() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Hang);
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let stop = StopObserving::new();
     let cancel = stop.token().clone();
     let request = BulkAnalysisRequest::new(two_item_plan());
@@ -301,7 +301,7 @@ async fn pre_issue_cancellation_completes_no_remote_action() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let stop = StopObserving::new();
     stop.token().cancel();
     let result = analyzer
@@ -328,7 +328,7 @@ async fn wait_deadline_reports_identity_and_timeout() {
         fixture.on_bulk_status(Step::Json(status_body("running", 2, 2, 1, 0, false)));
     }
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client_with_policy(
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
         RetryPolicy::OFF,
         PollPolicy::new(Duration::ZERO, Duration::ZERO),
         Duration::from_millis(400),
@@ -369,7 +369,7 @@ async fn cancellation_stops_local_bulk_observation_only() {
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
     fixture.on_bulk_status(Step::Hang);
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -416,7 +416,7 @@ async fn status_counter_drift_is_rejected_fail_closed() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
     fixture.on_bulk_status(Step::Json(status_body("partial", 2, 2, 1, 0, false)));
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -437,7 +437,7 @@ async fn status_counter_drift_is_rejected_fail_closed() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
     fixture.on_bulk_status(Step::Json(status_body("running", 2, 2, 2, 2, false)));
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -464,7 +464,7 @@ async fn malformed_upstream_timestamp_is_contract_drift() {
     body["created_at"] = serde_json::json!("not-a-timestamp");
     fixture.on_bulk_status(Step::Json(body));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -498,7 +498,7 @@ async fn items_page_enforces_query_and_ordered_positions() {
         ]
     })));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -544,7 +544,7 @@ async fn results_page_preserves_order_caller_ids_and_trusted_input() {
         ]
     })));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -588,12 +588,12 @@ async fn results_page_preserves_order_caller_ids_and_trusted_input() {
 async fn fetch_all_covers_every_position_once_in_order() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
-    // Two pages: positions 0 then 1, page LIMIT capped at the documented max
-    // (which dominates the two-item set, but the walk still iterates pages).
+    // One page covering both positions, echoing the conservative bounded
+    // fetch-all page size (100, never the 1,000 maximum).
     fixture.on_bulk_results(Step::Json(serde_json::json!({
         "bulk_id": BULK_ID,
         "offset": 0,
-        "limit": 1000,
+        "limit": 100,
         "total_items": 2,
         "items": [
             {"index": 0, "id": "row-001", "task_id": "task-1", "stage": "STAGE_SUCCESS",
@@ -604,7 +604,7 @@ async fn fetch_all_covers_every_position_once_in_order() {
         "failed_items": []
     })));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -626,6 +626,11 @@ async fn fetch_all_covers_every_position_once_in_order() {
             .iter()
             .all(|item| matches!(item.state, BulkItemState::Succeeded { .. }))
     );
+    // The internal walk requested the bounded page size, not the maximum.
+    let recorded = fixture.requests();
+    let reads = BulkRequestView::for_path(&recorded, BULK_ID, "/results");
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].query, "offset=0&limit=100");
     fixture.shutdown().await;
 }
 
@@ -639,7 +644,7 @@ async fn duplicate_results_positions_are_rejected() {
     fixture.on_bulk_results(Step::Json(serde_json::json!({
         "bulk_id": BULK_ID,
         "offset": 0,
-        "limit": 1000,
+        "limit": 100,
         "total_items": 2,
         "items": [
             {"index": 0, "id": "row-001", "task_id": "task-1", "stage": "STAGE_SUCCESS",
@@ -648,7 +653,7 @@ async fn duplicate_results_positions_are_rejected() {
         "failed_items": []
     })));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -664,7 +669,7 @@ async fn duplicate_results_positions_are_rejected() {
     fixture.on_bulk_results(Step::Json(serde_json::json!({
         "bulk_id": BULK_ID,
         "offset": 1,
-        "limit": 1000,
+        "limit": 100,
         "total_items": 2,
         "items": [
             {"index": 0, "id": "row-001", "task_id": "task-1", "stage": "STAGE_SUCCESS",
@@ -681,23 +686,24 @@ async fn duplicate_results_positions_are_rejected() {
     fixture.shutdown().await;
 }
 
-/// 16. A non-advancing results walk (the worker returns no covered positions
-/// but reports more work) is rejected as drift instead of looping forever.
+/// 16. An empty results page while positions remain uncovered is
+/// non-advancing drift (`upstream_contract_changed`), never a completion
+/// signal: completion requires exact coverage of `0..total_items`.
 #[tokio::test(flavor = "current_thread")]
-async fn non_advancing_results_walk_is_rejected() {
+async fn empty_results_page_with_uncovered_positions_is_drift() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
-    // An empty page while total_items remains 2: the walk cannot advance.
+    // An empty page while total_items remains 2: positions remain uncovered.
     fixture.on_bulk_results(Step::Json(serde_json::json!({
         "bulk_id": BULK_ID,
         "offset": 0,
-        "limit": 1000,
+        "limit": 100,
         "total_items": 2,
         "items": [],
         "failed_items": []
     })));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -705,15 +711,12 @@ async fn non_advancing_results_walk_is_rejected() {
         )
         .await
         .expect("acceptance");
-    // An empty first page means `had_any` is false, so the walk stops by
-    // exhaustion rather than erroring. To prove the canonical empty page ends
-    // the walk without panic, assert the result completes.
-    let page = analyzer
+    let error = analyzer
         .bulk_results_all(&running, 8, &StopObserving::new().token().clone(), |_| {})
         .await
-        .expect("an empty page exhausts the walk without advancing forever");
-    assert!(page.page.items().is_empty());
-    assert_eq!(fixture.get_count(), 1, "exactly one page read");
+        .expect_err("an empty page with uncovered positions is drift, not completion");
+    assert_eq!(error.canonical().code(), ErrorCode::UpstreamContractChanged);
+    assert_eq!(fixture.get_count(), 1, "exactly one page read before drift");
     fixture.shutdown().await;
 }
 
@@ -732,7 +735,7 @@ async fn out_of_order_and_mismatched_pages_are_rejected() {
         "items": [],
         "failed_items": []
     })));
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -763,7 +766,7 @@ async fn out_of_order_and_mismatched_pages_are_rejected() {
         ],
         "failed_items": []
     })));
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -793,7 +796,7 @@ async fn page_identity_mismatch_is_rejected() {
         "items": [],
         "failed_items": []
     })));
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -816,7 +819,7 @@ async fn page_limit_out_of_range_is_a_local_usage_error_before_network() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -853,7 +856,7 @@ async fn bulk_failures_never_leak_key_header_content_or_hostile_sequences() {
     // carries control sequences (the provider never sees `x-api-key`, so
     // the realistic hostile payload is ANSI/OSC material).
     let hostile = format!(
-        "\u{1b}[31mBAD\u{1b}[0m{}\u{1b}]8;;https://evil.example\u{7}\u{7}\u{1}δ\u{2603}",
+        "\u{1b}[31mBAD\u{1b}[0m{}\u{1b}]8;;https://evil.example\u{7}\u{7}\u{1}\u{3b4}\u{2603}",
         "y".repeat(400)
     );
     fixture.on_bulk_results(Step::Json(serde_json::json!({
@@ -868,7 +871,7 @@ async fn bulk_failures_never_leak_key_header_content_or_hostile_sequences() {
         ]
     })));
 
-    let analyzer = BulkAnalyzer::from_client(fixture.client());
+    let analyzer = Analyzer::from_client(fixture.client());
     let running = analyzer
         .submit_bulk(
             BulkAnalysisRequest::new(two_item_plan()),
@@ -895,7 +898,7 @@ async fn bulk_failures_never_leak_key_header_content_or_hostile_sequences() {
             "no header name: {surface}"
         );
         assert!(
-            !surface.contains('δ') && !surface.contains('\u{2603}'),
+            !surface.contains('\u{3b4}') && !surface.contains('\u{2603}'),
             "non-ASCII scalars are removed: {surface}"
         );
     }

@@ -25,9 +25,13 @@ use crate::domain::{
 use crate::output::{CanonicalError, ErrorCode};
 
 use super::WaitOptions;
+use super::bulk::{
+    BulkAnalysisError, BulkAnalysisRequest, BulkPageResult, BulkProgress, RunningBulk,
+};
 use super::normalize::{self, NormalizedTask, TaskState};
 use super::task::{Accepted, AcceptedInput, AnalysisRequest, TaskError};
 use super::upstream::{PollError, SubmitOutcome, TaskPoll, UpstreamClient};
+use crate::domain::{BulkId, UpstreamBulkId};
 
 /// The identity tuple reported on wait timeouts and interruptions. It is
 /// the payload the final adapter output prints so the caller can reconcile
@@ -367,7 +371,10 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
 }
 
 /// Owns construction of running operations. Clones share the connection
-/// pool and the time-based pacing gate.
+/// pool and the time-based pacing gate. This is the single adapter-facing
+/// analysis owner: text and bulk surfaces both enter through it over one
+/// shared pacemaker/HTTP stack, so CLI/TUI/MCP never own a second top-level
+/// protocol client.
 #[derive(Clone)]
 pub struct Analyzer<C = super::config::SystemClock> {
     client: UpstreamClient<C>,
@@ -377,6 +384,80 @@ impl<C: super::config::Clock> Analyzer<C> {
     #[must_use]
     pub fn from_client(client: UpstreamClient<C>) -> Self {
         Self { client }
+    }
+
+    /// The internal bulk owner sharing this analyzer's client. `pub(crate)`
+    /// so the facade methods (and only they) build it; adapters never
+    /// construct a `BulkAnalyzer` directly.
+    pub(crate) fn bulk(&self) -> super::bulk::BulkAnalyzer<C> {
+        super::bulk::BulkAnalyzer::from_client(self.client.clone())
+    }
+
+    /// Submits one validated bulk plan exactly once and returns its running
+    /// handle, preserving the same pacing, billing, and ambiguity rules as
+    /// the text surface. This is the adapter-facing bulk submit entry.
+    pub async fn submit_bulk(
+        &self,
+        request: BulkAnalysisRequest,
+        cancel: &CancellationToken,
+    ) -> Result<RunningBulk<C>, BulkAnalysisError> {
+        self.bulk().submit_bulk(request, cancel).await
+    }
+
+    /// Rehydrates a running handle for an already-accepted job (a
+    /// `bulk_status`-style read of a job submitted earlier). The caller's
+    /// validated plan keeps per-item input descriptors trusted-local.
+    #[must_use]
+    pub fn resume_bulk(
+        &self,
+        bulk_id: BulkId,
+        upstream_bulk_id: UpstreamBulkId,
+        plan: crate::domain::BulkSubmissionPlan,
+    ) -> RunningBulk<C> {
+        self.bulk().resume(bulk_id, upstream_bulk_id, plan)
+    }
+
+    /// Fetches one validated typed items-metadata page through this
+    /// analyzer's shared safe-GET chain.
+    pub async fn bulk_items_page(
+        &self,
+        running: &RunningBulk<C>,
+        offset: u64,
+        limit: u64,
+        cancel: &CancellationToken,
+    ) -> Result<BulkPageResult, BulkAnalysisError> {
+        self.bulk()
+            .bulk_items_page(running, offset, limit, cancel)
+            .await
+    }
+
+    /// Fetches one validated typed results page through this analyzer's
+    /// shared safe-GET chain.
+    pub async fn bulk_results_page(
+        &self,
+        running: &RunningBulk<C>,
+        offset: u64,
+        limit: u64,
+        cancel: &CancellationToken,
+    ) -> Result<BulkPageResult, BulkAnalysisError> {
+        self.bulk()
+            .bulk_results_page(running, offset, limit, cancel)
+            .await
+    }
+
+    /// Iterates documented results pages until the set is exhausted, over
+    /// this analyzer's shared safe-GET chain and the bounded fetch-all page
+    /// size.
+    pub async fn bulk_results_all(
+        &self,
+        running: &RunningBulk<C>,
+        max_reads: u64,
+        cancel: &CancellationToken,
+        on_progress: impl FnMut(&BulkProgress),
+    ) -> Result<BulkPageResult, BulkAnalysisError> {
+        self.bulk()
+            .bulk_results_all(running, max_reads, cancel, on_progress)
+            .await
     }
 
     /// Submits one text-analysis request exactly once.

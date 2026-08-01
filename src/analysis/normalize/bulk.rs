@@ -49,16 +49,33 @@ pub(in crate::analysis) struct NormalizedBulkStatus {
     pub(in crate::analysis) completed_at: Option<crate::domain::UtcTimestamp>,
 }
 
+/// The exact closed status token the client accepts on the 202 acceptance
+/// body (contracts section 9.1). Between the acceptance and the first status
+/// read the client has no network authority that could set a later value, so
+/// `queued` is the only legal start-of-life marker; anything else fails
+/// closed as contract drift.
+const ACCEPTANCE_STATUS_TOKEN: &str = "queued";
+
 /// Validates the documented 202 acceptance document against the plan's
 /// validated input count. The `total_items`, accepted list, and failed list
 /// MUST cover positions `0..total_items` exactly once in ascending order
 /// (contracts section 9); any gap, duplicate, or out-of-range position is
 /// contract drift, as is a `total_items` that disagrees with the validated
-/// plan.
+/// plan. The acceptance `status` token must equal the pinned
+/// [`ACCEPTANCE_STATUS_TOKEN`]; anything else fails closed as drift.
 pub(in crate::analysis) fn normalize_bulk_acceptance(
     acceptance: &crate::domain::BulkSubmitResponse,
     expected_total: u64,
 ) -> Result<NormalizedBulkPlan, CanonicalError> {
+    if acceptance.status.as_str() != ACCEPTANCE_STATUS_TOKEN {
+        return Err(contract_changed(
+            "status",
+            format!(
+                "acceptance status {} is not the pinned {ACCEPTANCE_STATUS_TOKEN} token",
+                acceptance.status
+            ),
+        ));
+    }
     if acceptance.total_items != expected_total {
         return Err(contract_changed(
             "total_items",
@@ -157,7 +174,7 @@ pub(in crate::analysis) fn normalize_bulk_status(
             }
             total
         }
-        None => status.total_items,
+        None => validate_untrusted_total_items(status.total_items)?,
     };
     let counters = BulkCounters::new(total, status.accepted, status.succeeded, status.failed)
         .map_err(|_| {
@@ -211,6 +228,22 @@ pub(in crate::analysis) fn normalize_bulk_status(
 pub(in crate::analysis) struct NormalizedBulkPlanStatus {
     pub(in crate::analysis) status: NormalizedBulkStatus,
     pub(in crate::analysis) bulk_id: UpstreamBulkId,
+}
+
+/// The documented hard bound on an upstream-reported `total_items` when no
+/// trusted local plan exists (a resumed remote handle). A job bills every
+/// valid item at a minimum of one started-100-word unit and a request is
+/// capped at 1,000 billable units, so no valid job exceeds 1,000 items.
+/// A larger reported count fails closed as contract drift; the client never
+/// allocates from an unchecked count (contracts section 9.1).
+fn validate_untrusted_total_items(total: u64) -> Result<u64, CanonicalError> {
+    if total > crate::domain::BULK_BILLABLE_UNIT_LIMIT {
+        return Err(contract_changed(
+            "total_items",
+            format!("reported total_items {total} exceeds the documented 1,000-unit job cap"),
+        ));
+    }
+    Ok(total)
 }
 
 /// Maps the worker status token onto the section 9 precedence and rejects
@@ -293,12 +326,22 @@ pub(in crate::analysis) struct NormalizedItemsPage {
     pub(in crate::analysis) outcomes: Vec<NormalizedBulkItemOutcome>,
 }
 
-/// A validated typed bulk results page: the per-index succeeded results and
-/// the per-index failed outcomes, kept distinct so the assembler preserves
-/// the worker's own split.
+/// A validated typed bulk results page: the per-index items-list outcomes
+/// (succeeded or in-progress) and the per-index failed outcomes, kept
+/// distinct so the assembler preserves the worker's own split.
 pub(in crate::analysis) struct NormalizedResultsPage {
-    pub(in crate::analysis) succeeded: HashMap<u64, NormalizedBulkSuccess>,
+    pub(in crate::analysis) succeeded: HashMap<u64, NormalizedItemResult>,
     pub(in crate::analysis) failed: HashMap<u64, NormalizedBulkItemOutcome>,
+}
+
+/// One results-page items-list entry: a terminal success carrying the
+/// normalized Pangram 4 task document, or an in-progress (`result: null`)
+/// child with no content yet (content never surfaces in errors).
+pub(in crate::analysis) enum NormalizedItemResult {
+    /// A terminal success document and the worker's task identity.
+    Succeeded(NormalizedBulkSuccess),
+    /// A documented in-progress entry (`result: null`): a running child.
+    Running { task_id: Option<UpstreamTaskId> },
 }
 
 /// One succeeded result item: the task identity and the normalized Pangram 4
@@ -306,6 +349,14 @@ pub(in crate::analysis) struct NormalizedResultsPage {
 pub(in crate::analysis) struct NormalizedBulkSuccess {
     pub(in crate::analysis) task_id: Option<UpstreamTaskId>,
     pub(in crate::analysis) task: Box<super::NormalizedTask>,
+}
+
+impl NormalizedBulkSuccess {
+    /// The in-progress result-item outcome: no content, only the worker's
+    /// optional task identity (which may be null for very early items).
+    fn running(task_id: Option<UpstreamTaskId>) -> NormalizedItemResult {
+        NormalizedItemResult::Running { task_id }
+    }
 }
 
 impl std::fmt::Debug for NormalizedBulkSuccess {
@@ -341,6 +392,10 @@ impl RawPageHeader {
         expected_limit: u64,
         expected_total: &mut Option<u64>,
     ) -> Result<(), CanonicalError> {
+        // Never build page structures from an unchecked count: a reported
+        // total that exceeds the documented job cap is contract drift before
+        // any coverage or allocation uses it.
+        validate_untrusted_total_items(self.total_items)?;
         if self.offset != expected_offset {
             return Err(contract_changed(
                 "offset",
@@ -389,6 +444,9 @@ pub(in crate::analysis) fn normalize_items_page(
         total_items: response.total_items,
     };
     header.validate_window(expected_offset, expected_limit, expected_total)?;
+    // Never index the caller's plan from an unchecked count: bound the
+    // reported total before any in-window position reaches `plan_item_at`.
+    validate_total_within_window(&header.total_items)?;
     validate_ascending(response.items.iter().map(|item| item.index))?;
     let mut outcomes = Vec::with_capacity(response.items.len());
     for item in &response.items {
@@ -402,10 +460,14 @@ pub(in crate::analysis) fn normalize_items_page(
     Ok((header, NormalizedItemsPage { outcomes }))
 }
 
-/// Parses and validates one results page: succeeded `items` list and the
-/// separate `failed_items` list. Each succeeded item's `result` is normalized
-/// through the shared Pangram 4 success validator (which enforces the
-/// `STAGE_SUCCESS` stage, the `4.0` version, and humanizer evidence).
+/// Parses and validates one results page: the `items` list (succeeded or
+/// in-progress) and the separate `failed_items` list. An in-progress entry
+/// carrying the documented `result: null` is a valid `running` child, not
+/// contract drift. Each succeeded entry's `result` is normalized through the
+/// shared Pangram 4 success validator (which enforces the `STAGE_SUCCESS`
+/// stage, the `4.0` version, and humanizer evidence). Each of the two lists
+/// is strictly ascending by source `index` on its own; cross-list integrity
+/// is disjointness plus coverage, not a chained ordering across the lists.
 pub(in crate::analysis) fn normalize_results_page(
     response: &crate::domain::BulkResultsPage,
     expected_bulk_id: &UpstreamBulkId,
@@ -420,45 +482,16 @@ pub(in crate::analysis) fn normalize_results_page(
         total_items: response.total_items,
     };
     header.validate_window(expected_offset, expected_limit, expected_total)?;
-    validate_ascending(
-        response
-            .items
-            .iter()
-            .map(|item| item.index)
-            .chain(response.failed_items.iter().map(|item| item.index)),
-    )?;
+    // Never index the caller's plan from an unchecked count: bound the
+    // reported total before any in-window position reaches `plan_item_at`.
+    validate_total_within_window(&header.total_items)?;
+    // Each list is strictly ascending on its own; cross-list integrity is
+    // disjointness (checked below), not a chained ordering across the lists.
+    validate_ascending(response.items.iter().map(|item| item.index))?;
+    validate_ascending(response.failed_items.iter().map(|item| item.index))?;
 
     let mut succeeded = HashMap::with_capacity(response.items.len());
     for item in &response.items {
-        let normalized = match &item.result {
-            Some(document) => {
-                // The raw document still carries its stage token; the shared
-                // validator enforces STAGE_SUCCESS and the full Pangram 4
-                // success shape.
-                let state = super::normalize_task_state(document)?;
-                match state {
-                    super::TaskState::Success(task) => task,
-                    // An in-progress result item carries result: null; a
-                    // terminal-failed result surfaces through failed_items.
-                    // Anything else is drift.
-                    _ => {
-                        return Err(contract_changed(
-                            "items.result",
-                            "a succeeded result that is not a terminal success document",
-                        ));
-                    }
-                }
-            }
-            None => {
-                return Err(contract_changed(
-                    "items.result",
-                    format!(
-                        "a succeeded result item at index {} missing its result",
-                        item.index
-                    ),
-                ));
-            }
-        };
         let task_id = item
             .task_id
             .as_ref()
@@ -467,20 +500,51 @@ pub(in crate::analysis) fn normalize_results_page(
                     .map_err(|_| contract_changed("items.task_id", "empty"))
             })
             .transpose()?;
-        if succeeded
-            .insert(
-                item.index,
-                NormalizedBulkSuccess {
-                    task_id,
-                    task: normalized,
-                },
-            )
-            .is_some()
-        {
-            return Err(contract_changed(
-                "items.index",
-                format!("duplicate succeeded source position {}", item.index),
-            ));
+        match &item.result {
+            Some(document) => {
+                // The raw document still carries its stage token; the shared
+                // validator enforces STAGE_SUCCESS and the full Pangram 4
+                // success shape.
+                let state = super::normalize_task_state(document)?;
+                let task = match state {
+                    super::TaskState::Success(task) => task,
+                    // A present result document must be a terminal success.
+                    // Anything else on an items-list entry is drift.
+                    _ => {
+                        return Err(contract_changed(
+                            "items.result",
+                            "a present result document that is not a terminal success",
+                        ));
+                    }
+                };
+                if succeeded
+                    .insert(
+                        item.index,
+                        NormalizedItemResult::Succeeded(NormalizedBulkSuccess { task_id, task }),
+                    )
+                    .is_some()
+                {
+                    return Err(contract_changed(
+                        "items.index",
+                        format!("duplicate succeeded source position {}", item.index),
+                    ));
+                }
+            }
+            None => {
+                // A documented `result: null` entry is an in-progress
+                // (running) child; the items list may report it mixed with
+                // completed siblings. Preserve it as an in-flight outcome
+                // rather than treating the null as a missing result.
+                if succeeded
+                    .insert(item.index, NormalizedBulkSuccess::running(task_id))
+                    .is_some()
+                {
+                    return Err(contract_changed(
+                        "items.index",
+                        format!("duplicate source position {}", item.index),
+                    ));
+                }
+            }
         }
     }
 
@@ -494,7 +558,7 @@ pub(in crate::analysis) fn normalize_results_page(
             ));
         }
     }
-    // A position must not appear in both the succeeded and failed lists.
+    // A position must not appear in both the items and failed lists.
     for index in succeeded.keys() {
         if failed.contains_key(index) {
             return Err(contract_changed(
@@ -504,6 +568,15 @@ pub(in crate::analysis) fn normalize_results_page(
         }
     }
     Ok((header, NormalizedResultsPage { succeeded, failed }))
+}
+
+/// Never index the caller's validated plan from an unchecked page total.
+/// The normalizer bounds `total_items` in [`RawPageHeader::validate_window`]
+/// against the documented job cap only when no trusted plan count is known;
+/// this second check is a defense-in-depth ceiling applied to every page so
+/// a window item can never drive `plan_item_at` out of a trusted plan.
+fn validate_total_within_window(total_items: &u64) -> Result<(), CanonicalError> {
+    validate_untrusted_total_items(*total_items).map(|_| ())
 }
 
 /// One items-page entry or failed entry shared outcome. `task_id` is
