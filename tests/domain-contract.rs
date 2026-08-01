@@ -577,7 +577,7 @@ fn accepted_bulk_collections_require_an_upstream_bulk_id() {
             AnalysisStatus::Running,
             SubmissionOutcome::Accepted,
             None,
-            counters.clone(),
+            counters,
         )
         .is_err()
     );
@@ -600,7 +600,7 @@ fn bulk_submission_outcomes_match_status_and_upstream_identity() {
             AnalysisStatus::Running,
             SubmissionOutcome::Terminal,
             None,
-            counters.clone(),
+            counters,
         )
         .is_err()
     );
@@ -609,12 +609,12 @@ fn bulk_submission_outcomes_match_status_and_upstream_identity() {
             AnalysisStatus::Running,
             SubmissionOutcome::NotSubmitted,
             Some(UpstreamBulkId::new("bulk-upstream").unwrap()),
-            counters.clone(),
+            counters,
         )
         .is_err()
     );
     for counters_with_progress in [
-        counters.clone(),
+        counters,
         BulkCounters::new(2, 1, 1, 0).unwrap(),
         BulkCounters::new(2, 0, 0, 1).unwrap(),
     ] {

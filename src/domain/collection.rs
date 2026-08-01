@@ -10,7 +10,7 @@ use super::{
     UpstreamBulkId, UpstreamTaskId, UtcTimestamp, deserialize_missing_only,
 };
 
-#[derive(Clone, Debug, JsonSchema, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, JsonSchema, PartialEq, Eq, Serialize)]
 pub struct BulkCounters {
     #[schemars(range(min = 1))]
     total_items: u64,

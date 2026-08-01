@@ -32,6 +32,7 @@
 //!   non-printable bytes removed, bounded length) before it can appear in
 //!   canonical details.
 
+mod bulk;
 mod config;
 mod handle;
 mod http;
@@ -40,13 +41,19 @@ mod pacemaker;
 mod task;
 mod upstream;
 
+pub use bulk::{
+    BulkAnalysisError, BulkAnalysisRequest, BulkAnalyzer, BulkOperationIdentity, BulkPageResult,
+    BulkProgress, InterruptedBulk, RunningBulk,
+};
 pub use config::{AnalysisConfig, PollPolicy, RetryPolicy, WaitOptions};
 pub use handle::{
     AnalysisProgress, Analyzer, InterruptedAnalysis, OperationIdentity, RunningAnalysis,
     StopObserving,
 };
 pub use task::{Accepted, AcceptedInput, AnalysisRequest, AnalysisResult, TaskError};
-pub use upstream::{AnalysisError, SubmissionFailure, UpstreamClient, UpstreamEndpoints};
+pub use upstream::{
+    AcceptedBulk, AnalysisError, SubmissionFailure, UpstreamClient, UpstreamEndpoints,
+};
 
 pub use crate::config::MAX_REQUESTS_PER_SECOND;
 pub use tokio::time::{Duration, Instant};

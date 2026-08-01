@@ -5,6 +5,7 @@
 //! and contract matrices) over one shared support module; each file stays
 //! below the repository's 800-line decomposition threshold.
 
+mod bulk_analysis;
 mod bulk_protocol;
 mod contract_matrix;
 mod observation;
@@ -19,12 +20,29 @@ mod support {
         SYNTHETIC_TEXT, Step, TASK_ID, pangram4_failure, pangram4_success,
     };
     pub(crate) use microck_pangram_cli::analysis::{
-        AnalysisRequest, Analyzer, Duration, PollPolicy, RetryPolicy, StopObserving, WaitOptions,
+        AnalysisRequest, Analyzer, BulkAnalysisRequest, BulkAnalyzer, Duration, PollPolicy,
+        RetryPolicy, StopObserving, WaitOptions,
     };
-    pub(crate) use microck_pangram_cli::domain::{AnalysisStatus, TextOrigin, UpstreamTaskId};
+    pub(crate) use microck_pangram_cli::domain::{
+        AnalysisStatus, BulkSubmissionItem, BulkSubmissionPlan, NonEmptyString, TextOrigin,
+        UpstreamTaskId,
+    };
     pub(crate) use microck_pangram_cli::output::ErrorCode;
 
     pub(super) const KEY_FRAGMENT: &str = "synthetic_key_0000";
+
+    pub(super) fn bulk_item(id: Option<&str>, text: &str, words: u64) -> BulkSubmissionItem {
+        BulkSubmissionItem::new(
+            id.map(|value| NonEmptyString::new(value).unwrap()),
+            text.to_owned(),
+            words,
+        )
+        .unwrap()
+    }
+
+    pub(super) fn bulk_plan(items: Vec<BulkSubmissionItem>, ceiling: u64) -> BulkSubmissionPlan {
+        BulkSubmissionPlan::new(items, ceiling).expect("a valid test plan")
+    }
 
     pub(super) fn request(text: &str) -> AnalysisRequest {
         AnalysisRequest::new(text, TextOrigin::Literal, None, 8, false, false)

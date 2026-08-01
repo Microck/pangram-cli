@@ -15,6 +15,8 @@
 use crate::domain::{AiClassification, AiDetectionResult, Confidence, Fraction, Segment};
 use crate::output::{CanonicalError, ErrorCode};
 
+pub(in crate::analysis) mod bulk;
+
 /// The accepted terminal success version. Pangram 4 returns exactly `4.0`.
 const REQUIRED_VERSION: &str = "4.0";
 
@@ -67,7 +69,7 @@ pub(crate) fn sanitize_upstream_message(raw: &str) -> String {
 /// it is reduced through the same bounded sanitizer as any other upstream
 /// string before it crosses into the canonical error, covering every caller
 /// in one place.
-fn contract_changed(field: &'static str, token: impl Into<String>) -> CanonicalError {
+pub(super) fn contract_changed(field: &'static str, token: impl Into<String>) -> CanonicalError {
     let mut details = std::collections::BTreeMap::new();
     details.insert("field".to_owned(), serde_json::Value::from(field));
     details.insert(
@@ -82,11 +84,11 @@ fn contract_changed(field: &'static str, token: impl Into<String>) -> CanonicalE
     .expect("the upstream-contract template is statically valid")
 }
 
-fn missing(field: &'static str) -> CanonicalError {
+pub(super) fn missing(field: &'static str) -> CanonicalError {
     contract_changed(field, "missing")
 }
 
-fn out_of_range(field: &'static str, token: impl Into<String>) -> CanonicalError {
+pub(super) fn out_of_range(field: &'static str, token: impl Into<String>) -> CanonicalError {
     contract_changed(field, format!("out of range: {}", token.into()))
 }
 
@@ -103,7 +105,7 @@ fn parse_fraction(
     Fraction::new(raw).map_err(|_| out_of_range(field, raw.to_string()))
 }
 
-fn parse_u64(
+pub(super) fn parse_u64(
     field: &'static str,
     value: Option<&serde_json::Value>,
 ) -> Result<u64, CanonicalError> {
@@ -115,7 +117,7 @@ fn parse_u64(
         .ok_or_else(|| contract_changed(field, shape_of(value)))
 }
 
-fn parse_string(
+pub(super) fn parse_string(
     field: &'static str,
     value: Option<&serde_json::Value>,
 ) -> Result<String, CanonicalError> {
@@ -128,7 +130,7 @@ fn parse_string(
         .ok_or_else(|| contract_changed(field, shape_of(value)))
 }
 
-fn shape_of(value: &serde_json::Value) -> String {
+pub(super) fn shape_of(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".to_owned(),
         serde_json::Value::Bool(_) => "a boolean".to_owned(),

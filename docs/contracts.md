@@ -547,7 +547,12 @@ whole-request validation failures. A rejected item counts in `failed` without
 entering `accepted`, so `succeeded + failed` may exceed `accepted`; the
 committed example (`accepted: 2`, `succeeded: 2`, `failed: 1`) is valid. The
 only counter bounds are `accepted <= total_items`, `succeeded <= accepted`,
-and `succeeded + failed <= total_items`. At terminal state:
+and `succeeded + failed <= total_items`. For an accepted submission
+(`submission_outcome: "accepted"`), `total_items` is the validated input count,
+so the submit accepted list plus the submit failed list MUST cover positions
+`0..total_items` in ascending order exactly once; a gap, a duplicate, or a
+position at or above `total_items` fails upstream contract validation. At
+terminal state:
 
 ```text
 accepted <= total_items
@@ -568,9 +573,16 @@ the canonical `BulkCounters` and `BulkCollection` constructors remain
 authoritative for them, exactly as the update contract leaves non-expressible
 manifest invariants to the Rust verifier.
 
-`updated_at` is required and changes whenever counters or state change.
-`estimated_billable_units` records the estimate calculated under the
-documented billing rule for the selected Pangram operation. Pangram 4 bulk
+`updated_at` is required and changes whenever counters or state change. For an
+accepted submission, when some but not all accepted items have finished, the
+collection is `running` (not `partial`): `partial` is terminal only, matching
+a mixed-terminal analysis. For an accepted submission the upstream status is
+poll-driven during observation, so it always agrees with the exact counters;
+a collection status/counter combination outside the accepted-submission
+precedence (`running` while any items remain unfinished, else the terminal
+equation) fails upstream contract validation. `estimated_billable_units`
+records the estimate calculated under the documented billing rule for the
+selected Pangram operation. Pangram 4 bulk
 selection uses one job-wide JSON `model` field with the exact value
 `pangram-4`; per-item model selectors are not supported. Each valid item costs
 one unit per started 100-word block, with a minimum of one unit per item. The
@@ -620,13 +632,33 @@ Status polling is `GET /bulk/{bulk_id}` and returns the job `bulk_id`, one of
 the closed statuses `queued`/`running`/`succeeded`/`failed`/`partial`, the
 `total_items`/`accepted`/`succeeded`/`failed` counters, and the
 `created_at`/`completed_at` epoch-second strings (`completed_at` is null
-while the job is not terminal).
+while the job is not terminal). Observation enforces the section 9 precedence
+everywhere: when some but not all accepted items have finished the normalized
+collection status is `running`, so an upstream `partial` token on a
+non-terminal counter set is contract drift, and a terminal counter set with a
+disagreeing status is contract drift. Normalized timestamps preserve the
+upstream epoch-second strings converted to RFC 3339 UTC; a malformed or
+out-of-range upstream timestamp is contract drift.
+
+The analysis core builds each canonical bulk item's input descriptor from the
+validated local submission plan (origin, SHA-256, byte and word counts), never
+from untrusted upstream result text. An upstream result document that echoes a
+`text` field is result-side evidence and is not reparsed as the item's input.
 
 Item metadata paging is `GET /bulk/{bulk_id}/items?offset=N&limit=M`; result
 paging is `GET /bulk/{bulk_id}/results?offset=N&limit=M`. Both accept a
-zero-based `offset` and a `limit` capped at 1,000, and return the job
+zero-based `offset` and a `limit` in `1..=1,000`, and return the job
 `bulk_id`, the echoed page `offset` and `limit`, `total_items`, and page
-lists:
+lists. The analysis core revalidates every page: the echoed `bulk_id` MUST
+equal the queried job, the echoed `offset`/`limit` MUST echo the request,
+`total_items` MUST agree across pages, page entries MUST be strictly ascending
+by source `index`, and a fetch-all walk covers each item position in
+`0..total_items` exactly once with a strictly advancing `next_offset` until it
+exhausts the set (the final page's `next_offset` is the end-of-set marker).
+A duplicate, out-of-order, counter-mismatched, identity-mismatched, or
+non-advancing page fails upstream contract validation. The client supplies its
+own constant page `limit` for a fetch-all walk; there is no aggregate
+endpoint.
 
 - the items page returns one `items` list of metadata (`index`, optional
   `id`, `task_id`, `stage`, optional `error`).

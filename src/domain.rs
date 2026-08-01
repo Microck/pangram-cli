@@ -363,6 +363,13 @@ impl UtcTimestamp {
         Self(jiff::Timestamp::now())
     }
 
+    /// Wraps an existing `jiff::Timestamp` (for example one parsed from a
+    /// documented upstream epoch form) without re-stringifying it.
+    #[must_use]
+    pub const fn from_jiff(timestamp: jiff::Timestamp) -> Self {
+        Self(timestamp)
+    }
+
     #[must_use]
     pub const fn get(self) -> jiff::Timestamp {
         self.0
