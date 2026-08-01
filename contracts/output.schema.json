@@ -25,7 +25,12 @@
           "$ref": "#/$defs/SubmissionOutcome"
         },
         "input": {
-          "$ref": "#/$defs/AnalysisInput"
+          "description": "The canonical input descriptor. Omitted only on a resumed-observation\nread whose remote operation has not yet reached a terminal document\n(contracts.md 4.6); locally submitted commands always carry one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisInput"
+            }
+          ]
         },
         "checks": {
           "$ref": "#/$defs/OrderedChecks"
@@ -68,7 +73,6 @@
         "id",
         "status",
         "submission_outcome",
-        "input",
         "checks",
         "save_state",
         "provenance",
@@ -468,11 +472,20 @@
       ]
     },
     "TextOrigin": {
-      "type": "string",
-      "enum": [
-        "literal",
-        "stdin",
-        "file"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "literal",
+            "stdin",
+            "file"
+          ]
+        },
+        {
+          "description": "The input of a remotely authored operation the client observes by\nexplicit upstream ID (contracts.md 4.6). Valid only on resumed\nreads; never produced by a locally submitted command.",
+          "type": "string",
+          "const": "unknown"
+        }
       ]
     },
     "Sha256Hash": {
@@ -1641,7 +1654,10 @@
           "minimum": 0
         },
         "estimated_billable_units": {
-          "type": "integer",
+          "description": "The locally computed billing estimate, present only when the caller\nholds the validated local submission plan (contracts.md 4.6): a\nresumed observation of a remotely authored job omits it rather than\nfabricating a charge.",
+          "type": [
+            "integer"
+          ],
           "format": "uint64",
           "minimum": 1
         },
@@ -1667,7 +1683,6 @@
         "accepted",
         "succeeded",
         "failed",
-        "estimated_billable_units",
         "created_at",
         "updated_at"
       ],
@@ -1813,6 +1828,66 @@
     "BulkId": {
       "type": "string",
       "pattern": "^bulk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "BulkDryRun": {
+      "description": "The canonical `bulk_submit --dry-run` reconciliation shape (contracts.md\n9.2): the validated plan's identity and pricing, reported without\ncredentials, network, or any remote identity.",
+      "type": "object",
+      "properties": {
+        "dry": {
+          "$ref": "#/$defs/BulkDryRunMarker"
+        },
+        "id": {
+          "$ref": "#/$defs/BulkId"
+        },
+        "status": {
+          "$ref": "#/$defs/AnalysisStatus"
+        },
+        "submission_outcome": {
+          "$ref": "#/$defs/SubmissionOutcome"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/Sha256Hash"
+        },
+        "estimated_billable_units": {
+          "description": "Always at least 1: `text_billable_units` never returns 0 and the plan\nrejects an empty item list (contracts.md 9.2).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        },
+        "item_count": {
+          "description": "Always at least 1: `BulkSubmissionPlan::new` rejects an empty list.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "dry",
+        "id",
+        "status",
+        "submission_outcome",
+        "plan_sha256",
+        "estimated_billable_units",
+        "item_count"
+      ]
+    },
+    "BulkDryRunMarker": {
+      "description": "The dry-run marker object that distinguishes a local preflight from a real\nqueued collection for machine consumers. Fixed sentinel values only.",
+      "type": "object",
+      "properties": {
+        "noop": {
+          "type": "boolean",
+          "const": true
+        },
+        "observed": {
+          "type": "boolean",
+          "const": false
+        }
+      },
+      "required": [
+        "noop",
+        "observed"
+      ]
     },
     "BulkPage": {
       "type": "object",
@@ -2379,8 +2454,33 @@
           "if": {
             "properties": {
               "command": {
+                "const": "bulk_submit"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/BulkCollection"
+                  },
+                  {
+                    "$ref": "#/$defs/BulkDryRun"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
                 "enum": [
-                  "bulk_submit",
                   "bulk_status",
                   "bulk_wait"
                 ]

@@ -25,9 +25,13 @@ use crate::domain::{
 use crate::output::{CanonicalError, ErrorCode};
 
 use super::WaitOptions;
+use super::bulk::{
+    BulkAnalysisError, BulkAnalysisRequest, BulkPageResult, BulkProgress, RunningBulk,
+};
 use super::normalize::{self, NormalizedTask, TaskState};
 use super::task::{Accepted, AcceptedInput, AnalysisRequest, TaskError};
 use super::upstream::{PollError, SubmitOutcome, TaskPoll, UpstreamClient};
+use crate::domain::{BulkId, UpstreamBulkId};
 
 /// The identity tuple reported on wait timeouts and interruptions. It is
 /// the payload the final adapter output prints so the caller can reconcile
@@ -367,7 +371,10 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
 }
 
 /// Owns construction of running operations. Clones share the connection
-/// pool and the time-based pacing gate.
+/// pool and the time-based pacing gate. This is the single adapter-facing
+/// analysis owner: text and bulk surfaces both enter through it over one
+/// shared pacemaker/HTTP stack, so CLI/TUI/MCP never own a second top-level
+/// protocol client.
 #[derive(Clone)]
 pub struct Analyzer<C = super::config::SystemClock> {
     client: UpstreamClient<C>,
@@ -377,6 +384,80 @@ impl<C: super::config::Clock> Analyzer<C> {
     #[must_use]
     pub fn from_client(client: UpstreamClient<C>) -> Self {
         Self { client }
+    }
+
+    /// The internal bulk owner sharing this analyzer's client. `pub(crate)`
+    /// so the facade methods (and only they) build it; adapters never
+    /// construct a `BulkAnalyzer` directly.
+    pub(crate) fn bulk(&self) -> super::bulk::BulkAnalyzer<C> {
+        super::bulk::BulkAnalyzer::from_client(self.client.clone())
+    }
+
+    /// Submits one validated bulk plan exactly once and returns its running
+    /// handle, preserving the same pacing, billing, and ambiguity rules as
+    /// the text surface. This is the adapter-facing bulk submit entry.
+    pub async fn submit_bulk(
+        &self,
+        request: BulkAnalysisRequest,
+        cancel: &CancellationToken,
+    ) -> Result<RunningBulk<C>, BulkAnalysisError> {
+        self.bulk().submit_bulk(request, cancel).await
+    }
+
+    /// Rehydrates a running handle for an already-accepted job (a
+    /// `bulk_status`-style read of a job submitted earlier). The caller's
+    /// validated plan keeps per-item input descriptors trusted-local.
+    #[must_use]
+    pub fn resume_bulk(
+        &self,
+        bulk_id: BulkId,
+        upstream_bulk_id: UpstreamBulkId,
+        plan: crate::domain::BulkSubmissionPlan,
+    ) -> RunningBulk<C> {
+        self.bulk().resume(bulk_id, upstream_bulk_id, plan)
+    }
+
+    /// Fetches one validated typed items-metadata page through this
+    /// analyzer's shared safe-GET chain.
+    pub async fn bulk_items_page(
+        &self,
+        running: &RunningBulk<C>,
+        offset: u64,
+        limit: u64,
+        cancel: &CancellationToken,
+    ) -> Result<BulkPageResult, BulkAnalysisError> {
+        self.bulk()
+            .bulk_items_page(running, offset, limit, cancel)
+            .await
+    }
+
+    /// Fetches one validated typed results page through this analyzer's
+    /// shared safe-GET chain.
+    pub async fn bulk_results_page(
+        &self,
+        running: &RunningBulk<C>,
+        offset: u64,
+        limit: u64,
+        cancel: &CancellationToken,
+    ) -> Result<BulkPageResult, BulkAnalysisError> {
+        self.bulk()
+            .bulk_results_page(running, offset, limit, cancel)
+            .await
+    }
+
+    /// Iterates documented results pages until the set is exhausted, over
+    /// this analyzer's shared safe-GET chain and the bounded fetch-all page
+    /// size.
+    pub async fn bulk_results_all(
+        &self,
+        running: &RunningBulk<C>,
+        max_reads: u64,
+        cancel: &CancellationToken,
+        on_progress: impl FnMut(&BulkProgress),
+    ) -> Result<BulkPageResult, BulkAnalysisError> {
+        self.bulk()
+            .bulk_results_all(running, max_reads, cancel, on_progress)
+            .await
     }
 
     /// Submits one text-analysis request exactly once.
@@ -445,6 +526,337 @@ impl<C: super::config::Clock> Analyzer<C> {
             created_at: UtcTimestamp::now(),
         }
     }
+
+    /// Resumes observation of a remotely authored bulk job by its upstream
+    /// ID (`bulk status`, `bulk wait`, `bulk results` of a job this process
+    /// did not submit). The returned handle has no local plan (contracts.md
+    /// 4.6).
+    #[must_use]
+    pub fn observe_bulk(&self, upstream_bulk_id: UpstreamBulkId) -> RunningBulk<C> {
+        self.bulk().resume_observed(upstream_bulk_id)
+    }
+
+    /// Reads one observed task snapshot by upstream ID (`task status`).
+    ///
+    /// This reconciles a remote record the caller did not author
+    /// (contracts.md 4.6): the canonical analysis carries the observed
+    /// upstream identity and terminal state, marks `submission_outcome:
+    /// accepted`, omits `provenance.submitted_at`, and derives the input
+    /// descriptor only from the terminal document Pangram attested (or
+    /// omits it until one exists). Progress events are not emitted on this
+    /// one-shot read.
+    pub async fn task_status(
+        &self,
+        task_id: &UpstreamTaskId,
+        cancel: &CancellationToken,
+    ) -> Result<Analysis<CanonicalError>, TaskError> {
+        let local_id = crate::domain::AnalysisId::new();
+        match self.client.poll_task(task_id, cancel, None).await {
+            Ok(TaskPoll::InProgress { last_stage, .. }) => {
+                Ok(observed_running_task(local_id, task_id, &last_stage))
+            }
+            Ok(TaskPoll::Terminal(response)) => {
+                let body = response.json_value().map_err(|error| {
+                    TaskError::new(local_id, contract_symptom("body", error.to_string()))
+                })?;
+                match normalize::normalize_task_state(&body) {
+                    Ok(TaskState::Success(task)) => {
+                        Ok(observed_terminal_task_success(local_id, task_id, *task))
+                    }
+                    Ok(TaskState::Failed { message, stage }) => Ok(observed_terminal_task_failed(
+                        local_id, task_id, &stage, &message,
+                    )),
+                    // A terminal response classifying in-progress means the
+                    // upstream stage surface drifted (see observe).
+                    Ok(TaskState::InProgress { .. }) => Err(TaskError::new(
+                        local_id,
+                        contract_symptom("stage", "terminal-classified-in-progress"),
+                    )),
+                    Err(error) => Err(TaskError::new(local_id, error)),
+                }
+            }
+            Ok(TaskPoll::NotFound) => Err(TaskError::new(
+                local_id,
+                CanonicalError::new(
+                    ErrorCode::UpstreamNotFound,
+                    "Pangram does not recognize the task.",
+                )
+                .expect("static template"),
+            )),
+            Ok(TaskPoll::AnalysisFailed { message, stage }) => Ok(observed_terminal_task_failed(
+                local_id, task_id, &stage, &message,
+            )),
+            Err(PollError::Cancelled) => Err(TaskError::new(local_id, cancelled_error())),
+            Err(PollError::DeadlineExceeded) => {
+                unreachable!("task status passes no caller deadline")
+            }
+            Err(PollError::Failed(error)) => Err(TaskError::new(local_id, *error)),
+        }
+    }
+
+    /// Observes an upstream task until terminal or the caller's local wait
+    /// budget expires (`task wait`). Progress events flow through
+    /// `on_progress` only when the caller selected progress. Cancellation
+    /// stops the local observation only; no remote cancellation is sent.
+    pub async fn task_wait(
+        &self,
+        task_id: &UpstreamTaskId,
+        options: WaitOptions,
+        mut on_progress: impl FnMut(&AnalysisProgress),
+        stop: StopObserving,
+        cancel: &CancellationToken,
+    ) -> Result<Analysis<CanonicalError>, TaskError> {
+        let local_id = crate::domain::AnalysisId::new();
+        let clock = self.client.config().clock();
+        let deadline = options.timeout.map(|timeout| clock.now() + timeout);
+        // Track the last observed upstream stage so a local wait timeout
+        // preserves it for reconciliation, matching the shared running
+        // observation path (Greptile P2).
+        let mut observed_stage: Option<NonEmptyString> = None;
+        loop {
+            if cancel.is_cancelled() || stop.token().is_cancelled() {
+                return Err(TaskError::new(local_id, cancelled_error()));
+            }
+            if let Some(deadline) = deadline {
+                if clock.now() >= deadline {
+                    return Err(TaskError::new(
+                        local_id,
+                        wait_timeout_error(&OperationIdentity {
+                            analysis_id: local_id,
+                            task_id: Some(task_id.clone()),
+                            last_stage: observed_stage.clone(),
+                        }),
+                    ));
+                }
+            }
+
+            match self.client.poll_task(task_id, cancel, deadline).await {
+                Ok(TaskPoll::InProgress { last_stage, .. }) => {
+                    let stage = match NonEmptyString::new(last_stage.clone()) {
+                        Ok(stage) => stage,
+                        Err(_) => {
+                            return Err(TaskError::new(
+                                local_id,
+                                contract_symptom("stage", "empty"),
+                            ));
+                        }
+                    };
+                    observed_stage = Some(stage.clone());
+                    on_progress(&AnalysisProgress {
+                        analysis_id: local_id,
+                        task_id: task_id.clone(),
+                        last_stage: stage,
+                    });
+                }
+                Ok(TaskPoll::Terminal(response)) => {
+                    let body = response.json_value().map_err(|error| {
+                        TaskError::new(local_id, contract_symptom("body", error.to_string()))
+                    })?;
+                    return match normalize::normalize_task_state(&body) {
+                        Ok(TaskState::Success(task)) => {
+                            Ok(observed_terminal_task_success(local_id, task_id, *task))
+                        }
+                        Ok(TaskState::Failed { message, stage }) => Ok(
+                            observed_terminal_task_failed(local_id, task_id, &stage, &message),
+                        ),
+                        Ok(TaskState::InProgress { .. }) => Err(TaskError::new(
+                            local_id,
+                            contract_symptom("stage", "terminal-classified-in-progress"),
+                        )),
+                        Err(error) => Err(TaskError::new(local_id, error)),
+                    };
+                }
+                Ok(TaskPoll::NotFound) => {
+                    return Err(TaskError::new(
+                        local_id,
+                        CanonicalError::new(
+                            ErrorCode::UpstreamNotFound,
+                            "Pangram does not recognize the task.",
+                        )
+                        .expect("static template"),
+                    ));
+                }
+                Ok(TaskPoll::AnalysisFailed { message, stage }) => {
+                    return Ok(observed_terminal_task_failed(
+                        local_id, task_id, &stage, &message,
+                    ));
+                }
+                Err(PollError::Cancelled) => {
+                    return Err(TaskError::new(local_id, cancelled_error()));
+                }
+                Err(PollError::DeadlineExceeded) => {
+                    return Err(TaskError::new(
+                        local_id,
+                        wait_timeout_error(&OperationIdentity {
+                            analysis_id: local_id,
+                            task_id: Some(task_id.clone()),
+                            last_stage: observed_stage.clone(),
+                        }),
+                    ));
+                }
+                Err(PollError::Failed(error)) => return Err(TaskError::new(local_id, *error)),
+            }
+
+            let interval = self.client.config().polling().effective_interval();
+            let wake = {
+                let natural = clock.now() + interval;
+                deadline.map_or(natural, |deadline| natural.min(deadline))
+            };
+            if !clock.sleep_until(wake, cancel).await {
+                return Err(TaskError::new(local_id, cancelled_error()));
+            }
+        }
+    }
+}
+
+/// Builds the canonical observed running snapshot: a `running` analysis
+/// whose `submission_outcome` is `accepted`, with a `running` AI-detection
+/// check carrying the observed upstream stage, and no input descriptor (no
+/// terminal text has been attested yet; contracts.md 4.6).
+fn observed_running_task(
+    local_id: crate::domain::AnalysisId,
+    task_id: &UpstreamTaskId,
+    last_stage: &str,
+) -> Analysis<CanonicalError> {
+    let state: CheckState<crate::domain::AiDetectionResult, CanonicalError> = CheckState::Running {
+        upstream: Some(UpstreamIdentity {
+            task_id: Some(task_id.clone()),
+            last_stage: NonEmptyString::new(last_stage.to_owned()).ok(),
+        }),
+    };
+    let checks =
+        crate::domain::OrderedChecks::new([Check::AiDetection(state)]).expect("one check is valid");
+    let now = UtcTimestamp::now();
+    let ids = UpstreamTaskIds::new(vec![task_id.clone()]).expect("one validated task ID");
+    let provenance = crate::domain::Provenance {
+        provider: crate::domain::Provider::Pangram,
+        upstream_version: None,
+        upstream_task_ids: Some(ids),
+        upstream_bulk_id: None,
+        submitted_at: None,
+        completed_at: None,
+    };
+    Analysis::with_optional_input(
+        local_id,
+        crate::domain::SubmissionOutcome::Accepted,
+        None,
+        checks,
+        crate::domain::SaveState::Ephemeral,
+        provenance,
+        None,
+        None,
+        now,
+        now,
+        None,
+    )
+    .expect("a running observed snapshot satisfies the analysis invariants")
+}
+
+/// Builds the canonical observed terminal-success analysis: the input
+/// descriptor derives from the terminal document Pangram attested (`origin:
+/// unknown`), `submission_outcome` stays `accepted` (a remotely authored
+/// read never claims `terminal`), `provenance.submitted_at` is omitted, and
+/// `completed_at` preserves this observation time (contracts.md 4.6).
+fn observed_terminal_task_success(
+    local_id: crate::domain::AnalysisId,
+    task_id: &UpstreamTaskId,
+    task: NormalizedTask,
+) -> Analysis<CanonicalError> {
+    let last_stage = task.last_stage.clone();
+    let now = UtcTimestamp::now();
+    let input = task.normalized_text.as_deref().map(|text| {
+        let byte_count = u64::try_from(text.len()).unwrap_or(u64::MAX);
+        let word_count = u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX);
+        crate::domain::AnalysisInput::Text(
+            crate::domain::TextInput::new(
+                crate::domain::TextOrigin::Unknown,
+                None,
+                crate::domain::Sha256Hash::digest(text.as_bytes()),
+                byte_count,
+                word_count,
+                None,
+            )
+            .expect("attested terminal text always yields a valid descriptor"),
+        )
+    });
+    let state: CheckState<crate::domain::AiDetectionResult, CanonicalError> =
+        CheckState::Succeeded {
+            upstream: Some(UpstreamIdentity {
+                task_id: Some(task_id.clone()),
+                last_stage: NonEmptyString::new(last_stage).ok(),
+            }),
+            result: task.result,
+        };
+    let checks =
+        crate::domain::OrderedChecks::new([Check::AiDetection(state)]).expect("one check is valid");
+    let ids = UpstreamTaskIds::new(vec![task_id.clone()]).expect("one validated task ID");
+    let provenance = crate::domain::Provenance {
+        provider: crate::domain::Provider::Pangram,
+        upstream_version: Some(task.version),
+        upstream_task_ids: Some(ids),
+        upstream_bulk_id: None,
+        submitted_at: None,
+        completed_at: Some(now),
+    };
+    Analysis::with_optional_input(
+        local_id,
+        crate::domain::SubmissionOutcome::Accepted,
+        input,
+        checks,
+        crate::domain::SaveState::Ephemeral,
+        provenance,
+        None,
+        None,
+        now,
+        now,
+        Some(now),
+    )
+    .expect("a terminal observed snapshot satisfies the analysis invariants")
+}
+
+/// Builds the canonical observed terminal-failure analysis: a failed
+/// AI-detection check carrying the sanitized upstream error and observed
+/// identity. No content descriptor is attested, so `input` is omitted
+/// (contracts.md 4.6); `completed_at` preserves this observation time.
+fn observed_terminal_task_failed(
+    local_id: crate::domain::AnalysisId,
+    task_id: &UpstreamTaskId,
+    stage: &str,
+    message: &str,
+) -> Analysis<CanonicalError> {
+    let now = UtcTimestamp::now();
+    let state: CheckState<crate::domain::AiDetectionResult, CanonicalError> = CheckState::Failed {
+        upstream: Some(UpstreamIdentity {
+            task_id: Some(task_id.clone()),
+            last_stage: crate::domain::NonEmptyString::new(stage.to_owned()).ok(),
+        }),
+        error: analysis_failed_error(message),
+    };
+    let checks =
+        crate::domain::OrderedChecks::new([Check::AiDetection(state)]).expect("one check is valid");
+    let ids = UpstreamTaskIds::new(vec![task_id.clone()]).expect("one validated task ID");
+    let provenance = crate::domain::Provenance {
+        provider: crate::domain::Provider::Pangram,
+        upstream_version: None,
+        upstream_task_ids: Some(ids),
+        upstream_bulk_id: None,
+        submitted_at: None,
+        completed_at: Some(now),
+    };
+    Analysis::with_optional_input(
+        local_id,
+        crate::domain::SubmissionOutcome::Accepted,
+        None,
+        checks,
+        crate::domain::SaveState::Ephemeral,
+        provenance,
+        None,
+        None,
+        now,
+        now,
+        Some(now),
+    )
+    .expect("a terminal observed failure satisfies the analysis invariants")
 }
 
 fn contract_symptom(field: &'static str, token: impl Into<String>) -> CanonicalError {

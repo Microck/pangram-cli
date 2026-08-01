@@ -15,9 +15,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::{Uuid, Version};
 
+mod bulk;
 mod collection;
 mod model;
 
+pub use bulk::*;
 pub use collection::*;
 pub use model::*;
 
@@ -77,6 +79,10 @@ pub enum DomainError {
     InvalidBulkStatus,
     #[error("bulk page items must use strictly ascending source indexes")]
     UnorderedBulkItems,
+    #[error("caller-supplied bulk item IDs must be unique within one request")]
+    DuplicateBulkCallerId,
+    #[error("the bulk billable estimate exceeds the allowed ceiling")]
+    BulkLimitExceeded,
 }
 
 macro_rules! local_id {
@@ -357,6 +363,13 @@ impl UtcTimestamp {
         Self(jiff::Timestamp::now())
     }
 
+    /// Wraps an existing `jiff::Timestamp` (for example one parsed from a
+    /// documented upstream epoch form) without re-stringifying it.
+    #[must_use]
+    pub const fn from_jiff(timestamp: jiff::Timestamp) -> Self {
+        Self(timestamp)
+    }
+
     #[must_use]
     pub const fn get(self) -> jiff::Timestamp {
         self.0
@@ -520,8 +533,10 @@ pub const TEXT_BILLING_UNIT_WORDS: u64 = 100;
 /// 99-word offset reaches `u64::MAX` without wrapping, and the minimum unit
 /// keeps the result at one when the quotient is zero. The analysis module
 /// uses this for single-text preflight and `--max-billable-units`
-/// validation; bulk billing follows Pangram's still-undocumented Pangram 4
-/// bulk rule and MUST NOT reuse this per-text formula.
+/// validation. The official Bulk API source `eb214f4` documents the identical
+/// per-item rule for Pangram 4 bulk (one unit per started 100-word block with
+/// a minimum of one per item), so [`bulk_estimated_billable_units`] reuses
+/// this formula per item and sums the results.
 #[must_use]
 pub const fn text_billable_units(word_count: u64) -> u64 {
     let started_blocks =

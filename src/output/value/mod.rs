@@ -15,6 +15,10 @@ use super::{
     deserialize_missing_only, deserialize_non_null_value, required_string,
 };
 
+mod bulk;
+
+pub use bulk::*;
+
 /// A successful command which mutates local state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct MutationAcknowledgement {
@@ -471,57 +475,11 @@ impl<'de> Deserialize<'de> for NonEmptyAnalyses {
     }
 }
 
-/// One analysis or a non-empty ordered set produced by repeated-file commands.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
-#[serde(untagged)]
-pub enum AnalysisOutput {
-    One(Box<Analysis<CanonicalError>>),
-    Many(NonEmptyAnalyses),
-}
-
-impl AnalysisOutput {
-    pub fn one(analysis: Analysis<CanonicalError>) -> Self {
-        Self::One(Box::new(analysis))
-    }
-
-    pub fn many(analyses: Vec<Analysis<CanonicalError>>) -> Result<Self, OutputValidationError> {
-        NonEmptyAnalyses::new(analyses).map(Self::Many)
-    }
-
-    /// One analysis becomes `One`; a non-empty series becomes `Many` in
-    /// submission order. An empty series is the caller's bug and rejected.
-    pub fn from_analyses(
-        analyses: Vec<Analysis<CanonicalError>>,
-    ) -> Result<Self, OutputValidationError> {
-        match analyses.len() {
-            0 => Err(OutputValidationError::EmptyValue("analysis output")),
-            1 => Ok(Self::one(
-                analyses.into_iter().next().expect("one analysis"),
-            )),
-            _ => Self::many(analyses),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for AnalysisOutput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        if value.is_array() {
-            serde_json::from_value(value)
-                .map(Self::Many)
-                .map_err(D::Error::custom)
-        } else {
-            serde_json::from_value(value)
-                .map(Box::new)
-                .map(Self::One)
-                .map_err(D::Error::custom)
-        }
-    }
-}
-
+// The repeated-file analysis union, the dry-run marker object, the canonical
+// `bulk_submit --dry-run` reconciliation record, and the closed
+// `bulk_submit` submit/dry-run union live in [`bulk`]; they join this
+// module's public surface through `pub use bulk::*`, preserving the
+// `CommandData::BulkSubmit` payload type.
 macro_rules! command_data {
     ($($variant:ident($payload:ty) => $command:ident),+ $(,)?) => {
         /// Closed command-specific success data. Each variant owns its resolved command.
@@ -559,7 +517,7 @@ command_data! {
     Detect(AnalysisOutput) => Detect,
     Plagiarism(AnalysisOutput) => Plagiarism,
     Analyze(AnalysisOutput) => Analyze,
-    BulkSubmit(BulkCollection) => BulkSubmit,
+    BulkSubmit(BulkSubmitOutput) => BulkSubmit,
     BulkStatus(BulkCollection) => BulkStatus,
     BulkWait(BulkCollection) => BulkWait,
     BulkResults(BulkPage<CanonicalError>) => BulkResults,

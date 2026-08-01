@@ -23,13 +23,19 @@ use crate::output::{CanonicalError, ErrorCode, OutputValidationError};
 
 use super::config::{AnalysisConfig, Clock, Duration, Instant};
 use super::http::{self, HttpClient, Response, SendOutcome};
-use super::pacemaker::Pacemaker;
+use super::pacemaker::{Gate as PaceGate, Pacemaker};
 use super::task::TaskError;
+
+mod bulk;
+pub use bulk::{AcceptedBulk, BulkPageFetch};
 
 /// The fixed production submit URL. Never construct it from configuration.
 const PRODUCTION_SUBMIT_URL: &str = "https://text.external-api.pangram.com/task";
 /// The fixed production poll prefix; `/task/{id}` is appended by the client.
 const PRODUCTION_POLL_PREFIX: &str = "https://text.external-api.pangram.com/task";
+/// The fixed production bulk base URL; the four documented bulk routes join
+/// beneath it (contracts section 9.1). Never construct it from configuration.
+const PRODUCTION_BULK_BASE: &str = crate::domain::PRODUCTION_BULK_URL;
 
 /// The endpoint set for one client. Production values are compile-time
 /// constants; only the loopback-gated constructor accepts alternates.
@@ -37,6 +43,7 @@ const PRODUCTION_POLL_PREFIX: &str = "https://text.external-api.pangram.com/task
 pub struct UpstreamEndpoints {
     submit: String,
     poll_prefix: String,
+    bulk_base: String,
 }
 
 impl UpstreamEndpoints {
@@ -46,6 +53,7 @@ impl UpstreamEndpoints {
         Self {
             submit: PRODUCTION_SUBMIT_URL.to_owned(),
             poll_prefix: PRODUCTION_POLL_PREFIX.to_owned(),
+            bulk_base: PRODUCTION_BULK_BASE.to_owned(),
         }
     }
 
@@ -86,9 +94,11 @@ impl UpstreamEndpoints {
         let base = base_url.trim_end_matches('/');
         let submit = format!("{base}/task");
         let poll_prefix = submit.clone();
+        let bulk_base = format!("{base}/bulk");
         Ok(Self {
             submit,
             poll_prefix,
+            bulk_base,
         })
     }
 
@@ -97,6 +107,45 @@ impl UpstreamEndpoints {
     #[must_use]
     pub fn poll_url(&self, task_id: &UpstreamTaskId) -> String {
         format!("{}/{}", self.poll_prefix, encode_path(task_id.as_str()))
+    }
+
+    /// `POST /bulk` (the bulk submit URL is the bulk base itself).
+    #[must_use]
+    pub fn bulk_submit_url(&self) -> String {
+        self.bulk_base.clone()
+    }
+
+    /// `GET /bulk/{bulk_id}`.
+    #[must_use]
+    pub fn bulk_status_url(&self, bulk_id: &str) -> String {
+        format!("{}/{}", self.bulk_base, encode_path(bulk_id))
+    }
+
+    /// `GET /bulk/{bulk_id}/items?offset=&limit=`. Both are caller-supplied;
+    /// the client is responsible for bounding `limit` at the documented 1000.
+    #[must_use]
+    pub fn bulk_items_url(&self, bulk_id: &str, offset: u64, limit: u64) -> String {
+        format!(
+            "{}/items?offset={offset}&limit={limit}",
+            self.bulk_status_url(bulk_id)
+        )
+    }
+
+    /// `GET /bulk/{bulk_id}/results?offset=&limit=`.
+    #[must_use]
+    pub fn bulk_results_url(&self, bulk_id: &str, offset: u64, limit: u64) -> String {
+        format!(
+            "{}/results?offset={offset}&limit={limit}",
+            self.bulk_status_url(bulk_id)
+        )
+    }
+
+    /// The bulk base URL for the `dev-tools` protocol fixture's bulk probe.
+    #[cfg(any(test, feature = "dev-tools", doctest))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bulk_base(&self) -> String {
+        self.bulk_submit_url()
     }
 }
 
@@ -283,6 +332,37 @@ impl<C: Clock> UpstreamClient<C> {
         &self.config
     }
 
+    /// The resolved endpoint set. Exposed for the `dev-tools` protocol
+    /// fixture's bulk probe; production adapters never read it.
+    #[cfg(any(test, feature = "dev-tools", doctest))]
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn endpoints(&self) -> &UpstreamEndpoints {
+        &self.endpoints
+    }
+
+    /// The exact bulk submit URL (production or loopback). Internal to the
+    /// analysis module; adapters never construct URLs.
+    pub(crate) fn bulk_submit_url(&self) -> String {
+        self.endpoints.bulk_submit_url()
+    }
+
+    /// The exact bulk status URL for one job (production or loopback).
+    /// Internal to the analysis module; adapters never construct URLs.
+    pub(crate) fn bulk_status_url(&self, bulk_id: &str) -> String {
+        self.endpoints.bulk_status_url(bulk_id)
+    }
+
+    /// The exact bulk items page URL for one job.
+    pub(crate) fn bulk_items_url(&self, bulk_id: &str, offset: u64, limit: u64) -> String {
+        self.endpoints.bulk_items_url(bulk_id, offset, limit)
+    }
+
+    /// The exact bulk results page URL for one job.
+    pub(crate) fn bulk_results_url(&self, bulk_id: &str, offset: u64, limit: u64) -> String {
+        self.endpoints.bulk_results_url(bulk_id, offset, limit)
+    }
+
     /// Submits one Pangram 4 text-analysis task. This is billable: on any
     /// ambiguous outcome the caller must produce `submission_outcome_unknown`
     /// rather than retry. Returns the acceptance, the ambiguity marker with
@@ -300,8 +380,8 @@ impl<C: Clock> UpstreamClient<C> {
         // token is the only early release. Distinct deadline semantics live
         // on the observation path where the caller supplies a wait budget.
         match self.pacemaker.hurdle(cancel, None).await {
-            super::pacemaker::Gate::Released => {}
-            super::pacemaker::Gate::Cancelled | super::pacemaker::Gate::DeadlinePassed => {
+            PaceGate::Released => {}
+            PaceGate::Cancelled | PaceGate::DeadlinePassed => {
                 return Err(SubmitOutcome::Cancelled);
             }
         }
@@ -338,22 +418,19 @@ impl<C: Clock> UpstreamClient<C> {
         }
     }
 
-    /// One safe GET observation of a task. Transient failures may be retried
-    /// by the internal bounded policy; a server `Retry-After` hint is honored
-    /// and clamped by the configured window. The chain additionally honors the
-    /// caller's wait `deadline` and the policy's cumulative retry-time budget
-    /// so a small wait timeout interrupts promptly even through repeated
-    /// 429/503 responses carrying long hints. Returns the consumed response
-    /// for the caller to classify (success, failure, in-progress).
-    ///
-    /// Every attempt is issued through the shared pacing gate, so even a
-    /// retried chain cannot burst past the configured per-second ceiling.
-    pub async fn poll_task(
+    /// The one shared safe-GET retry chain used by task polling and bulk page
+    /// fetches. Returns a 2xx response or a 404 sentinel for every status map
+    /// (task- and bulk-scoped alike): a missing resource short-circuits
+    /// before any status mapping runs. Retries bounded transient failures and
+    /// 429/5xx, honoring `Retry-After` and clamping every sleep to the
+    /// cumulative budget and the caller's wait `deadline`.
+    async fn safe_get(
         &self,
-        task_id: &UpstreamTaskId,
+        url: &str,
         cancel: &CancellationToken,
         deadline: Option<Instant>,
-    ) -> Result<TaskPoll, PollError> {
+        status_map: StatusMap,
+    ) -> Result<SafeGet, PollError> {
         let policy = self.config.retry();
         let mut attempt: u32 = 1;
         let mut previous_delay = policy.base_delay;
@@ -361,17 +438,16 @@ impl<C: Clock> UpstreamClient<C> {
         let clock = self.config.clock();
 
         loop {
-            let url = self.endpoints.poll_url(task_id);
             match self.pacemaker.hurdle(cancel, deadline).await {
-                super::pacemaker::Gate::Released => {}
-                super::pacemaker::Gate::Cancelled => return Err(PollError::Cancelled),
+                PaceGate::Released => {}
+                PaceGate::Cancelled => return Err(PollError::Cancelled),
                 // The caller's wait budget ran out before the next request
                 // could issue: surface the wait timeout, not an interruption.
-                super::pacemaker::Gate::DeadlinePassed => {
+                PaceGate::DeadlinePassed => {
                     return Err(PollError::DeadlineExceeded);
                 }
             }
-            let outcome = self.http.get(&url, &self.api_key, cancel).await;
+            let outcome = self.http.get(url, &self.api_key, cancel).await;
             let response = match outcome {
                 SendOutcome::Responded(response) => response,
                 SendOutcome::Cancelled { .. } => return Err(PollError::Cancelled),
@@ -412,8 +488,7 @@ impl<C: Clock> UpstreamClient<C> {
 
             let status = response.status();
             if (200..300).contains(&status) {
-                return classify_poll(response, task_id)
-                    .map_err(|error| PollError::Failed(Box::new(contract_symptom_error(&error))));
+                return Ok(SafeGet::TwoHundred(response));
             }
             if (status == 429 || (500..600).contains(&status)) && attempt < policy.max_attempts {
                 // Transient server-side pressure on a safe read: honor
@@ -437,14 +512,97 @@ impl<C: Clock> UpstreamClient<C> {
                 continue;
             }
             if status == 404 {
-                return Ok(TaskPoll::NotFound);
+                // Both the task poll and the bulk page reads treat an unknown
+                // job/task as a not-found sentinel rather than a hard error.
+                return Ok(SafeGet::NotFound);
             }
-            return Err(PollError::Failed(Box::new(classify_http_failure(
-                &response,
-                Some(task_id),
-            ))));
+            let failure = match status_map {
+                StatusMap::Task => classify_http_failure(&response, None),
+                StatusMap::Bulk => bulk::bulk_http_failure(&response),
+            };
+            return Err(PollError::Failed(Box::new(failure)));
         }
     }
+
+    /// One safe GET observation of a task. Transient failures may be retried
+    /// by the internal bounded policy; a server `Retry-After` hint is honored
+    /// and clamped by the configured window. The chain additionally honors the
+    /// caller's wait `deadline` and the policy's cumulative retry-time budget
+    /// so a small wait timeout interrupts promptly even through repeated
+    /// 429/503 responses carrying long hints. Returns the consumed response
+    /// for the caller to classify (success, failure, in-progress).
+    ///
+    /// Every attempt is issued through the shared pacing gate, so even a
+    /// retried chain cannot burst past the configured per-second ceiling.
+    pub async fn poll_task(
+        &self,
+        task_id: &UpstreamTaskId,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> Result<TaskPoll, PollError> {
+        match self
+            .safe_get(
+                &self.endpoints.poll_url(task_id),
+                cancel,
+                deadline,
+                StatusMap::Task,
+            )
+            .await?
+        {
+            SafeGet::TwoHundred(response) => classify_poll(response, task_id)
+                .map_err(|error| PollError::Failed(Box::new(contract_symptom_error(&error)))),
+            SafeGet::NotFound => Ok(TaskPoll::NotFound),
+        }
+    }
+
+    /// Issues the shared safe-GET chain with the caller's status map. The
+    /// bulk module consumes this through `fetch_bulk_page`; it is the one
+    /// shared retry/pacing window.
+    pub(super) async fn get(
+        &self,
+        url: &str,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+        map: StatusMap,
+    ) -> Result<SafeGet, PollError> {
+        self.safe_get(url, cancel, deadline, map).await
+    }
+
+    /// The shared pacing gate for one request issue.
+    pub(super) async fn pace(
+        &self,
+        cancel: &CancellationToken,
+        deadline: Option<Instant>,
+    ) -> PaceGate {
+        self.pacemaker.hurdle(cancel, deadline).await
+    }
+
+    /// Sends one JSON POST for the billable submission paths.
+    pub(super) async fn post(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        cancel: &CancellationToken,
+    ) -> SendOutcome {
+        self.http.post_json(url, &self.api_key, body, cancel).await
+    }
+}
+
+/// Selects the canonical status-failure mapping for one safe-GET chain. The
+/// task-poll mapping keeps the documented single-text matrix; the bulk
+/// mapping routes 413 through `bulk_limit_exceeded`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StatusMap {
+    Task,
+    Bulk,
+}
+
+/// The classified result of one shared safe-GET chain. `TwoHundred` is the
+/// consumed response for the caller to normalize; `NotFound` is the 404
+/// sentinel the caller maps to its operation-specific not-found outcome.
+pub(super) enum SafeGet {
+    TwoHundred(Response),
+    NotFound,
 }
 
 /// The classified result of one poll that produced an HTTP response. Not
@@ -522,7 +680,7 @@ pub enum PollError {
 /// body was sent and no contract-bearing document was received. Only a
 /// response that arrived but violated the pinned shape (malformed JSON, an
 /// over-large body) is a contract symptom.
-fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
+pub(super) fn transport_poll_error(error: &AnalysisError) -> CanonicalError {
     match error {
         AnalysisError::TransportTimeout(_) => CanonicalError::new(
             ErrorCode::NetworkTimeout,
@@ -628,7 +786,10 @@ fn classify_poll(response: Response, _task_id: &UpstreamTaskId) -> Result<TaskPo
 /// Maps an HTTP failure status onto the canonical error vocabulary once.
 /// All messages are fixed sanitized templates; details carry only the status
 /// integer and safe rate-limit metadata.
-fn classify_http_failure(response: &Response, task_id: Option<&UpstreamTaskId>) -> CanonicalError {
+pub(super) fn classify_http_failure(
+    response: &Response,
+    task_id: Option<&UpstreamTaskId>,
+) -> CanonicalError {
     let status = response.status();
     let build = |code: ErrorCode, message: &str| -> Result<CanonicalError, OutputValidationError> {
         let mut details = std::collections::BTreeMap::new();
@@ -703,11 +864,11 @@ fn classify_http_failure(response: &Response, task_id: Option<&UpstreamTaskId>) 
     })
 }
 
-fn timed_out(error: &AnalysisError) -> bool {
+pub(super) fn timed_out(error: &AnalysisError) -> bool {
     matches!(error, AnalysisError::TransportTimeout(_))
 }
 
-fn map_transport_failure(error: &AnalysisError) -> CanonicalError {
+pub(super) fn map_transport_failure(error: &AnalysisError) -> CanonicalError {
     let message = match error {
         AnalysisError::Transport(detail) | AnalysisError::TransportTimeout(detail) => {
             detail.clone()

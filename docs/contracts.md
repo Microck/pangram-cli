@@ -141,7 +141,8 @@ JSON envelope commands and their `data` roots are closed:
 | --- | --- |
 | `detect`, `plagiarism`, `analyze` | one analysis, or an ordered analysis array for repeated files |
 | `task_status`, `task_wait`, `history_show`, `history_rerun` | one analysis |
-| `bulk_submit`, `bulk_status`, `bulk_wait` | one bulk collection |
+| `bulk_submit` | one bulk collection, or the canonical bulk dry-run shape (section 9.2) |
+| `bulk_status`, `bulk_wait` | one bulk collection |
 | `bulk_results` | one ordered bulk-item page |
 | `history_list`, `history_search` | an ordered analysis summary page |
 | `history_delete`, `history_clear`, `auth_set`, `auth_logout`, `config_set`, `mcp_install`, `mcp_uninstall` | mutation acknowledgement |
@@ -329,6 +330,13 @@ Closed `origin` values:
 - `literal`
 - `stdin`
 - `file`
+- `unknown`
+
+`unknown` marks the descriptor of a remotely authored operation the caller
+observes by explicit upstream ID (section 4.6): the input was submitted by
+another actor or process, so no local submission category applies. It is
+valid only on that resumed-observation path; locally submitted commands
+never emit it.
 
 `name` is present for a text file. `text` is omitted unless the caller
 explicitly requests input content or reads a full saved export.
@@ -400,6 +408,59 @@ Every timeout or handled interruption after acceptance reports the local ID,
 known upstream identifiers, and last observed state before exit. With history
 disabled, the process retains this identity only in its final output; it does
 not create a hidden task ledger.
+
+### 4.6 Resumed observation authorship
+
+A command that observes a Pangram operation by its explicit upstream ID
+(`task status`, `task wait`, and every bulk status, wait, items, and results
+read of a job not submitted in the same invocation) reconciles a remote
+record it did not author. With local history disabled, the process retains no
+authorship record of earlier submissions, so the canonical analysis or bulk
+collection it emits honestly records only the observed remote state and never
+fabricates a local authorship fact:
+
+- the local `anl_` or `bulk_` identity is generated fresh for the read, so
+  the envelope stays self-describing; it makes no claim about the original
+  submission's local identity
+- `submission_outcome` is `accepted` whenever an upstream identity was
+  observed (the evidence that a remote operation exists), never `terminal`;
+  `terminal` is reserved for an operation the caller itself submitted, so a
+  resumed read never claims it. This rule binds every emitted analysis,
+  including the per-item child analyses inside a resumed bulk items or
+  results page: an observed bulk child analysis (succeeded or failed) is
+  `accepted`, never `terminal`, even after the observed child has reached
+  its terminal state. A same-process read of a job this process submitted
+  builds its child analyses from the validated local plan and claims
+  `terminal`, exactly as before
+- `provenance.submitted_at` is omitted because the caller did not submit the
+  operation; `provenance.completed_at` is present only when observation
+  reached a terminal state, and preserves that observation's time
+- `provenance` carries the observed upstream identities
+  (`upstream_task_ids`, `upstream_bulk_id`, and `upstream_version` from a
+  terminal document) and nothing inferred
+- a resumed analysis or collection carries a descriptor only for what the
+  local caller actually holds. A same-process `bulk wait` or `bulk results`
+  after `bulk submit` builds each item's input descriptor from the validated
+  local plan (section 9.1). A `task` read holds no local submission plan, so
+  its item descriptor derives only from the terminal document Pangram
+  attested: when a terminal success document carries the normalized text,
+  the descriptor computes SHA-256, byte count, word count, and the
+  `unknown` origin over that attested text, and it never echoes the text
+  itself. A task read that has not yet reached a terminal document carries
+  no input descriptor (`input` is omitted) rather than inventing one
+
+Workflow caveat: none of this exposes content. A terminal task read surfaces
+hashes and counts, not the submitted text, unless the caller separately
+holds and supplies it locally.
+
+A resumed bulk child analysis whose remote item has not attested terminal
+content carries no input descriptor (`input` is omitted) rather than a
+fabricated or placeholder one. This binds both directions of terminal
+content: a failed child never carries an input descriptor, and a succeeded
+child whose terminal document carries no normalized text also omits `input`
+rather than inventing one. A same-process read of a locally submitted job
+still builds every succeeded or failed child's input descriptor from the
+validated local plan and claims `terminal`.
 
 ## 5. AI-detection result
 
@@ -547,7 +608,12 @@ whole-request validation failures. A rejected item counts in `failed` without
 entering `accepted`, so `succeeded + failed` may exceed `accepted`; the
 committed example (`accepted: 2`, `succeeded: 2`, `failed: 1`) is valid. The
 only counter bounds are `accepted <= total_items`, `succeeded <= accepted`,
-and `succeeded + failed <= total_items`. At terminal state:
+and `succeeded + failed <= total_items`. For an accepted submission
+(`submission_outcome: "accepted"`), `total_items` is the validated input count,
+so the submit accepted list plus the submit failed list MUST cover positions
+`0..total_items` in ascending order exactly once; a gap, a duplicate, or a
+position at or above `total_items` fails upstream contract validation. At
+terminal state:
 
 ```text
 accepted <= total_items
@@ -568,9 +634,16 @@ the canonical `BulkCounters` and `BulkCollection` constructors remain
 authoritative for them, exactly as the update contract leaves non-expressible
 manifest invariants to the Rust verifier.
 
-`updated_at` is required and changes whenever counters or state change.
-`estimated_billable_units` records the estimate calculated under the
-documented billing rule for the selected Pangram operation. Pangram 4 bulk
+`updated_at` is required and changes whenever counters or state change. For an
+accepted submission, when some but not all accepted items have finished, the
+collection is `running` (not `partial`): `partial` is terminal only, matching
+a mixed-terminal analysis. For an accepted submission the upstream status is
+poll-driven during observation, so it always agrees with the exact counters;
+a collection status/counter combination outside the accepted-submission
+precedence (`running` while any items remain unfinished, else the terminal
+equation) fails upstream contract validation. `estimated_billable_units`
+records the estimate calculated under the documented billing rule for the
+selected Pangram operation. Pangram 4 bulk
 selection uses one job-wide JSON `model` field with the exact value
 `pangram-4`; per-item model selectors are not supported. Each valid item costs
 one unit per started 100-word block, with a minimum of one unit per item. The
@@ -585,8 +658,172 @@ work. An unexpected upstream `413 Payload Too Large` for a submitted bulk
 request maps to the same code and retains sanitized `http_status: 413` detail.
 Estimates MUST NOT be presented as exact charges.
 
-Bulk timestamps from Pangram are Unix epoch seconds encoded as strings. The
-normalizer converts them to RFC 3339 UTC.
+A submitted (non-dry-run) bulk run is envelope-only output: as with the dry
+run, `--format` with a non-JSON value is rejected as a usage error before any
+bulk preparation, credential resolution, or network access, so no
+billable-unit estimate, plan validation, or submission work is performed for
+a projection the submitted run cannot express.
+
+### 9.2 Bulk dry run
+
+`bulk submit --dry-run` reports the validated plan without credentials,
+network, or any remote identity. It is a local preflight: it runs after
+whole-file JSONL validation and the billable-unit ceiling check, and returns
+exit 0 with the canonical `bulk_submit` success envelope. The `bulk_submit`
+data root is therefore the closed union of `BulkCollection` (a submitted run)
+and exactly one `BulkDryRun` shape (a dry run):
+
+```json
+{
+  "id": "bulk_01983c20-0180-7a80-a001-000000000001",
+  "status": "queued",
+  "submission_outcome": "not_submitted",
+  "plan_sha256": "2f77668a9dfbf8d5848b9eeb4a7145ca94c6ed9236e4a773f6dcafa5132b2f91",
+  "estimated_billable_units": 3,
+  "item_count": 3
+}
+```
+
+- `id` is the freshly generated local bulk ID. No upstream identity exists,
+  so `upstream_bulk_id` is absent.
+- `status` is always the closed value `queued` (nothing has run).
+- `submission_outcome` is always the closed value `not_submitted`.
+- `plan_sha256` is the request-document SHA-256 the submitted run would send,
+  for reconciliation.
+- `estimated_billable_units` and `item_count` come from the validated plan.
+
+A dry run is JSON-only: the machine reconciliation shape has no TOON,
+Markdown, or pretty projection, so `--format` with a non-JSON value is
+rejected as a usage error before credentials or network. The dry run carries
+no analyzed content and reserves an additional dry-run marker (`dry.noop`,
+`dry.observed` false) under its data root so machine consumers can tell a
+preflight from a real queued collection without relying on
+`submission_outcome` alone.
+
+Bulk metadata and results expire 48 hours after the job reaches a terminal
+status. Bulk timestamps from Pangram are Unix epoch seconds encoded as
+strings (for example `"1760000000.0"`). The normalizer converts them to RFC
+3339 UTC.
+
+### 9.1 Bulk wire contract
+
+The loopback fixture and the future production client assert these documented
+shapes exactly (official Bulk API source `eb214f4`, verified current on
+2026-08-01). Unknown upstream values on a required state or shape fail
+upstream contract validation per section 6.2 of the architecture; the fixture
+plays them to prove it.
+
+Submit is `POST {text-base}/bulk`. The request body carries exactly one of
+`items` or `text` plus one job-wide `model`:
+
+- `items` is the ordered list `{"id": optional-caller-id, "text": "..."}`.
+  Caller-supplied `id` values are optional and MUST be unique within one
+  request when provided; the local JSONL validator rejects duplicates before
+  submission (section 14.3).
+- `text` is the ordered list of plain strings used when no caller IDs are
+  needed.
+- `model` is exactly `pangram-4` for the whole job. No per-item selector
+  exists, and there is no public-dashboard-link request field.
+
+Exactly an HTTP `202 Accepted` is the submit success signal. Any other
+status, including another `2xx`, is not an acceptance: a non-`202` `2xx`
+falls into the never-replayed ambiguous class (section 12.1) because the job
+may exist remotely, and a non-`2xx` status maps through the error matrix
+below. The 202 response carries the upstream `bulk_id`, an initial `status`,
+the `total_items` count, an ordered `accepted_items` list (`index`, optional
+`id`, `task_id`), and an ordered `failed_items` list for items rejected by
+immediate validation (`index`, optional `id`, null `task_id`, `stage`,
+`error`). The 202 `status` token is the closed start-of-life marker
+`queued`: the client has no network authority between the acceptance and the
+first status read that could set a later value, so any other token fails
+upstream contract validation. Per-item `stage` fields are provider
+diagnostics, not protocol state: the item's own shape decides its class
+(a `result` document is a success, `result: null` is in-progress, a
+`failed_items` entry is failed), per-item `stage` never carries or gates
+termination, and it is preserved only as sanitized provenance evidence
+(bounded, ASCII-printable, control sequences stripped). A failed entry
+accepts null or any string `stage`; a missing `stage` on a failed entry is
+not contract drift.
+
+Status polling is `GET /bulk/{bulk_id}` and returns the job `bulk_id`, one of
+the closed statuses `queued`/`running`/`succeeded`/`failed`/`partial`, the
+`total_items`/`accepted`/`succeeded`/`failed` counters, and the
+`created_at`/`completed_at` epoch-second strings (`completed_at` is null
+while the job is not terminal). Observation enforces the section 9 precedence
+everywhere: when some but not all accepted items have finished the normalized
+collection status is `running`, so an upstream `partial` token on a
+non-terminal counter set is contract drift, and a terminal counter set with a
+disagreeing status is contract drift. Normalized timestamps preserve the
+upstream epoch-second strings converted to RFC 3339 UTC; a malformed or
+out-of-range upstream timestamp is contract drift.
+
+The analysis core builds each canonical bulk item's input descriptor from the
+validated local submission plan (origin, SHA-256, byte and word counts), never
+from untrusted upstream result text. An upstream result document that echoes a
+`text` field is result-side evidence and is not reparsed as the item's input.
+
+Item metadata paging is `GET /bulk/{bulk_id}/items?offset=N&limit=M`; result
+paging is `GET /bulk/{bulk_id}/results?offset=N&limit=M`. Both accept a
+zero-based `offset` and a `limit` in `1..=1,000`, and return the job
+`bulk_id`, the echoed page `offset` and `limit`, `total_items`, and page
+lists. The analysis core revalidates every page: the echoed `bulk_id` MUST
+equal the queried job, the echoed `offset`/`limit` MUST echo the request,
+`total_items` MUST agree across pages, page entries MUST be strictly ascending
+by source `index`, and a fetch-all walk covers each item position in
+`0..total_items` exactly once with a strictly advancing `next_offset` until it
+exhausts the set (the final page's `next_offset` is the end-of-set marker).
+A duplicate, out-of-order, counter-mismatched, identity-mismatched, or
+non-advancing page fails upstream contract validation. An empty page while
+positions remain uncovered is non-advancing drift; completion requires exact
+coverage of `0..total_items`. The client supplies its own constant page
+`limit` for a fetch-all walk; there is no aggregate endpoint. The fetch-all
+walk uses the conservative bounded page size of 100 rather than the 1,000
+maximum, because every received response body is bounded in memory right up
+to the client's 16 MiB hard response cap and a 1,000-item page is the worst
+case. Explicit one-page `bulk items`/`bulk results` requests may still use
+any `limit` in `1..=1,000`; only the internal fetch-all walk is capped to
+100. Because there is no aggregate endpoint, a fetch-all read reassembles
+the strictly ordered union of every walked page into one canonical page
+whose synthetic window metadata reports the whole aggregate: `offset` is
+`0`, `limit` is `max(1, total_items)` (still bounded by the documented
+1,000 cap), and `next_offset` is absent (the end-of-set marker). That
+synthetic `limit` names the complete aggregate window the caller received;
+it does not echo any single request page size (the walker requested pages
+of 100), so consumers can tell "one complete aggregate" from "one bounded
+upstream page" without hidden state. The exact-coverage and no-advance
+safeguards above bind the walk before this reassembly, so a synthesized
+aggregate exists only after every position in `0..total_items` was covered
+exactly once. A submitted session's response `total_items` MUST equal the validated
+local plan count and is checked before any client-side allocation; a
+mismatch is contract drift. For a status/page read of a job without a local
+plan (a resumed remote handle), the client validates the upstream-reported
+`total_items` against the documented hard bound before any allocation.
+Because a job bills each valid item at a minimum of one unit and a request
+is capped at 1,000 billable units, no valid job exceeds 1,000 items; a
+larger reported `total_items` fails upstream contract validation and the
+client never allocates from an unchecked count.
+
+- the items page returns one `items` list of metadata (`index`, optional
+  `id`, `task_id`, `stage`, optional `error`).
+- the results page returns an `items` list for successful or in-progress
+  work (completed items add a `result`; in-progress items carry
+  `result: null`) plus a separate `failed_items` metadata list for the same
+  page. A `result: null` entry normalizes to the canonical bulk item status
+  `running`. Each of the two lists is strictly ascending by source `index`
+  on its own; cross-list integrity is disjointness plus coverage of the
+  requested window, not a chained ordering across the lists.
+
+The documented bulk error matrix is: `401` missing or invalid key, `402`
+insufficient credits, `403` model not enabled or job not owned, `404` unknown
+job, `413` over the billable-unit limit, `422` empty/duplicate-ID/both-shapes/
+invalid-model validation, `500` processing error, and `503` model temporarily
+unavailable. `413` is documented on the submit route; the other statuses bind
+every `/bulk` route that the matrix indicates for them, most importantly the
+safe GET routes whose key, ownership, unknown-job, validation, and server
+failures are exercised by the loopback protocol suite. Only the safe GET routes (`GET /bulk/{bulk_id}`, `/items`,
+`/results`) are eligible for the bounded transient-failure retry policy; the
+billable `POST /bulk` is never replayed after an ambiguous send (section
+12.1).
 
 ## 10. Progress events
 
@@ -717,18 +954,49 @@ hints from delaying interruption indefinitely.
 | 7 | Local configuration, history, or update-state failure |
 | 130 | Interrupted by the user |
 
-An accepted detached or bulk submission exits 0.
+An accepted detached or bulk submission exits 0. This binds every
+successfully parsed HTTP 202 bulk acceptance, including one whose
+`failed_items` list rejects some or even every submitted item through
+immediate upstream validation: the acceptance itself is the authority for
+exit 0, and the envelope MUST report the truthful validated counters and
+derived status from that 202 response (the accepted and immediately failed
+counts, a `queued` collection while any accepted work remains, or the
+terminal `failed`/`partial`/`succeeded` collection when the 202 rejected
+every item), preserving every accepted caller ID and the observed upstream
+identity. A `bulk submit` without `--wait` never fabricates all-queued-zero
+counters over an acceptance that already reports immediate failures.
+
+A successful `bulk results` page or fetch-all read exits 0 regardless of the
+child outcomes on the returned window. One results page is a successful
+retrieval of a window and a page is not authoritative for the whole-job
+terminal state: failed children on the returned page are preserved as failed
+children (`status: failed` with their sanitized `error`) inside the
+successful command envelope. Callers that need the job-outcome exit use
+`bulk status` or `bulk wait`, whose observed terminal collection owns the
+section 12 outcome mapping (a terminal `failed` collection exits 6, a
+`partial` exits 3, a `succeeded` exits 0).
 
 A failure exit derives from the canonical error object's category everywhere
 it surfaces: as a top-level command failure envelope, and as the terminal
 check `error` carried inside a canonical failed analysis. The category-to-exit
 mapping is identical in both positions. In particular:
 
-- an upstream terminal task failure (`STAGE_FAILED`) is an upstream analysis
-  failure: the check carries `upstream_analysis_failed` (category `upstream`),
-  and the command exits 6 (network or upstream failure), never general exit 1
+- an upstream terminal task failure (`STAGE_FAILED` on the observe stream)
+  is an upstream analysis failure: the check carries
+  `upstream_analysis_failed` (category `upstream`), and the command exits 6
+  (network or upstream failure), never general exit 1
+- the per-task status snapshot (`task status` and `task wait`, reading a
+  text task by its upstream ID) follows the identical observation contract:
+  an upstream terminal `STAGE_FAILED` on the poll stream is normalized to
+  the same upstream terminal failure (`upstream_analysis_failed`, category
+  `upstream`, exit 6), and any non-terminal stage reads as still `running`
+  until a later poll reports a terminal state
 - a failed analysis whose check error is a local usage or authentication
   failure exits per that error's category instead
+- a bulk collection that reaches the terminal `failed` state failed every
+  item through an upstream terminal analysis failure (immediate upstream
+  rejection or `STAGE_FAILED`); that terminal bulk failure is an upstream
+  failure and exits 6, never general exit 1
 - process interruption stays exit 130 per section 19
 
 For a repeated-file ordered series the run's exit follows the parent-status
@@ -942,6 +1210,15 @@ JSONL item:
 Unknown item fields and duplicate caller IDs fail whole-file validation.
 Pangram's Bulk API does not document a public-dashboard-link request or
 response field, so bulk submission has no `--public-link` option.
+
+`bulk results` exit semantics follow section 12: a successful page read
+(one explicit `--offset`/`--limit` window, or the offset-0 no-limit
+fetch-all) exits 0 regardless of failed children on the returned window,
+because it is a successful retrieval and one page is not authoritative for
+whole-job terminal state; `bulk status` and `bulk wait` own the job-outcome
+exit mapping. A fetch-all read emits one canonical aggregate page whose
+window metadata reports `offset: 0` and `limit: max(1, total_items)`
+(section 9.1): the complete set, not the 100-item walk granularity.
 
 ### 14.4 Task
 

@@ -2,6 +2,7 @@ use std::ffi::OsString;
 
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
 
+pub(crate) mod bulk;
 pub(crate) mod detect;
 pub mod grammar;
 mod local_setup;
@@ -214,6 +215,164 @@ pub fn runtime_command() -> Command {
                 .multiple(false),
         );
 
+    let bulk_submit = Command::new("submit")
+        .about("Submit an asynchronous Pangram 4 bulk AI-detection job")
+        .arg(
+            Arg::new("JSONL_PATH")
+                .value_name("JSONL_PATH")
+                .num_args(1)
+                .help("Bulk JSONL file; the literal `-` reads stdin"),
+        )
+        .arg(
+            Arg::new("max-billable-units")
+                .long("max-billable-units")
+                .value_name("N")
+                .num_args(1)
+                .required(true)
+                .help("Reject the request when the estimated cost exceeds this ceiling"),
+        )
+        .arg(
+            Arg::new("dry-run")
+                .long("dry-run")
+                .action(ArgAction::SetTrue)
+                .help("Report the canonical plan without credentials or network work"),
+        )
+        .arg(
+            Arg::new("wait")
+                .long("wait")
+                .action(ArgAction::SetTrue)
+                .help("Wait for the job to reach a terminal state before reporting"),
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .value_parser(["json", "jsonl", "toon", "markdown", "pretty"])
+                .help("Render the canonical envelope in the selected projection"),
+        )
+        .arg(
+            Arg::new("progress")
+                .long("progress")
+                .value_name("MODE")
+                .value_parser(["auto", "never", "jsonl"])
+                .help("Progress reporting on stderr: auto, never, or canonical jsonl"),
+        );
+
+    let bulk_status = Command::new("status")
+        .about("Read one Pangram 4 bulk job's canonical collection state")
+        .arg(
+            Arg::new("ID")
+                .value_name("ID")
+                .num_args(1)
+                .required(true)
+                .help("The upstream bulk job identity"),
+        );
+
+    let bulk_wait = Command::new("wait")
+        .about("Wait for one Pangram 4 bulk job to reach a terminal state")
+        .arg(
+            Arg::new("ID")
+                .value_name("ID")
+                .num_args(1)
+                .required(true)
+                .help("The upstream bulk job identity"),
+        )
+        .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .value_name("DURATION")
+                .num_args(1)
+                .help("Bound the wait (seconds, or a value with an s, ms, m, or h suffix)"),
+        )
+        .arg(
+            Arg::new("progress")
+                .long("progress")
+                .value_name("MODE")
+                .value_parser(["auto", "never", "jsonl"])
+                .help("Progress reporting on stderr: auto, never, or canonical jsonl"),
+        );
+
+    let bulk_results = Command::new("results")
+        .about("Read one page of Pangram 4 bulk job results")
+        .arg(
+            Arg::new("ID")
+                .value_name("ID")
+                .num_args(1)
+                .required(true)
+                .help("The upstream bulk job identity"),
+        )
+        .arg(
+            Arg::new("offset")
+                .long("offset")
+                .value_name("N")
+                .num_args(1)
+                .help("Zero-based page offset (default 0)"),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .value_name("N")
+                .num_args(1)
+                .help("Page size within 1..=1000 (default 100; fetch-all only when no --limit is given and --offset stays 0)"),
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .value_parser(["json", "jsonl", "toon", "markdown", "pretty"])
+                .help("Render the canonical envelope in the selected projection"),
+        );
+
+    let bulk = Command::new("bulk")
+        .about("Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(bulk_submit)
+        .subcommand(bulk_status)
+        .subcommand(bulk_wait)
+        .subcommand(bulk_results);
+
+    let task_status = Command::new("status")
+        .about("Read one Pangram 4 task's canonical analysis state")
+        .arg(
+            Arg::new("ID")
+                .value_name("ID")
+                .num_args(1)
+                .required(true)
+                .help("The upstream Pangram task identity"),
+        );
+
+    let task_wait = Command::new("wait")
+        .about("Wait for one Pangram 4 task to reach a terminal state")
+        .arg(
+            Arg::new("ID")
+                .value_name("ID")
+                .num_args(1)
+                .required(true)
+                .help("The upstream Pangram task identity"),
+        )
+        .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .value_name("DURATION")
+                .num_args(1)
+                .help("Bound the wait (seconds, or a value with an s, ms, m, or h suffix)"),
+        )
+        .arg(
+            Arg::new("progress")
+                .long("progress")
+                .value_name("MODE")
+                .value_parser(["auto", "never", "jsonl"])
+                .help("Progress reporting on stderr: auto, never, or canonical jsonl"),
+        );
+
+    let task = Command::new("task")
+        .about("Inspect or wait for a Pangram 4 text task")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(task_status)
+        .subcommand(task_wait);
+
     Command::new(FULL_GRAMMAR.name)
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .version(env!("CARGO_PKG_VERSION"))
@@ -259,6 +418,8 @@ pub fn runtime_command() -> Command {
         .subcommand(config)
         .subcommand(doctor)
         .subcommand(detect)
+        .subcommand(bulk)
+        .subcommand(task)
 }
 
 /// Parses a caller-supplied argv without exiting the process.
@@ -359,6 +520,8 @@ where
     let global = crate::cli::detect::GlobalFlags::from_matches(&matches);
     match matches.subcommand() {
         Some(("detect", sub)) => execute_detect(sub, global, streams),
+        Some(("bulk", sub)) => execute_bulk_leaf(sub, &matches, global, streams),
+        Some(("task", sub)) => execute_task_leaf(sub, &matches, global, streams),
         // A bare literal-text reach (`pangram some text`) resolves to implicit
         // detection; the literal `-` reads stdin. A bare launch with no text
         // and no subcommand falls through to the successful help surface (the
@@ -438,6 +601,7 @@ fn bare_dispatch(arguments: &[OsString], streams: &dyn StreamTty) -> Option<RunO
 /// unless `--error-format json` overrides it.
 #[allow(clippy::type_complexity)]
 fn prepare_detection(
+    command: crate::output::ResolvedCommand,
     root_matches: &ArgMatches,
     output: crate::cli::detect::ResolvedOutput,
     started: crate::domain::UtcTimestamp,
@@ -455,15 +619,56 @@ fn prepare_detection(
     );
     let service = crate::config::ConfigService::new(&overrides).map_err(|error| {
         crate::cli::detect::failure_outcome(
+            command,
             output,
             started,
             crate::cli::detect::credential_error(error),
         )
     })?;
     let api_key = crate::cli::detect::resolve_api_key(&service)
-        .map_err(|error| crate::cli::detect::failure_outcome(output, started, error))?;
+        .map_err(|error| crate::cli::detect::failure_outcome(command, output, started, error))?;
     crate::cli::detect::build_analyzer(&service, api_key)
-        .map_err(|error| crate::cli::detect::failure_outcome(output, started, error))
+        .map_err(|error| crate::cli::detect::failure_outcome(command, output, started, error))
+}
+
+/// Routes one `pangram bulk <verb>` invocation to the shared bulk/task
+/// adapter. Clap already enforced the leaf name and the closed flags.
+fn execute_bulk_leaf(
+    sub: &ArgMatches,
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    streams: &dyn StreamTty,
+) -> RunOutcome {
+    let resolved = match sub.subcommand() {
+        Some(("submit", _)) => crate::output::ResolvedCommand::BulkSubmit,
+        Some(("status", _)) => crate::output::ResolvedCommand::BulkStatus,
+        Some(("wait", _)) => crate::output::ResolvedCommand::BulkWait,
+        Some(("results", _)) => crate::output::ResolvedCommand::BulkResults,
+        // arg_required_else_help makes a non-leaf reach impossible.
+        _ => unreachable!("bulk requires a leaf subcommand"),
+    };
+    let Some((_, leaf)) = sub.subcommand() else {
+        unreachable!("bulk requires a leaf subcommand");
+    };
+    finish_detect(bulk::execute(resolved, leaf, root_matches, global, streams))
+}
+
+/// Routes one `pangram task <verb>` invocation to the same adapter.
+fn execute_task_leaf(
+    sub: &ArgMatches,
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    streams: &dyn StreamTty,
+) -> RunOutcome {
+    let resolved = match sub.subcommand() {
+        Some(("status", _)) => crate::output::ResolvedCommand::TaskStatus,
+        Some(("wait", _)) => crate::output::ResolvedCommand::TaskWait,
+        _ => unreachable!("task requires a leaf subcommand"),
+    };
+    let Some((_, leaf)) = sub.subcommand() else {
+        unreachable!("task requires a leaf subcommand");
+    };
+    finish_detect(bulk::execute(resolved, leaf, root_matches, global, streams))
 }
 
 /// Runs an explicit `detect [TEXT|--file ...]` invocation. Argument and
@@ -479,7 +684,11 @@ fn execute_detect(
         Ok(arguments) => arguments,
         Err(error) => {
             return finish_detect(crate::cli::detect::early_failure(
-                global, streams, started, error,
+                crate::output::ResolvedCommand::Detect,
+                global,
+                streams,
+                started,
+                error,
             ));
         }
     };
@@ -526,8 +735,12 @@ fn run_detection(
         Err(outcome) => return finish_detect(outcome),
     };
     let output = plan.resolved_output();
-    let analyzer = match prepare_detection(root_matches, output, crate::domain::UtcTimestamp::now())
-    {
+    let analyzer = match prepare_detection(
+        crate::output::ResolvedCommand::Detect,
+        root_matches,
+        output,
+        crate::domain::UtcTimestamp::now(),
+    ) {
         Ok(analyzer) => analyzer,
         Err(outcome) => return finish_detect(outcome),
     };

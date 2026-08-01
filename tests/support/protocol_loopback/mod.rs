@@ -6,12 +6,21 @@
 //! content only: the fixture and its failure messages never print header
 //! values or auth material.
 
-#![allow(dead_code)]
+// This is a shared `#[path]` test-support module included by more than one
+// test crate (text and bulk protocol suites). Each crate consumes a
+// different subset of its re-exports, so `dead_code` and `unused_imports`
+// are allowed at the module root rather than peppering `cfg` gates across a
+// cohesive fixture.
+#![allow(dead_code, unused_imports)]
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+
+mod bulk;
+
+pub use bulk::{BulkProbeClient, BulkProbeOutcome, BulkRequestView};
 
 use axum::Router;
 use axum::extract::{Path, Request, State};
@@ -39,6 +48,8 @@ pub const SYNTHETIC_TEXT: &str =
 pub struct RecordedRequest {
     pub method: String,
     pub path: String,
+    /// The raw query string without the leading `?` (empty when absent).
+    pub query: String,
     headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -79,10 +90,28 @@ pub enum Step {
 }
 
 #[derive(Default)]
-struct FixtureState {
+pub(crate) struct FixtureState {
     requests: Vec<RecordedRequest>,
     submits: VecDeque<Step>,
     polls: VecDeque<Step>,
+    bulk: BulkQueues,
+}
+
+impl FixtureState {
+    pub(crate) fn bulk_queues(&mut self) -> &mut BulkQueues {
+        &mut self.bulk
+    }
+}
+
+/// The scripted queues for the four bulk routes. Widely re-exported so tests
+/// script `on_bulk_submit`-style steps; defined here so [`FixtureState`] holds
+/// one default value and the `bulk` submodule only registers handlers.
+#[derive(Default)]
+pub struct BulkQueues {
+    pub submit: VecDeque<Step>,
+    pub status: VecDeque<Step>,
+    pub items: VecDeque<Step>,
+    pub results: VecDeque<Step>,
 }
 
 /// The fixture handle. `stop` shuts the server down; dropping without
@@ -100,6 +129,7 @@ impl ProtocolFixture {
         let app = Router::new()
             .route("/task", post(handle_submit))
             .route("/task/{id}", get(handle_poll))
+            .merge(bulk::routes())
             .fallback(handle_unexpected)
             .with_state(state.clone());
 
@@ -141,6 +171,46 @@ impl ProtocolFixture {
             .lock()
             .expect("fixture state")
             .polls
+            .push_back(step);
+    }
+
+    /// Scripts one `POST /bulk` submission response.
+    pub fn on_bulk_submit(&self, step: Step) {
+        self.state
+            .lock()
+            .expect("fixture state")
+            .bulk_queues()
+            .submit
+            .push_back(step);
+    }
+
+    /// Scripts one `GET /bulk/{id}` status response.
+    pub fn on_bulk_status(&self, step: Step) {
+        self.state
+            .lock()
+            .expect("fixture state")
+            .bulk_queues()
+            .status
+            .push_back(step);
+    }
+
+    /// Scripts one `GET /bulk/{id}/items` metadata-page response.
+    pub fn on_bulk_items(&self, step: Step) {
+        self.state
+            .lock()
+            .expect("fixture state")
+            .bulk_queues()
+            .items
+            .push_back(step);
+    }
+
+    /// Scripts one `GET /bulk/{id}/results` result-page response.
+    pub fn on_bulk_results(&self, step: Step) {
+        self.state
+            .lock()
+            .expect("fixture state")
+            .bulk_queues()
+            .results
             .push_back(step);
     }
 
@@ -238,7 +308,7 @@ impl ProtocolFixture {
     }
 }
 
-async fn split(request: Request) -> (String, String, Vec<(String, String)>, Vec<u8>) {
+async fn split(request: Request) -> SplitRequest {
     let (parts, body) = request.into_parts();
     let bytes = axum::body::to_bytes(body, 4 * 1024 * 1024)
         .await
@@ -253,30 +323,36 @@ async fn split(request: Request) -> (String, String, Vec<(String, String)>, Vec<
             )
         })
         .collect();
-    (
-        parts.method.as_str().to_owned(),
-        parts.uri.path().to_owned(),
+    SplitRequest {
+        method: parts.method.as_str().to_owned(),
+        path: parts.uri.path().to_owned(),
+        query: parts.uri.query().unwrap_or("").to_owned(),
         headers,
-        bytes.to_vec(),
-    )
+        body: bytes.to_vec(),
+    }
 }
 
-fn record(
-    state: &Arc<Mutex<FixtureState>>,
+/// The decomposed parts of one incoming request, grouped so handlers pass a
+/// single value to [`record`].
+struct SplitRequest {
     method: String,
     path: String,
+    query: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
-) {
+}
+
+fn record(state: &Arc<Mutex<FixtureState>>, split: SplitRequest) {
     state
         .lock()
         .expect("fixture state")
         .requests
         .push(RecordedRequest {
-            method,
-            path,
-            headers,
-            body,
+            method: split.method,
+            path: split.path,
+            query: split.query,
+            headers: split.headers,
+            body: split.body,
         });
 }
 
@@ -284,8 +360,7 @@ async fn handle_submit(
     State(state): State<Arc<Mutex<FixtureState>>>,
     request: Request,
 ) -> Response {
-    let (method, path, headers, body) = split(request).await;
-    record(&state, method, path, headers, body);
+    record(&state, split(request).await);
     let step = state
         .lock()
         .expect("fixture state")
@@ -300,8 +375,7 @@ async fn handle_poll(
     Path(_id): Path<String>,
     request: Request,
 ) -> Response {
-    let (method, path, headers, body) = split(request).await;
-    record(&state, method, path, headers, body);
+    record(&state, split(request).await);
     let step = state
         .lock()
         .expect("fixture state")
@@ -315,8 +389,9 @@ async fn handle_unexpected(
     State(state): State<Arc<Mutex<FixtureState>>>,
     request: Request,
 ) -> Response {
-    let (method, path, headers, body) = split(request).await;
-    record(&state, method, path.clone(), headers, body);
+    let split = split(request).await;
+    let path = split.path.clone();
+    record(&state, split);
     panic!("an unexpected request path reached the fixture: {path}");
 }
 

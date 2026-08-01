@@ -145,7 +145,7 @@ fn sigint_flag() -> &'static std::sync::Arc<std::sync::atomic::AtomicBool> {
 /// maps every target the signal-hook crate supports while staying
 /// signal-safe. A driver-install failure is non-fatal: without it no SIGINT
 /// is trapped, so the interruption path is simply never exercised.
-pub(super) fn install_sigint_driver() {
+pub(crate) fn install_sigint_driver() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = signal_hook::flag::register(
@@ -159,7 +159,7 @@ pub(super) fn install_sigint_driver() {
 /// Spawned inside the async runtime; polling the observed flag at the shared
 /// pacing interval keeps SIGINT response well under the observation poll
 /// cadence while doing zero work on the signal handler path.
-pub(super) async fn bridge_sigint(token: CancellationToken) {
+pub(crate) async fn bridge_sigint(token: CancellationToken) {
     install_sigint_driver();
     loop {
         if sigint_flag().load(std::sync::atomic::Ordering::SeqCst) {
@@ -172,6 +172,6 @@ pub(super) async fn bridge_sigint(token: CancellationToken) {
 
 /// Clears the SIGINT flag when one observation flow ends so a delivered
 /// interrupt from a finished flow is not re-read by a later flow.
-pub(super) fn reset_sigint_flag() {
+pub(crate) fn reset_sigint_flag() {
     sigint_flag().store(false, std::sync::atomic::Ordering::SeqCst);
 }

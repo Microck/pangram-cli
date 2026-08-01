@@ -25,8 +25,15 @@ pub(crate) mod client;
 mod inputs;
 mod render;
 
-pub(crate) use client::{build_analyzer, credential_error, resolve_api_key};
-pub(crate) use render::{DetectOutcome, early_failure, failure_outcome};
+pub(crate) use client::{
+    bridge_sigint, build_analyzer, credential_error, install_sigint_driver, reset_sigint_flag,
+    resolve_api_key,
+};
+pub(crate) use render::{
+    DetectOutcome, analysis_exit_code, early_failure, elapsed_ms, failure_outcome, identity_note,
+    internal_error, interrupted_outcome, note_stderr, primary_outcome, sanitize_for_stderr,
+    usage_error,
+};
 
 use clap::ArgMatches;
 
@@ -36,10 +43,7 @@ use crate::output::{CanonicalError, ColorPolicy, ErrorCode, OutputFormat, Progre
 use super::StreamTty;
 
 use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
-use render::{
-    DETACH_NOTE, identity_note, internal_error, interrupted_outcome, note_stderr,
-    sanitize_for_stderr, success_outcome, usage_error,
-};
+use render::{DETACH_NOTE, success_outcome};
 
 // The submodules hold the cohesive halves of the adapter:
 // - `inputs`: source resolution, word counting, and billing preflight
@@ -185,11 +189,23 @@ pub(crate) fn plan(
 
     let inputs = match resolve_inputs(source, streams, stdin_text) {
         Ok(inputs) => inputs,
-        Err(error) => return Err(failure_outcome(output, started_at, error)),
+        Err(error) => {
+            return Err(failure_outcome(
+                crate::output::ResolvedCommand::Detect,
+                output,
+                started_at,
+                error,
+            ));
+        }
     };
 
     if let Err(error) = enforce_billable_ceiling(arguments.max_billable_units, &inputs) {
-        return Err(failure_outcome(output, started_at, error));
+        return Err(failure_outcome(
+            crate::output::ResolvedCommand::Detect,
+            output,
+            started_at,
+            error,
+        ));
     }
 
     let progress = resolve_progress(arguments.progress, output, streams);
@@ -227,6 +243,7 @@ pub(crate) fn execute(
         Ok(runtime) => runtime,
         Err(_) => {
             return failure_outcome(
+                crate::output::ResolvedCommand::Detect,
                 output,
                 started_at,
                 internal_error("could not start the local async runtime"),
@@ -280,8 +297,21 @@ pub(crate) fn execute(
 
     match outcome {
         Ok(members) => success_outcome(output, started_at, members),
-        Err(Flow::Failed(error)) => failure_outcome(output, started_at, error),
-        Err(Flow::Interrupted(error, note)) => interrupted_outcome(output, started_at, error, note),
+        Err(flow) => match flow {
+            Flow::Failed(error) => failure_outcome(
+                crate::output::ResolvedCommand::Detect,
+                output,
+                started_at,
+                error,
+            ),
+            Flow::Interrupted(error, note) => interrupted_outcome(
+                crate::output::ResolvedCommand::Detect,
+                output,
+                started_at,
+                error,
+                note,
+            ),
+        },
     }
 }
 
@@ -558,7 +588,7 @@ impl ProgressSink {
 /// The closed set of stderr progress behaviors resolved from `--progress`.
 /// `Auto` is resolved against the terminal and format before use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProgressMode {
+pub(crate) enum ProgressMode {
     Auto,
     Quiet,
     Human,
@@ -568,7 +598,7 @@ enum ProgressMode {
 /// `--progress auto` emits human progress only when stderr is a TTY and the
 /// primary format is pretty; `--progress jsonl` forces canonical events;
 /// `--progress never` (or any nonqualifying auto case) emits nothing.
-fn resolve_progress(
+pub(crate) fn resolve_progress(
     selected: ProgressMode,
     output: ResolvedOutput,
     streams: &dyn StreamTty,
@@ -593,7 +623,7 @@ fn resolve_progress(
 /// "space before the suffix" form). Exponent and non-finite forms, signed
 /// counts, zero (and any value truncating to zero), unknown suffixes, and
 /// out-of-range scaled values are all rejected.
-fn parse_duration(raw: &str) -> Option<std::time::Duration> {
+pub(crate) fn parse_duration(raw: &str) -> Option<std::time::Duration> {
     if raw.is_empty() || !raw.is_ascii() || raw.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return None;
     }
@@ -638,7 +668,7 @@ fn parse_duration(raw: &str) -> Option<std::time::Duration> {
 
 /// Chooses color only when pretty output is selected for a TTY, color is not
 /// disabled by `--no-color`, and `NO_COLOR` is unset.
-fn color_policy(
+pub(crate) fn color_policy(
     global: &GlobalFlags,
     format: OutputFormat,
     streams: &dyn StreamTty,

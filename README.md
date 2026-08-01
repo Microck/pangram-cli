@@ -7,12 +7,15 @@ and AI agents that need stable JSON and MCP contracts.
 > [!NOTE]
 > The runtime is mid-build: the compiled binary currently ships working
 > `auth` (persistent API-key setup and status), `config` (list/get/set/path),
-> `doctor` (local diagnostics), and `detect` (Pangram 4 text AI detection,
-> including bare literal text, `-`, and piped stdin). Plagiarism and combined
-> analysis, bulk submission, `task`, `history`, and the TUI and stdio MCP
-> server remain planned and are not available yet. Live Pangram conformance is
-> pending; compiled contract and loopback protocol tests are the current
-> correctness gates.
+> `doctor` (local diagnostics), `detect` (Pangram 4 text AI detection,
+> including bare literal text, `-`, and piped stdin), `bulk` (submit, status,
+> wait, and results for asynchronous bulk detection), and `task`
+> (status and wait for one Pangram text task) are compiled and available.
+> Plagiarism and combined analysis, `history`, and the TUI and stdio MCP
+> server remain planned and are not available yet. Live Pangram conformance
+> is pending and public release support (including live file and plagiarism
+> conformance) is still gated; compiled contract and loopback protocol tests
+> are the current correctness gates.
 
 The project uses Pangram's documented API-key-authenticated REST endpoints. It
 does not use browser sessions, private dashboard routes, or scraping.
@@ -103,6 +106,8 @@ Available today:
 | `pangram auth` | Configure and inspect API-key authentication |
 | `pangram config` | Inspect and update non-secret configuration |
 | `pangram doctor` | Run local, non-billable diagnostics |
+| `pangram bulk` | Submit and inspect asynchronous bulk detection |
+| `pangram task` | Inspect or wait for a Pangram text task |
 
 Planned:
 
@@ -111,8 +116,6 @@ Planned:
 | `pangram` (TUI) | Launch the interactive terminal interface |
 | `pangram plagiarism` | Run plagiarism checking |
 | `pangram analyze` | Run AI detection and plagiarism together |
-| `pangram bulk` | Submit and inspect asynchronous bulk detection |
-| `pangram task` | Inspect or wait for a Pangram text task |
 | `pangram history` | Manage optional local analysis history |
 | `pangram mcp` | Run or install the typed stdio MCP server |
 | `pangram agent` | Print the embedded agent usage guide |

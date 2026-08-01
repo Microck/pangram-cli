@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use microck_pangram_cli::cli::{ArgumentSpec, Availability, CommandSpec, FULL_GRAMMAR};
+use microck_pangram_cli::cli::{
+    ArgumentSpec, Availability, CommandKind, CommandSpec, FULL_GRAMMAR,
+};
 use serde_json::Value;
 
 /// One hermetic filesystem root shared by every compiled-binary spawn in
@@ -70,6 +72,8 @@ Commands:
   config  Inspect and edit the local Pangram configuration
   doctor  Run local diagnostics without network access or credential validation
   detect  Detect AI-generated text through Pangram 4
+  bulk    Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
+  task    Inspect or wait for a Pangram 4 text task
   help    Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -87,13 +91,11 @@ Options:
 const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "agent",
     "analyze",
-    "bulk",
     "completions",
     "history",
     "mcp",
     "plagiarism",
     "skills",
-    "task",
     "update",
 ];
 
@@ -321,6 +323,68 @@ fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
     }
 }
 
+/// The README "Available today" table lists exactly the compiled binary's
+/// available top-level command names. This pins the advertised surface to the
+/// Rust-owned grammar so a README claim can never drift from the compiled
+/// reality in either direction: a newly available command must be listed, and
+/// a listed command must really be available. (The bare `pangram` row spells
+/// the available root entrypoint, not a subcommand name.)
+#[test]
+fn readme_available_table_matches_the_available_top_level_grammar() {
+    let available_names: BTreeSet<&str> = FULL_GRAMMAR
+        .commands
+        .iter()
+        .filter(|command| command.availability == Availability::Available)
+        .filter(|command| command.path.len() == 1)
+        .filter(|command| matches!(command.kind, CommandKind::Command | CommandKind::Namespace))
+        .filter_map(|command| command.path.first().copied())
+        .collect();
+
+    let readme = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md"))
+        .expect("read README.md");
+
+    // Extract the "Available today" table only, stopping at the next
+    // section heading, and pull the command token from each `pangram X` row.
+    let available_section = readme
+        .split("Available today:")
+        .nth(1)
+        .expect("the README keeps an \"Available today:\" section");
+    let available_section = available_section
+        .split("\n## ")
+        .next()
+        .unwrap_or(available_section);
+    let available_section = available_section
+        .split("\nPlanned:")
+        .next()
+        .unwrap_or(available_section);
+
+    let mut listed_names = BTreeSet::new();
+    for line in available_section.lines() {
+        let line = line.trim();
+        if !line.starts_with("| `pangram ") {
+            continue;
+        }
+        // `| `pangram detect` | ...` -> "detect".
+        let cell = line
+            .split('`')
+            .nth(1)
+            .expect("a backtick-quoted command cell");
+        if let Some(name) = cell.strip_prefix("pangram ") {
+            // Take the leading command token only (a subcommand path lists
+            // its first segment; the bare `pangram` row never matches here).
+            let first = name.split_whitespace().next().unwrap_or(name);
+            listed_names.insert(first.to_owned());
+        }
+    }
+    let listed_names: BTreeSet<&str> = listed_names.iter().map(String::as_str).collect();
+
+    assert_eq!(
+        listed_names, available_names,
+        "the README \"Available today\" table must list exactly the available \
+         top-level command names from the Rust-owned grammar (no more, no fewer)"
+    );
+}
+
 /// N4: `--save` stays in the normative grammar (Phase 4 history) but is not
 /// an available Phase 2 capability: the generated reference marks it planned,
 /// and the compiled runtime rejects it before any billable work.
@@ -429,6 +493,92 @@ fn bulk_submit_requires_a_path_or_implicit_stdin() {
     assert_eq!(source_group.implicit_members, &["stdin"]);
     assert_eq!(jsonl_path.group, Some("bulk_source"));
     assert_eq!(jsonl_path.stdin_marker, Some("-"));
+}
+
+/// contracts.md 14.3 and docs/mcp-contract.md lock bulk submission with no
+/// public-dashboard-link field: Pangram's Bulk API documents no
+/// public-dashboard-link request or response field. The Rust-owned grammar
+/// must not carry a bulk `--public-link`, while the contracted analysis flags
+/// (detect now, analyze when Phase 7 arrives) stay untouched.
+#[test]
+fn bulk_submit_has_no_public_link_in_the_rust_owned_grammar() {
+    let bulk = command(&["bulk", "submit"]);
+    assert!(
+        !bulk
+            .arguments
+            .iter()
+            .any(|argument| argument.name == "--public-link"),
+        "bulk submit must not carry --public-link (contracts.md 14.3)"
+    );
+
+    let detect = argument(command(&["detect"]), "--public-link");
+    assert_eq!(detect.availability, Availability::Available);
+    let analyze = argument(command(&["analyze"]), "--public-link");
+    assert_eq!(analyze.availability, Availability::Planned);
+
+    // No bulk or task command accepts the flag.
+    for path in [
+        ["bulk", "submit"].as_slice(),
+        ["bulk", "status"].as_slice(),
+        ["bulk", "wait"].as_slice(),
+        ["bulk", "results"].as_slice(),
+        ["task", "status"].as_slice(),
+        ["task", "wait"].as_slice(),
+    ] {
+        let spec = command(path);
+        assert!(
+            !spec
+                .arguments
+                .iter()
+                .any(|argument| argument.name == "--public-link"),
+            "{path:?} must not carry --public-link"
+        );
+    }
+}
+
+/// Phase 3 packet 4 activated the bulk and task surfaces: the grammar marks
+/// every entry available, the compiled help advertises both parents, and a
+/// bare invocation of either parent is a Clap usage error (exit 2), never
+/// literal detect text.
+#[test]
+fn bulk_and_task_commands_are_available_at_the_activation_packet() {
+    for path in [
+        ["bulk"].as_slice(),
+        ["bulk", "submit"].as_slice(),
+        ["bulk", "status"].as_slice(),
+        ["bulk", "wait"].as_slice(),
+        ["bulk", "results"].as_slice(),
+        ["task"].as_slice(),
+        ["task", "status"].as_slice(),
+        ["task", "wait"].as_slice(),
+    ] {
+        let spec = command(path);
+        assert_eq!(
+            spec.availability,
+            Availability::Available,
+            "{path:?} must be available at the Phase 3 activation packet"
+        );
+    }
+
+    let listed_commands: Vec<&str> = HELP
+        .lines()
+        .skip_while(|line| *line != "Commands:")
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+    for name in ["bulk", "task"] {
+        assert!(
+            listed_commands.contains(&name),
+            "{name} must appear in the compiled help Commands listing"
+        );
+
+        // A bare parent is a usage error, never literal detection text.
+        let output = pangram().arg(name).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("Usage:"), "{name}: {stderr}");
+    }
 }
 
 #[test]

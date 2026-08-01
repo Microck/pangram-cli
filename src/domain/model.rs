@@ -32,6 +32,10 @@ pub enum TextOrigin {
     Literal,
     Stdin,
     File,
+    /// The input of a remotely authored operation the client observes by
+    /// explicit upstream ID (contracts.md 4.6). Valid only on resumed
+    /// reads; never produced by a locally submitted command.
+    Unknown,
 }
 
 #[derive(Clone, Debug, JsonSchema, PartialEq, Eq, Serialize)]
@@ -505,7 +509,11 @@ pub struct Analysis<E> {
     pub id: AnalysisId,
     status: AnalysisStatus,
     submission_outcome: SubmissionOutcome,
-    pub input: AnalysisInput,
+    /// The canonical input descriptor. Omitted only on a resumed-observation
+    /// read whose remote operation has not yet reached a terminal document
+    /// (contracts.md 4.6); locally submitted commands always carry one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<AnalysisInput>,
     checks: OrderedChecks<Check<E>>,
     pub save_state: SaveState,
     provenance: Provenance,
@@ -520,11 +528,46 @@ pub struct Analysis<E> {
 }
 
 impl<E> Analysis<E> {
+    /// Builds a locally submitted analysis: the input descriptor always
+    /// exists because the caller supplied the content.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: AnalysisId,
         submission_outcome: SubmissionOutcome,
         input: AnalysisInput,
+        checks: OrderedChecks<Check<E>>,
+        save_state: SaveState,
+        provenance: Provenance,
+        retry_of: Option<AnalysisId>,
+        rerun_of: Option<AnalysisId>,
+        created_at: UtcTimestamp,
+        updated_at: UtcTimestamp,
+        completed_at: Option<UtcTimestamp>,
+    ) -> Result<Self, DomainError> {
+        Self::with_optional_input(
+            id,
+            submission_outcome,
+            Some(input),
+            checks,
+            save_state,
+            provenance,
+            retry_of,
+            rerun_of,
+            created_at,
+            updated_at,
+            completed_at,
+        )
+    }
+
+    /// Builds an analysis whose input descriptor may be absent: the sole
+    /// `None` case is a resumed-observation read without an attained
+    /// terminal document (contracts.md 4.6). Every locally submitted command
+    /// uses [`Self::new`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_optional_input(
+        id: AnalysisId,
+        submission_outcome: SubmissionOutcome,
+        input: Option<AnalysisInput>,
         checks: OrderedChecks<Check<E>>,
         save_state: SaveState,
         provenance: Provenance,
@@ -563,6 +606,13 @@ impl<E> Analysis<E> {
         if !outcome_is_valid {
             return Err(DomainError::InvalidSubmissionOutcome);
         }
+        // Input absence is bounded to the resumed-observation path: only an
+        // accepted (remotely authored) read may lack a local input
+        // descriptor. Every locally submitted or unaccepted analysis carries
+        // one (contracts.md 4.6).
+        if input.is_none() && submission_outcome != SubmissionOutcome::Accepted {
+            return Err(DomainError::InvalidState("analysis input"));
+        }
         Ok(Self {
             id,
             status,
@@ -598,6 +648,13 @@ impl<E> Analysis<E> {
     pub const fn provenance(&self) -> &Provenance {
         &self.provenance
     }
+
+    /// The canonical input descriptor, or `None` on a resumed observation
+    /// that has not yet reached a terminal document (contracts.md 4.6).
+    #[must_use]
+    pub const fn input(&self) -> Option<&AnalysisInput> {
+        self.input.as_ref()
+    }
 }
 
 #[derive(Deserialize)]
@@ -605,7 +662,8 @@ struct AnalysisWire<E> {
     id: AnalysisId,
     status: AnalysisStatus,
     submission_outcome: SubmissionOutcome,
-    input: AnalysisInput,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    input: Option<AnalysisInput>,
     checks: OrderedChecks<Check<E>>,
     save_state: SaveState,
     provenance: Provenance,
@@ -629,7 +687,7 @@ where
     {
         let wire = AnalysisWire::deserialize(deserializer)?;
         let expected_status = wire.status;
-        let analysis = Self::new(
+        let analysis = Self::with_optional_input(
             wire.id,
             wire.submission_outcome,
             wire.input,

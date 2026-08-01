@@ -1,0 +1,369 @@
+//! The `bulk submit` flow: plan preflight, optional dry-run, real
+//! submission, and the accepted/observed/interrupted outcome assembly. Only
+//! an HTTP-202 acceptance keeps the pipeline; an ambiguous send is reported
+//! through the canonical `submission_outcome_unknown` and never replayed.
+
+use clap::ArgMatches;
+
+use crate::analysis::{BulkAnalysisRequest, StopObserving, WaitOptions};
+use crate::cli::StreamTty;
+use crate::cli::detect::{self, DetectOutcome, GlobalFlags, ProgressMode};
+use crate::domain::{BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
+use crate::output::{
+    CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode, ExitCode, OutputFormat,
+    ResolvedCommand,
+};
+
+use super::plan::{plan_from_jsonl, read_jsonl_source};
+use super::policy::{resolve_policy, resolve_wait_progress};
+use super::{new_runtime, prepare, succeed};
+
+#[allow(clippy::too_many_lines)]
+pub(super) fn bulk_submit(
+    sub: &ArgMatches,
+    root_matches: &ArgMatches,
+    global: GlobalFlags,
+    streams: &dyn StreamTty,
+    started: UtcTimestamp,
+) -> DetectOutcome {
+    let resolved = ResolvedCommand::BulkSubmit;
+    let output = resolve_policy(resolved, sub, &global, streams);
+
+    // One guarded pre-billable format decision for both the submitted and the
+    // dry-run flow (contracts.md 9.2): `bulk submit` is envelope-only JSON, so
+    // a non-JSON `--format` is an unsupported combination before any source
+    // read, plan validation, credential resolution, or network access.
+    if output.format != OutputFormat::Json {
+        return detect::failure_outcome(resolved, output, started, bulk_json_format_error());
+    }
+
+    let max_billable_units = match sub.get_one::<String>("max-billable-units") {
+        Some(raw) => match raw.parse::<u64>().ok().filter(|value| *value >= 1) {
+            Some(value) => value,
+            None => {
+                return detect::failure_outcome(
+                    resolved,
+                    output,
+                    started,
+                    detect::usage_error(
+                        ErrorCode::UnsupportedInput,
+                        "--max-billable-units must be an integer of at least 1",
+                    ),
+                );
+            }
+        },
+        None => {
+            return detect::failure_outcome(
+                resolved,
+                output,
+                started,
+                detect::usage_error(ErrorCode::InputRequired, "--max-billable-units is required"),
+            );
+        }
+    };
+
+    let dry_run = sub.get_flag("dry-run");
+    let wait = sub.get_flag("wait");
+    if dry_run && wait {
+        return detect::failure_outcome(
+            resolved,
+            output,
+            started,
+            detect::usage_error(
+                ErrorCode::UnsupportedCombination,
+                "--dry-run is unsupported alongside --wait",
+            ),
+        );
+    }
+
+    let source = match read_jsonl_source(sub) {
+        Ok(source) => source,
+        Err(error) => return detect::failure_outcome(resolved, output, started, error),
+    };
+    let plan = match plan_from_jsonl(&source, max_billable_units) {
+        Ok(plan) => plan,
+        Err(error) => return detect::failure_outcome(resolved, output, started, error),
+    };
+    let request = BulkAnalysisRequest::new(plan);
+    let plan_sha256 = request.request_sha256();
+
+    if dry_run {
+        return dry_run_outcome(&request, plan_sha256, output, started);
+    }
+
+    // Actual submission: only accepted work (a 202) keeps the pipelines. A
+    // local observation failure after acceptance changes the local status
+    // and exits 1, never a top-level failure envelope.
+    let analyzer = match prepare(resolved, root_matches, output, started) {
+        Ok(analyzer) => analyzer,
+        Err(outcome) => return outcome,
+    };
+
+    let runtime = match new_runtime(resolved, output, started) {
+        Ok(runtime) => runtime,
+        Err(outcome) => return outcome,
+    };
+    let stop = StopObserving::new();
+    detect::install_sigint_driver();
+    let progress = resolve_wait_progress(sub, output, streams);
+    let wait_mode = wait;
+    let result = runtime.block_on(async {
+        let bridge = tokio::spawn(detect::bridge_sigint(stop.token().clone()));
+        let cancel = stop.token().child_token();
+        let outcome = match analyzer.submit_bulk(request, &cancel).await {
+            Ok(running) => {
+                if wait_mode {
+                    let observed = running
+                        .observe(
+                            WaitOptions::UNBOUNDED,
+                            |event| match progress {
+                                ProgressMode::Jsonl => super::emit_bulk_jsonl_progress(event),
+                                ProgressMode::Human => super::emit_bulk_human_progress(event),
+                                ProgressMode::Auto | ProgressMode::Quiet => {}
+                            },
+                            stop.clone(),
+                        )
+                        .await;
+                    Analyzed::Observed(observed)
+                } else {
+                    Analyzed::Accepted(running)
+                }
+            }
+            Err(failure) => {
+                if cancel.is_cancelled() {
+                    let identity = bulk_error_identity(&failure);
+                    Analyzed::Interrupted(failure.into_error(), identity)
+                } else {
+                    Analyzed::Failed(failure.into_error())
+                }
+            }
+        };
+        bridge.abort();
+        outcome
+    });
+    detect::reset_sigint_flag();
+    match result {
+        Analyzed::Accepted(running) => submit_accepted_outcome(&running, output, started),
+        Analyzed::Observed(Ok(Ok(collection))) => {
+            let exit = super::status_wait::collection_exit(&collection);
+            succeed(
+                resolved,
+                CommandData::BulkWait(collection),
+                exit,
+                output,
+                started,
+            )
+        }
+        Analyzed::Observed(Ok(Err(failure))) => {
+            let error = failure.into_error();
+            observed_failure_outcome(
+                "the bulk job was accepted but its local observation failed",
+                error,
+                streams,
+                started,
+            )
+        }
+        Analyzed::Observed(Err(interrupted)) => {
+            let note = bulk_identity_note(&interrupted.identity);
+            detect::interrupted_outcome(
+                ResolvedCommand::BulkWait,
+                output,
+                started,
+                stopped_observation_error(),
+                note,
+            )
+        }
+        Analyzed::Interrupted(error, note) => {
+            detect::interrupted_outcome(resolved, output, started, error, note)
+        }
+        Analyzed::Failed(error) => detect::failure_outcome(resolved, output, started, error),
+    }
+}
+
+/// The canonical unsupported-combination error for a non-JSON `bulk submit`
+/// format. Shared by the submitted and dry-run flows so both name the same
+/// envelope-only contract before any work.
+fn bulk_json_format_error() -> CanonicalError {
+    detect::usage_error(
+        ErrorCode::UnsupportedCombination,
+        "bulk submit renders only the default JSON envelope shape",
+    )
+}
+
+/// The intermediate flow states for a bulk submission run. Accepted keeps
+/// the running handle for the enqueue projection; Observed carries the
+/// observe outcome; Failed/Interrupted carry the canonical error.
+enum Analyzed {
+    Accepted(crate::analysis::RunningBulk),
+    Observed(
+        Result<
+            Result<BulkCollection, crate::analysis::BulkAnalysisError>,
+            crate::analysis::InterruptedBulk,
+        >,
+    ),
+    Interrupted(CanonicalError, String),
+    Failed(CanonicalError),
+}
+
+/// The stderr identity note for an interrupted submission, derived from the
+/// canonical error's reconciliation details where present.
+fn bulk_error_identity(failure: &crate::analysis::BulkAnalysisError) -> String {
+    match failure.canonical().details() {
+        Some(crate::output::CanonicalErrorDetails::SubmissionOutcomeUnknown(details)) => {
+            let mut note = "interrupted; local bulk id ".to_owned();
+            note.push_str(&match details.operation_id() {
+                crate::domain::LocalOperationId::AnalysisId(id) => id.to_string(),
+                crate::domain::LocalOperationId::BulkId(id) => id.to_string(),
+            });
+            note.push_str(&format!("; request sha256 {}", details.request_sha256));
+            note.push_str(&format!("; last status {}", details.last_status.as_str()));
+            note
+        }
+        _ => "interrupted during bulk submission; no remote action was completed".to_owned(),
+    }
+}
+
+/// The stderr identity note for an interrupted observation: local bulk ID,
+/// upstream ID when accepted, and the last observed status.
+pub(super) fn bulk_identity_note(identity: &crate::analysis::BulkOperationIdentity) -> String {
+    let mut note = format!("interrupted; local bulk id {}", identity.bulk_id);
+    if let Some(upstream) = &identity.upstream_bulk_id {
+        note.push_str(&format!(
+            "; upstream bulk id {}",
+            detect::sanitize_for_stderr(upstream.as_str())
+        ));
+    }
+    note
+}
+
+/// The canonical local-stop error for a wait-phase cancellation: the job was
+/// accepted; local observation stopped without any remote cancellation.
+pub(super) fn stopped_observation_error() -> CanonicalError {
+    CanonicalError::new(
+        ErrorCode::NetworkUnavailable,
+        "observation was interrupted locally; no remote cancellation was sent",
+    )
+    .expect("static template")
+}
+
+/// A local observation failure after acceptance reports through an accepted
+/// status-changed envelope (exit 1), never a top-level failure: the billable
+/// acceptance is real, so the caller sees the running collection with the
+/// note that local observation degraded (contracts.md 4.8).
+fn observed_failure_outcome(
+    note: &str,
+    error: CanonicalError,
+    streams: &dyn StreamTty,
+    started: UtcTimestamp,
+) -> DetectOutcome {
+    detect::note_stderr(streams, note);
+    detect::note_stderr(
+        streams,
+        &format!(
+            "reconcile manually with pangram bulk status; error: {}",
+            detect::sanitize_for_stderr(error.message())
+        ),
+    );
+    failure_status_envelope(error, started)
+}
+
+/// The accepted status-changed envelope: a canonical failure envelope at the
+/// collection command with the observation error, exit 1. Success-style
+/// envelope assembly cannot fabricate a collection, so the canonical failure
+/// envelope is the honest surface for the local observation failure.
+fn failure_status_envelope(error: CanonicalError, started: UtcTimestamp) -> DetectOutcome {
+    let exit_code = 1_u8;
+    let envelope = CommandEnvelope::failure(
+        ResolvedCommand::BulkWait,
+        error,
+        EnvelopeMeta::default()
+            .with_started_at(started)
+            .with_failed_at(UtcTimestamp::now()),
+    );
+    DetectOutcome {
+        exit_code,
+        envelopes: vec![envelope],
+        rendered: false,
+    }
+}
+
+/// The accepted (enqueued) submission outcome: the running collection
+/// projected from the validated HTTP 202 acceptance snapshot. With no
+/// `--wait`, the adapter records the truthful accept state (accepted and
+/// immediately failed counts, and the derived collection status) without
+/// observing remotely; it never fabricates all-queued-zero counters over an
+/// acceptance that may already report immediate failures (contracts.md 12).
+fn submit_accepted_outcome(
+    running: &crate::analysis::RunningBulk,
+    output: detect::ResolvedOutput,
+    started: UtcTimestamp,
+) -> DetectOutcome {
+    let identity = running.identity();
+    let plan = running.plan();
+    let estimated = plan.map(|plan| plan.estimated_billable_units());
+    let (status, counters) = running.accepted_snapshot();
+    let now = UtcTimestamp::now();
+    let collection = match BulkCollection::new(
+        identity.bulk_id,
+        identity.upstream_bulk_id.clone(),
+        status,
+        SubmissionOutcome::Accepted,
+        counters,
+        estimated,
+        now,
+        now,
+        None,
+    ) {
+        Ok(collection) => collection,
+        Err(_) => {
+            return detect::failure_outcome(
+                ResolvedCommand::BulkSubmit,
+                output,
+                started,
+                detect::internal_error("the accepted bulk state could not be projected"),
+            );
+        }
+    };
+    succeed(
+        ResolvedCommand::BulkSubmit,
+        CommandData::BulkSubmit(crate::output::BulkSubmitOutput::collection(collection)),
+        ExitCode::Success,
+        output,
+        started,
+    )
+}
+
+/// The dry-run outcome: the canonical typed reconciliation shape at exit 0
+/// with credentials and network skipped (contracts.md 9.2). The record is
+/// built by the Rust-owned [`crate::output::BulkDryRun`] type and projected
+/// through the single canonical envelope/projection owner, never manual JSON.
+/// The JSON-only format guard runs once at the head of the flow, before this
+/// point, so a dry run is always reached at the default JSON format.
+fn dry_run_outcome(
+    request: &BulkAnalysisRequest,
+    plan_sha256: Sha256Hash,
+    output: detect::ResolvedOutput,
+    started: UtcTimestamp,
+) -> DetectOutcome {
+    let item_count = u64::try_from(request.plan().items().len()).unwrap_or(u64::MAX);
+    let dry_run = crate::output::BulkDryRun::new(
+        request.id(),
+        plan_sha256,
+        request.plan().estimated_billable_units(),
+        item_count,
+    );
+    let meta = EnvelopeMeta::default()
+        .with_started_at(started)
+        .with_duration_ms(detect::elapsed_ms(started));
+    let envelope = CommandEnvelope::success(
+        CommandData::BulkSubmit(crate::output::BulkSubmitOutput::dry_run(dry_run)),
+        meta,
+    );
+    detect::primary_outcome(
+        ResolvedCommand::BulkSubmit,
+        &envelope,
+        output,
+        ExitCode::Success.as_u8(),
+        started,
+    )
+}

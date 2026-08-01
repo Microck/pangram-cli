@@ -338,35 +338,37 @@ const BULK_SOURCE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
     implicit_members: &["stdin"],
 }];
 
+// Pangram's Bulk API documents no public-dashboard-link request or response
+// field, so bulk submission has no `--public-link` option (contracts.md
+// 14.3). The flag exists only on detect (available) and analyze (planned).
 #[rustfmt::skip]
 const BULK_SUBMIT_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("JSONL_PATH", &[], false, false, Phase::BulkAndTasks).in_group("bulk_source").with_stdin_marker("-"),
-    option("--max-billable-units", "N", &[], true, false, Phase::BulkAndTasks),
-    flag("--dry-run", Phase::BulkAndTasks),
-    flag("--wait", Phase::BulkAndTasks),
-    flag("--public-link", Phase::BulkAndTasks),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::BulkAndTasks),
-    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::BulkAndTasks),
+    positional("JSONL_PATH", &[], false, false, Phase::BulkAndTasks).in_group("bulk_source").with_stdin_marker("-").available(),
+    option("--max-billable-units", "N", &[], true, false, Phase::BulkAndTasks).available(),
+    flag("--dry-run", Phase::BulkAndTasks).available(),
+    flag("--wait", Phase::BulkAndTasks).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::BulkAndTasks).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::BulkAndTasks).available(),
 ];
 
 #[rustfmt::skip]
 const ID_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("ID", &[], true, false, Phase::BulkAndTasks),
+    positional("ID", &[], true, false, Phase::BulkAndTasks).available(),
 ];
 
 #[rustfmt::skip]
 const WAIT_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("ID", &[], true, false, Phase::BulkAndTasks),
-    option("--timeout", "DURATION", &[], false, false, Phase::BulkAndTasks),
-    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::BulkAndTasks),
+    positional("ID", &[], true, false, Phase::BulkAndTasks).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::BulkAndTasks).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::BulkAndTasks).available(),
 ];
 
 #[rustfmt::skip]
 const BULK_RESULTS_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("ID", &[], true, false, Phase::BulkAndTasks),
-    option("--offset", "N", &[], false, false, Phase::BulkAndTasks),
-    option("--limit", "N", &[], false, false, Phase::BulkAndTasks),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::BulkAndTasks),
+    positional("ID", &[], true, false, Phase::BulkAndTasks).available(),
+    option("--offset", "N", &[], false, false, Phase::BulkAndTasks).available(),
+    option("--limit", "N", &[], false, false, Phase::BulkAndTasks).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::BulkAndTasks).available(),
 ];
 
 #[rustfmt::skip]
@@ -515,14 +517,14 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         available_command(&["detect"], CommandKind::Command, DETECT_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::TextDetection),
         planned_command(&["plagiarism"], CommandKind::Command, PLAGIARISM_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
         planned_command(&["analyze"], CommandKind::Command, ANALYZE_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
-        planned_command(&["bulk"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
-        planned_command(&["bulk", "submit"], CommandKind::Command, BULK_SUBMIT_ARGUMENTS, BULK_SOURCE_GROUP, Phase::BulkAndTasks),
-        planned_command(&["bulk", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),
-        planned_command(&["bulk", "wait"], CommandKind::Command, WAIT_ARGUMENTS, &[], Phase::BulkAndTasks),
-        planned_command(&["bulk", "results"], CommandKind::Command, BULK_RESULTS_ARGUMENTS, &[], Phase::BulkAndTasks),
-        planned_command(&["task"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
-        planned_command(&["task", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),
-        planned_command(&["task", "wait"], CommandKind::Command, WAIT_ARGUMENTS, &[], Phase::BulkAndTasks),
+        available_command(&["bulk"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
+        available_command(&["bulk", "submit"], CommandKind::Command, BULK_SUBMIT_ARGUMENTS, BULK_SOURCE_GROUP, Phase::BulkAndTasks),
+        available_command(&["bulk", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),
+        available_command(&["bulk", "wait"], CommandKind::Command, WAIT_ARGUMENTS, &[], Phase::BulkAndTasks),
+        available_command(&["bulk", "results"], CommandKind::Command, BULK_RESULTS_ARGUMENTS, &[], Phase::BulkAndTasks),
+        available_command(&["task"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
+        available_command(&["task", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),
+        available_command(&["task", "wait"], CommandKind::Command, WAIT_ARGUMENTS, &[], Phase::BulkAndTasks),
         planned_command(&["history"], CommandKind::Namespace, &[], &[], Phase::History),
         planned_command(&["history", "list"], CommandKind::Command, HISTORY_LIST_ARGUMENTS, &[], Phase::History),
         planned_command(&["history", "show"], CommandKind::Command, HISTORY_SHOW_ARGUMENTS, &[], Phase::History),

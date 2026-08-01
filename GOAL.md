@@ -163,7 +163,7 @@ approved contracts.
 | 0 | Complete |
 | 1 | Complete |
 | 2 | Complete |
-| 3 | Not started (documented entry contract resolved) |
+| 3 | Complete |
 | 4 | Not started |
 | 5 | Not started |
 | 6 | Not started |
@@ -463,6 +463,123 @@ behavior enters this queue before implementation continues through that seam.
   minimum of one, and accepts at most 1,000 billable units. No separate item
   count limit is documented. Phase 3 may proceed with loopback implementation;
   public support still requires live conformance.
+- 2026-08-01: The first bounded Phase 3 packet corrects the bulk-submit seed
+  grammar. The Rust-owned grammar had drifted from the normative contract by
+  seeding a `--public-link` bulk-submit flag, while contracts.md 14.3 and
+  docs/mcp-contract.md lock bulk against Pangram's Bulk API, which documents no
+  public-dashboard-link request or response field. The contradictory seed is
+  removed contract-first and test-first; bulk and task surfaces remain planned
+  (the compiled help/runtime still exposes none of them), detect's contracted
+  `--public-link` is unchanged, and the generated reference was regenerated
+  through the official generator. No MCP tool schemas exist yet, so docs/
+  mcp-contract.md remains the sole MCP bulk surface contract. Phase 3 stays In
+  progress; public support still requires implementation plus live
+  conformance.
+- 2026-08-01: The second bounded Phase 3 packet locks the official bulk
+  wire/domain contract and lands the real Axum loopback fixture foundation.
+  The official Bulk API source `eb214f4` was re-verified as the latest commit
+  on `api-reference/bulk-api.mdx` on 2026-08-01, and contracts.md gained
+  section 9.1 pinning the exact documented wire shapes: submit `items`/`text`
+  plus one job-wide `model` (`pangram-4`, no per-item selector, no
+  public-link field), the 202 accepted/failed item lists, the status
+  counters, items/results pages (offset/limit, max limit 1,000), epoch-second
+  string timestamps, 48-hour terminal retention, and the 401/402/403/404/413/
+  422/500/503 error matrix. `src/domain/bulk.rs` adds the typed,
+  constructor-validated `BulkSubmissionItem`/`BulkSubmissionPlan` (ordered
+  items, unique caller IDs, the min(caller ceiling, 1000) effective ceiling,
+  checked estimate, whole-file JSONL validation) and the deserialization
+  fixture wire types for submit/status/items/results responses.
+  `tests/support/protocol_loopback/bulk.rs` extends the real Axum fixture
+  with the four documented `/bulk` routes, scripted queues, and a loopback
+  `BulkProbeClient` (real reqwest against the fixture, decoding 2xx bodies
+  into the domain wire types); eleven `bulk_protocol` integration tests prove
+  the request grammar, 413/no-replay, terminal failure, partial child
+  results, page offset/limit/query, and stalled/safe-retry surfaces. The
+  route URL derivation lives behind a `dev-tools`-gated
+  `UpstreamEndpoints::bulk_*` accessor; no production endpoint constants or
+  production bulk client exist yet. The compiled CLI, README availability,
+  and MCP surface are unchanged (no capability Tegami). Generated contracts
+  show no drift: the new wire types are fixture spines, not public output
+  schema types. Phase 3 stays In progress; public support still requires the
+  production analysis client and live conformance.
+- 2026-08-01: The third Phase 3 packet review remediation landed
+  contract-first and test-first. The bulk core and upstream client are
+  decomposed below the 1,000-line hygiene gate (the bulk observation/paging
+  pipeline into `src/analysis/bulk/{mod,assemble}.rs`, the bulk submit/page
+  client into `src/analysis/upstream/bulk.rs`), the unrequested implementation
+  diary is removed, and the bulk surface is folded behind the single
+  adapter-facing `Analyzer` so adapters never own a second protocol client.
+  The wire core pins bulk submit success to exactly HTTP 202 (any other 2xx
+  is never replayed and surfaces the ambiguous `submission_outcome_unknown`),
+  validates the 202 acceptance `status` token against the closed `queued`
+  value, normalizes documented `result: null` results-page entries to the
+  canonical `running` state, treats per-item `stage` as sanitized
+  diagnostic-only evidence, and bounds every coverage allocation by the
+  validated plan count (or, for a resumed remote handle, by the documented
+  job cap); the fetch-all walk uses the conservative bounded 100-item page
+  while explicit one-page reads keep `1..=1,000`. New loopback tests cover
+  the documented GET status/error matrix with retry/no-retry proof, the
+  202-only and undecodable-202 ambiguity, a failed index 0 plus succeeded
+  index 1 window, and the hostile `u64::MAX`/plan-mismatch allocation guards.
+  contracts.md and the shared fragment were updated contract-first. Phase 3
+  stays In progress; public bulk support still requires live conformance.
+- 2026-08-01: A fourth Phase 3 remediation packet landed contract-first and
+  test-first, addressing the review findings on the CLI bulk/task activation.
+  The bulk/task CLI adapter decomposed from `src/cli/bulk.rs` into the
+  cohesive `src/cli/bulk/` modules (`mod`, `policy`, `plan`, `submit`,
+  `status_wait`, `results`, `task`), each below the hygiene threshold and
+  sharing the detection preparation, async runtime, and projection owners. A
+  Rust-owned typed dry-run schema, closed `bulk_submit` union
+  (`BulkDryRun`/`BulkSubmitOutput`), and projection now own the dry-run
+  reconciliation shape, refreshed through the official generator with no
+  drift beyond the intended singular closed union. Dozens of compiled-binary
+  loopback tests across `tests/bulk-task-cli-loopback.rs`,
+  `tests/bulk-task-status-results-loopback.rs`, and the shared
+  `tests/support/bulk_cli_env.rs` lock the exact exit, stdout-envelope,
+  stderr-separation, help, one-POST no-replay, and loopback grammar of the
+  bulk and task surfaces. A non-JSON `--format` on `bulk submit` (submitted
+  or dry-run) is rejected as `unsupported_combination` before any source
+  read, plan validation, credential resolution, or network access. The real
+  documented normalization is kept and tested: an upstream terminal
+  `STAGE_FAILED` exits 6 per its upstream category. The minor Tegami bump is
+  set for both packages. Phase 3 stays In progress; public bulk/task support
+  still requires live conformance.
+- 2026-08-01: The final Phase 3 remediation packet landed contract-first and
+  test-first over the packet-3/4 surface. Observed bulk child analyses are
+  now `accepted`, never `terminal` (contracts.md 4.6): the resumed plan=None
+  results/items builders in `src/analysis/bulk/assemble.rs` emit observed
+  success and observed failed children with the attested upstream identity, so
+  a valid failed child or a text-less succeeded child no longer fails as
+  `upstream_contract_changed`. `bulk submit` without `--wait` projects the
+  validated HTTP 202 acceptance snapshot (truthful
+  accepted/failed counters and derived collection status) instead of
+  fabricating an all-queued-zero state, and any successfully normalized 202
+  exits 0. A successful `bulk results` page or fetch-all read exits 0
+  regardless of failed children on the returned window (one page is not
+  authoritative for whole-job terminal state), and fetch-all reassembles one
+  canonical aggregate window (`offset: 0`, `limit: max(1, total_items)`
+  bounded by 1,000, no `next_offset`). The README lists bulk and task as
+  compiled and available with the live-conformance caveat, and a compiled
+  contract test pins the README availability list to the Rust-owned grammar.
+- 2026-08-01: Phase 3 moves to Complete. The compiled CLI activates every
+  contracted bulk and task surface against the real loopback fixture server
+  (`bulk submit` with required `--max-billable-units` whole-file preflight,
+  `bulk status|wait|results` with safe-GET paging, and `task status|wait`), so
+  no bulk request starts without a validated cost ceiling, task and bulk
+  waiting reuse the one analysis progress model behind the single
+  adapter-facing `Analyzer`, a terminal `partial` result exits 3 through the
+  status/wait surfaces while a successful page/fetch-all read stays
+  machine-readable at exit 0 regardless of failed children (the documented
+  exit mapping), proving the roadmap's Phase 3 exit criteria.
+  Independent complete-chain review returned READY with no unresolved P0, P1,
+  or warranted P2 findings; the safe static gates (fmt, hygiene/ASCII,
+  one-package, audit/deny, gitleaks, workflow and no-network policy, Tegami
+  shape, GOAL/contracts/evidence coherence) are green. The authoritative broad
+  gates (current Rust, MSRV 1.87, generated drift, native Windows ACL, supply
+  chain) are exercised on the delivery pull request because the remote Yoga
+  lease is held by another checkout and must not be reclaimed. Public bulk
+  support, live Pangram bulk conformance, and any public release stay gated.
+  Phase 4 remains planned, separate work.
 
 ## Out of scope
 

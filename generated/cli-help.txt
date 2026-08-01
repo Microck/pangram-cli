@@ -7,6 +7,8 @@ Commands:
   config  Inspect and edit the local Pangram configuration
   doctor  Run local diagnostics without network access or credential validation
   detect  Detect AI-generated text through Pangram 4
+  bulk    Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
+  task    Inspect or wait for a Pangram 4 text task
   help    Print this message or the help of the given subcommand(s)
 
 Arguments:

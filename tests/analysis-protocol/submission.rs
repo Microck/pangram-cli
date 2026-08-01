@@ -161,7 +161,7 @@ async fn terminal_failure_message_is_sanitized_before_canonical_details() {
     let fixture = ProtocolFixture::start().await;
     fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
     let hostile = format!(
-        "\u{1b}[31mFAIL\u{1b}[0m plain\u{7}\u{1b}]8;;https://evil.example\u{7}\\δ\u{2603} {}",
+        "\u{1b}[31mFAIL\u{1b}[0m plain\u{7}\u{1b}]8;;https://evil.example\u{7}\\\u{3b4}\u{2603} {}",
         "x".repeat(400)
     );
     fixture.on_poll(Step::Json(pangram4_failure(&hostile)));
@@ -212,7 +212,9 @@ async fn terminal_failure_message_is_sanitized_before_canonical_details() {
         "non-ASCII scalars are removed: {message:?}"
     );
     assert!(
-        !message.contains("\u{1b}") && !message.contains('δ') && !message.contains('\u{2603}'),
+        !message.contains("\u{1b}")
+            && !message.contains('\u{3b4}')
+            && !message.contains('\u{2603}'),
         "raw provider sequences never cross the boundary"
     );
     // The reduced message is the only provider text anywhere in the
@@ -226,7 +228,10 @@ async fn terminal_failure_message_is_sanitized_before_canonical_details() {
             !surface.contains('\u{1b}'),
             "no escape introducer may surface: {surface:?}"
         );
-        assert!(!surface.contains('δ'), "non-ASCII is stripped: {surface:?}");
+        assert!(
+            !surface.contains('\u{3b4}'),
+            "non-ASCII is stripped: {surface:?}"
+        );
     }
     assert_scrubbed(error);
     fixture.shutdown().await;
