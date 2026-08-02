@@ -647,6 +647,86 @@ behavior enters this queue before implementation continues through that seam.
   (foundation only). Phase 4 stays In progress; the HistoryStore core,
   history commands, and their real-SQLite contract suite are subsequent
   packets gated on this now-verified baseline.
+- 2026-08-02: The second bounded Phase 4 packet lands the concrete
+  `HistoryStore` under `src/history/` (`store`, `operations`, `records`),
+  owning exactly the docs/history-contract.md schema v1 and the
+  architecture-spec 11 responsibilities. The store fails closed on
+  protection: on Unix it requires `0700` on the `history/` directory and
+  `0600` on the database file created fresh before any SQLite handle exists,
+  and it fails closed as `insecure_history_permissions` when an existing
+  file or directory does not carry the exact owner-only mode; the Windows
+  path delegates to the Phase 1 `windows_acl` machinery through a cfg seam
+  so the same owner-only ACL policy covers history. Every connection
+  enables WAL (verified by reading the runtime `journal_mode` back),
+  `foreign_keys = ON`, `secure_delete = ON`, and a 5-second busy timeout.
+  Schema creation/validation runs in one step and records
+  `SCHEMA_VERSION = 1` in `user_version`; an unknown or newer version fails
+  as `history_corrupt` with recovery guidance, and a file that fails
+  SQLite's `quick_check` probe (including the lazy `SQLITE_NOTADB` open
+  path) also fails as `history_corrupt` with the original file left
+  untouched. `HistoryErrorCode` maps one-to-one onto the closed
+  `local_history` output codes (`InsecureHistoryPermissions`,
+  `HistoryCorrupt`, `NotFound` plus `HistoryWriteFailed`,
+  `HistoryUnavailable`) through `ErrorCode::canonical()`. The operations
+  module owns inserts and upserts of `analyses`, `bulk_collections`, and
+  `upstream_tasks` rows, transactional terminal-result updates, FTS
+  synchronization of `input_text`/`filename`/`headline`/`source_urls`,
+  `delete_analysis` (which cascades `upstream_tasks` through the
+  `ON DELETE CASCADE` foreign key and drops the FTS row in the same
+  transaction), and `clear` (which empties every table). Both destructive
+  operations run `wal_checkpoint(TRUNCATE)` after the commit so the logical
+  deletion is reported even if the truncate fails, per the deletion
+  semantics clause. Stored rows are plain Rust structs holding the typed
+  domain IDs (`AnalysisId`, `BulkId`, `Sha256Hash`, `UtcTimestamp`), closed
+  enums (`AnalysisStatus`, `SubmissionOutcome`, `SaveState`, `CheckKind`),
+  and the canonical JSON bodies as opaque strings; the opaque-JSON rule
+  keeps the store free of any upstream or submitted content parsing.
+
+  Independent review remediation (closed `InputKind` with no
+  `String::leak`, FTS replacement inside the terminal-update transaction,
+  missing FTS rows failing closed as `history_corrupt`, WAL/SHM sidecar
+  owner-only enforcement through the existing Unix/Windows protection
+  machinery, and panic-free `user_version` handling) is folded into this
+  same packet. Final validation is complete on the disposable Crabbox
+  remediation box on Oracle Paris (lease `cbx_367852b6572e`, slug
+  `pangram-p4-hrem-445a01`, container `11e07c22ee42`, SSH port 22837),
+  separate from the static `local-container` host, the Yoga Windows SSH
+  host, and the externally held `remoteuse-t7-profiles-policy` lease, with
+  an isolated workroot `/home/ubuntu/work/p4rem-445a01/pangram-cli` and
+  isolated stable and MSRV `CARGO_TARGET_DIR`s under
+  `/home/ubuntu/cargo-target/p4rem-445a01/`. Twenty
+  `tests/history-store*.rs` real-SQLite integration tests (16 core in
+  `tests/history-store.rs`, 4 in `tests/history-store-hardening.rs`) prove
+  the exact schema v1 (every column, index, and the contracted FTS5
+  virtual table), the per-connection pragma set (WAL + foreign keys +
+  secure delete read back through the runtime), foreign-key rejection and
+  `ON DELETE CASCADE` against the live database, transactional
+  save/observation/update roundtrips, recent-first listing and FTS5
+  search, FTS-consistent terminal updates (delete/reinsert in one
+  transaction), a structurally missing FTS row failing closed as
+  `history_corrupt`, structured-corruption tracking with original-file
+  guidance, owner-only Linux modes on both the database file and its
+  `*-wal`/`-shm` sidecar companions with fail-closed reopen on an insecure
+  sidecar, and sanitized error surfaces. `cargo fmt --check` and the
+  strict `cargo clippy --locked --all-features --all-targets --
+  -D warnings` gate are clean on stable Rust 1.97.1. The full locked
+  all-feature suite passes on stable Rust 1.97.1 (420 tests across 23
+  result groups, 0 failures) and under the MSRV Rust 1.87.0 (`cargo build
+  --locked --all-features` plus the same 420 passing tests). The
+  generated-contract generator reproduces the committed artifacts with no
+  drift, and the committed `tests/generated-contracts.rs` drift test
+  passes (9/9). `cargo audit` reports no new advisories against the
+  locked 323-crate graph, and the authoritative `cargo deny 0.20.2 check
+  licenses` with CI's exact inline allow-list configuration (Unicode-3.0
+  included) reports `licenses ok`. The repository
+  `tools/check-hygiene.rs` binary reports no errors across 142 files (its
+  warnings on pre-existing 800-to-1000-line source files are unchanged),
+  and a `gitleaks` 8.30.1 repository scan (189 commits, 32.97 MB) reports
+  no leaks. History remains unimplemented at the adapter surface: no CLI,
+  TUI, or MCP grammar is activated, no `--save` integration exists, and
+  the package bump is patch (foundation only). Phase 4 stays In progress;
+  history commands, the analysis `--save` seam, and their adapter contract
+  tests are subsequent packets.
 
 ## Out of scope
 
