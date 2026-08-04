@@ -37,8 +37,8 @@ pub(super) fn task_status(
         Ok(id) => id,
         Err(error) => return detect::failure_outcome(resolved, output, started, error),
     };
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
     let runtime = match new_runtime(resolved, output, started) {
@@ -52,6 +52,7 @@ pub(super) fn task_status(
     match result {
         Ok(analysis) => {
             let exit = task_exit(&analysis);
+            let analysis = persist_observed_task(analysis, &service);
             succeed(
                 resolved,
                 CommandData::TaskStatus(analysis),
@@ -85,8 +86,8 @@ pub(super) fn task_wait(
         Ok(timeout) => timeout,
         Err(outcome) => return outcome,
     };
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
     let runtime = match new_runtime(resolved, output, started) {
@@ -122,6 +123,7 @@ pub(super) fn task_wait(
     match result {
         Ok(analysis) => {
             let exit = task_exit(&analysis);
+            let analysis = persist_observed_task(analysis, &service);
             succeed(
                 resolved,
                 CommandData::TaskWait(analysis),
@@ -152,6 +154,19 @@ pub(super) fn task_wait(
 /// other status stays 0.
 fn task_exit(analysis: &Analysis<CanonicalError>) -> ExitCode {
     detect::analysis_exit_code(analysis)
+}
+
+/// Persists one observed task analysis under the automatic history gate,
+/// then hands the analysis back for rendering with its honest save state.
+/// Only the contracted `history.enabled = true` path applies (the task
+/// surface carries no `--save`); a failure warns once and never degrades
+/// the read, and a repeated observation of the same remote task refreshes
+/// its one row rather than duplicating it (contracts.md 14.2 note).
+fn persist_observed_task(
+    analysis: Analysis<CanonicalError>,
+    service: &crate::config::ConfigService,
+) -> Analysis<CanonicalError> {
+    detect::save::persist_observed_analysis(analysis, service)
 }
 
 /// One canonical JSONL analysis progress event on stderr.

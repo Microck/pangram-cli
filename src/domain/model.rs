@@ -655,6 +655,15 @@ impl<E> Analysis<E> {
     pub const fn input(&self) -> Option<&AnalysisInput> {
         self.input.as_ref()
     }
+
+    /// Records the save state the history store committed for this analysis
+    /// (contracts.md 4.2). The field never affects the status derivation, so
+    /// the adapter flips it right before projecting, after persistence.
+    #[must_use]
+    pub const fn with_save_state(mut self, save_state: SaveState) -> Self {
+        self.save_state = save_state;
+        self
+    }
 }
 
 #[derive(Deserialize)]

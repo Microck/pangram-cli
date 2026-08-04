@@ -1,0 +1,205 @@
+//! Bulk-collection persistence and reconciliation.
+//!
+//! One remote bulk job owns at most one stored row, reconciled by its
+//! contracted `upstream_bulk_id`: repeated submissions and observations of
+//! one job refresh the one collection row, its member analyses, and their
+//! observation rows atomically and without duplicates. Local authorship
+//! (the row identity, submission outcome, save state, caller ID, input
+//! content, and the original creation time) is never rewritten by a later
+//! observation; only the observed status, terminal bodies, and refresh
+//! stamps move.
+
+use rusqlite::params;
+
+use crate::domain::BulkId;
+
+use super::analysis_writes::upsert_observation_row;
+use super::records::{StoredAnalysis, StoredBulkCollection, StoredUpstreamTask};
+use super::store::HistoryStore;
+use super::wire::{BulkRow, row_to_analysis, row_to_bulk};
+use super::{HistoryError, HistoryErrorCode};
+
+impl HistoryStore {
+    /// Inserts one bulk collection row on its own (used by the schema and
+    /// core-store suites). Whole-collection persistence with children goes
+    /// through [`Self::upsert_bulk_collection_atomic`].
+    pub fn save_bulk_collection(
+        &mut self,
+        record: &StoredBulkCollection,
+    ) -> Result<(), HistoryError> {
+        self.in_transaction(|transaction| insert_bulk_row(transaction, record))
+    }
+
+    /// Resolves the stored collection that reconciles one upstream bulk job,
+    /// if any. SQL absence (`Ok(None)`) stays distinct from a storage failure
+    /// (`Err`): only a real read failure is an error, so the caller treats a
+    /// first observation of the job as an insert and never blind-inserts a
+    /// duplicate row after a failed lookup.
+    pub fn find_bulk_collection_by_upstream(
+        &self,
+        upstream_bulk_id: &str,
+    ) -> Result<Option<StoredBulkCollection>, HistoryError> {
+        let found: Option<String> = self.with_connection_result(|connection| {
+            connection
+                .query_row(
+                    "SELECT id FROM bulk_collections WHERE upstream_bulk_id = ?1",
+                    params![upstream_bulk_id],
+                    |row| row.get(0),
+                )
+                .map(Some)
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    _ => Err(HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "find bulk collection",
+                    )),
+                })
+        })?;
+        match found {
+            None => Ok(None),
+            Some(id) => {
+                let parsed = id.parse().map_err(|_| {
+                    HistoryError::from_sqlite(HistoryErrorCode::HistoryCorrupt, "read row")
+                })?;
+                self.get_bulk_collection(&parsed).map(Some)
+            }
+        }
+    }
+
+    /// Atomically refreshes one bulk collection with its children and their
+    /// current observation rows, in one transaction: the collection row
+    /// upserts on its identity, each child upserts on its
+    /// `(bulk_id, bulk_index)` membership, and each observation upserts on
+    /// its `(analysis_id, check_kind)` key. A commit persists one consistent
+    /// whole-collection snapshot; a rollback undoes all of it, so a
+    /// half-committed collection can never exist.
+    ///
+    /// Reconciliation preserves local authorship. The collection keeps its
+    /// original `created_at` (a later `bulk status`/`bulk wait` never moves
+    /// the job's first local stamp). Each child keeps its stored identity,
+    /// `submission_outcome`, `save_state`, `caller_id`, `created_at`, and
+    /// input payload (`input_json` and the search columns) exactly as first
+    /// recorded; the refresh moves only status, terminal bodies, and the
+    /// refresh stamps, so a remote-only observation never discards the input
+    /// text or descriptor the stored row already holds. A refreshed child's
+    /// observation rows are rebound onto the stored child identity so they
+    /// refresh the one child's task rows rather than dangling on the fresh
+    /// projection's identity (the child identity is stable across reads;
+    /// only the fresh projections mint new `anl_` values).
+    pub fn upsert_bulk_collection_atomic(
+        &mut self,
+        collection: &StoredBulkCollection,
+        children: &[(StoredAnalysis, Vec<StoredUpstreamTask>)],
+    ) -> Result<(), HistoryError> {
+        self.in_immediate_transaction(|transaction| {
+            super::reconcile::upsert_bulk_row_tx(transaction, collection)?;
+            for (child, observations) in children {
+                let stored_id =
+                    super::reconcile::upsert_child_row_tx(transaction, child, observations)?;
+                for task in observations {
+                    // Rebind onto the child's stored identity: a refreshed
+                    // child's row keeps its first-saved id, so its task rows
+                    // belong to that id, never to the ephemeral projection
+                    // id the read minted for its envelope.
+                    let rebound = StoredUpstreamTask {
+                        analysis_id: stored_id,
+                        ..task.clone()
+                    };
+                    upsert_observation_row(transaction, &rebound)?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Members of one bulk collection in index order.
+    ///
+    /// Same structural FTS rule as `get_analysis`: a member row missing its
+    /// synchronized search entry is corruption, not an absent payload.
+    pub fn list_bulk_analyses(&self, bulk: &BulkId) -> Result<Vec<StoredAnalysis>, HistoryError> {
+        self.with_connection_result(|connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT id, bulk_id, bulk_index, caller_id, status, submission_outcome,
+                            save_state, input_type, input_sha256, display_name, input_json,
+                            result_json, error_json, upstream_version, retry_of, rerun_of,
+                            created_at, updated_at, completed_at
+                     FROM analyses WHERE bulk_id = ?1 ORDER BY bulk_index",
+                )
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "list bulk analyses",
+                    )
+                })?;
+            let rows = statement
+                .query_map([bulk.to_string()], |row| row_to_analysis(row, connection))
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "list bulk analyses",
+                    )
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| match error {
+                    rusqlite::Error::InvalidQuery => HistoryError::new(
+                        HistoryErrorCode::HistoryCorrupt,
+                        "the history database is structurally inconsistent. \
+                         Move the history directory aside and rerun the command; \
+                         the original file is preserved.",
+                    ),
+                    _ => HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "list bulk analyses",
+                    ),
+                })?;
+            Ok(rows)
+        })
+    }
+
+    /// Fetches one full bulk collection row by its canonical identity.
+    pub fn get_bulk_collection(&self, id: &BulkId) -> Result<StoredBulkCollection, HistoryError> {
+        self.with_connection_result(|connection| {
+            connection
+                .query_row(
+                    "SELECT id, upstream_bulk_id, status, submission_outcome, total_items,
+                            accepted, succeeded, failed, estimated_billable_units, created_at,
+                            updated_at, completed_at
+                     FROM bulk_collections WHERE id = ?1",
+                    [id.to_string()],
+                    row_to_bulk,
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => HistoryError::new(
+                        HistoryErrorCode::NotFound,
+                        "no bulk collection with that identity is recorded",
+                    ),
+                    _ => HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "read bulk collection",
+                    ),
+                })
+        })
+    }
+}
+
+/// Inserts a new bulk collection row.
+fn insert_bulk_row(
+    transaction: &rusqlite::Transaction<'_>,
+    record: &StoredBulkCollection,
+) -> Result<(), HistoryError> {
+    let row = BulkRow::of(record);
+    transaction
+        .execute(BULK_INSERT, row.as_params())
+        .map_err(|_| {
+            HistoryError::from_sqlite(HistoryErrorCode::HistoryWriteFailed, "save bulk collection")
+        })?;
+    Ok(())
+}
+
+/// The column list shared by the `bulk_collections` insert and upsert.
+pub(super) const BULK_INSERT: &str = "INSERT INTO bulk_collections (
+    id, upstream_bulk_id, status, submission_outcome, total_items,
+    accepted, succeeded, failed, estimated_billable_units, created_at,
+    updated_at, completed_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";

@@ -20,7 +20,8 @@ use secrecy::ExposeSecret as _;
 use zeroize::Zeroizing;
 
 use crate::config::{
-    ConfigError, ConfigOverrides, ConfigService, CredentialService, CredentialSource,
+    ConfigError, ConfigKey, ConfigOverrides, ConfigService, ConfigValue, CredentialService,
+    CredentialSource,
 };
 use crate::diagnostics::{self, DiagnosticsContext, DiagnosticsError};
 use crate::output::{
@@ -365,8 +366,44 @@ fn config(
                     ),
                 );
             };
+            // ADR 0004: first enablement of durable plaintext history is
+            // always acknowledged. Recognition derives from the canonical
+            // typed grammar (never raw-string matching): the key resolves
+            // through `ConfigKey::parse` and the value through the typed
+            // bool parser, so every accepted spelling of the key (any
+            // casing or surrounding whitespace) and every accepted `true`
+            // spelling (case-insensitive, whitespace-tolerant) resolves to
+            // the exact transition. Read the prior effective value before
+            // the set so a transition (unset or `false` to `true`) emits
+            // exactly one direct plaintext warning on stderr; an idempotent
+            // re-set of an already-true value and any disable print
+            // nothing, and a failed set prints nothing. The warning is
+            // advisory only: the command still exits 0 and stdout stays the
+            // canonical machine-readable acknowledgement, so
+            // noninteractive automation is never prompted or broken.
+            let enabling_history = enables_history_transition(key, value);
+            let was_enabled = if enabling_history {
+                service
+                    .effective()
+                    .ok()
+                    .and_then(|config| config.history)
+                    .and_then(|history| history.enabled)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             match service.set(key, value) {
                 Ok(_) => {
+                    if enabling_history && !was_enabled {
+                        let mut stderr = std::io::stderr().lock();
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            stderr,
+                            "warning: history stores submitted content and results \
+                             unencrypted as plaintext in the local data directory"
+                        );
+                        let _ = stderr.flush();
+                    }
                     PhaseOneOutcome::success(CommandData::ConfigSet(MutationAcknowledgement::new()))
                 }
                 Err(error) => PhaseOneOutcome::failure(command, config_error(error)),
@@ -462,6 +499,20 @@ fn render_doctor_pretty(report: &DoctorStatus, out: &mut dyn Write) -> std::io::
         writeln!(out, "{line}")?;
     }
     out.flush()
+}
+
+/// Whether `config set KEY VALUE` is exactly the ADR 0004 transition: the
+/// canonical typed key resolves to `history.enabled` and the value parses,
+/// through the one typed bool grammar, to `true`. Both sides reuse the
+/// canonical `ConfigKey` model so accepted spellings (` HISTORY.ENABLED `,
+/// `history.enabled TRUE`) are recognized and a failed set (an unknown key
+/// or an invalid value) stays silent by construction.
+fn enables_history_transition(key: &str, value: &str) -> bool {
+    matches!(ConfigKey::parse(key), Ok(ConfigKey::HistoryEnabled))
+        && matches!(
+            ConfigKey::HistoryEnabled.parse_value(value),
+            Ok(ConfigValue::Bool(true))
+        )
 }
 
 fn auth_source(source: CredentialSource) -> AuthSource {

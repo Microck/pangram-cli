@@ -673,6 +673,20 @@ fn patch_output_definitions(definitions: &mut Value) {
         .expect("BulkItem required fields are an array")
         .push(json!("status"));
     object_mut(bulk_item).insert("oneOf".into(), state_payload_invariant("analysis"));
+    push_all_of(
+        bulk_item,
+        json!({
+            "if": {
+                "properties": {
+                    "status": {"enum": ["queued", "succeeded"]}
+                },
+                "required": ["status"]
+            },
+            "then": {
+                "not": {"required": ["last_stage"]}
+            }
+        }),
+    );
 
     let unknown_submission = definition_mut::<SubmissionOutcomeUnknownDetails>(definitions);
     let properties = object_mut(&mut unknown_submission["properties"]);

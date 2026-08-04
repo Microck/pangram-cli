@@ -200,6 +200,21 @@ impl BulkCollection {
     pub const fn estimated_billable_units(&self) -> Option<u64> {
         self.estimated_billable_units
     }
+
+    #[must_use]
+    pub const fn created_at(&self) -> UtcTimestamp {
+        self.created_at
+    }
+
+    #[must_use]
+    pub const fn updated_at(&self) -> UtcTimestamp {
+        self.updated_at
+    }
+
+    #[must_use]
+    pub const fn completed_at(&self) -> Option<UtcTimestamp> {
+        self.completed_at
+    }
 }
 
 #[derive(Deserialize)]
@@ -288,7 +303,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, JsonSchema, PartialEq, Serialize)]
 pub struct BulkItem<E> {
     pub index: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -300,8 +315,99 @@ pub struct BulkItem<E> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default, deserialize_with = "deserialize_missing_only")]
     pub upstream_task_id: Option<UpstreamTaskId>,
+    /// Sanitized provider diagnostic stage for running or failed items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(min = 1, max = 200),
+        regex(pattern = r"^[\x21-\x7e](?:[\x20-\x7e]{0,198}[\x21-\x7e])?$")
+    )]
+    last_stage: Option<String>,
     #[serde(flatten)]
     pub state: BulkItemState<E>,
+}
+
+impl<E> BulkItem<E> {
+    pub fn new(
+        index: u64,
+        caller_id: Option<String>,
+        analysis_id: Option<AnalysisId>,
+        upstream_task_id: Option<UpstreamTaskId>,
+        last_stage: Option<String>,
+        state: BulkItemState<E>,
+    ) -> Result<Self, DomainError> {
+        if last_stage.is_some()
+            && !matches!(
+                &state,
+                BulkItemState::Running | BulkItemState::Failed { .. }
+            )
+        {
+            return Err(DomainError::InvalidState("bulk item last_stage"));
+        }
+        if let Some(stage) = last_stage.as_deref() {
+            if !valid_sanitized_stage(stage) {
+                return Err(DomainError::InvalidState("bulk item last_stage"));
+            }
+        }
+        Ok(Self {
+            index,
+            caller_id,
+            analysis_id,
+            upstream_task_id,
+            last_stage,
+            state,
+        })
+    }
+
+    #[must_use]
+    pub fn last_stage(&self) -> Option<&str> {
+        self.last_stage.as_deref()
+    }
+}
+
+fn valid_sanitized_stage(stage: &str) -> bool {
+    !stage.is_empty()
+        && stage.chars().count() <= 200
+        && stage.trim() == stage
+        && stage
+            .chars()
+            .all(|character| character.is_ascii() && !character.is_ascii_control())
+}
+
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "E: Deserialize<'de>"))]
+struct BulkItemWire<E> {
+    index: u64,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    caller_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    analysis_id: Option<AnalysisId>,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    upstream_task_id: Option<UpstreamTaskId>,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    last_stage: Option<String>,
+    #[serde(flatten)]
+    state: BulkItemState<E>,
+}
+
+impl<'de, E> Deserialize<'de> for BulkItem<E>
+where
+    E: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BulkItemWire::deserialize(deserializer)?;
+        Self::new(
+            wire.index,
+            wire.caller_id,
+            wire.analysis_id,
+            wire.upstream_task_id,
+            wire.last_stage,
+            wire.state,
+        )
+        .map_err(D::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize)]

@@ -412,11 +412,11 @@ async fn mixed_running_and_failed_positions_normalize_in_order() {
         "items": [
             {"index": 1, "id": "row-001", "task_id": "t1", "stage": "STAGE_SUCCESS",
              "error": null, "result": success_result("One")},
-            {"index": 2, "id": "row-002", "task_id": "t2", "stage": "STAGE_INFERENCE",
+            {"index": 2, "id": "row-002", "task_id": "t2", "stage": "STAGE_\u{1b}[31mINFERENCE",
              "error": null, "result": null}
         ],
         "failed_items": [
-            {"index": 0, "id": "row-000", "task_id": null, "stage": "STAGE_FAILED",
+            {"index": 0, "id": "row-000", "task_id": null, "stage": "STAGE_\nFAILED",
              "error": "Text must contain at least one valid token"}
         ]
     })));
@@ -436,10 +436,12 @@ async fn mixed_running_and_failed_positions_normalize_in_order() {
     assert_eq!(items.len(), 3, "succeeded + running + failed");
     assert_eq!(items[0].index, 0);
     assert!(matches!(items[0].state, BulkItemState::Failed { .. }));
+    assert_eq!(items[0].last_stage(), Some("STAGE_ FAILED"));
     assert_eq!(items[1].index, 1);
     assert!(matches!(items[1].state, BulkItemState::Succeeded { .. }));
     assert_eq!(items[2].index, 2);
     assert!(matches!(items[2].state, BulkItemState::Running));
+    assert_eq!(items[2].last_stage(), Some("STAGE_[31mINFERENCE"));
     fixture.shutdown().await;
 }
 

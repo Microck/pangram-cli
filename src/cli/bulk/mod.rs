@@ -70,14 +70,17 @@ pub(crate) fn execute(
 }
 
 /// Builds configuration, credentials, and the analyzer for a bulk/task
-/// request. Shared with detection through the process-owned preparation.
+/// request. Shared with detection through the process-owned preparation; the
+/// service rides along so the automatic history gate honors the same
+/// `--data-dir`/environment precedence as the analysis client.
 pub(super) fn prepare(
     resolved: ResolvedCommand,
     root_matches: &ArgMatches,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
-) -> Result<Analyzer, DetectOutcome> {
+) -> Result<(Analyzer, crate::config::ConfigService), DetectOutcome> {
     super::prepare_detection(resolved, root_matches, output, started)
+        .map(|prepared| (prepared.analyzer, prepared.service))
 }
 
 /// A success outcome for one canonical data payload, through the one

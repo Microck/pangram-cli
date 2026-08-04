@@ -26,17 +26,42 @@
 //! this is the only history module. History remains disabled by default; no
 //! adapter surface is activated by this packet.
 
-mod operations;
+mod analysis_writes;
+mod collections;
+mod reads;
+mod reconcile;
 mod records;
+pub(crate) mod save;
+mod schema_v1;
+mod sidecars;
 mod store;
+mod wire;
 
-pub use operations::TerminalResult;
+pub use analysis_writes::{ObservationSnapshot, TerminalResult};
+pub use reconcile::{ReconciledAnalysis, ReconciledBulk};
 pub use records::{
     InputKind, StoredAnalysis, StoredBulkCollection, StoredSearchHit, StoredUpstreamTask,
 };
 pub use store::{DATABASE_DIRECTORY_NAME, DATABASE_FILE_NAME, HistoryStore, SCHEMA_VERSION};
 
 use std::fmt;
+
+impl HistoryError {
+    /// The adapter-facing canonical error for one history failure. Messages
+    /// are already sanitized by construction (operation and platform state
+    /// only), so they copy through unchanged.
+    #[must_use]
+    pub fn into_canonical(&self) -> crate::output::CanonicalError {
+        crate::output::CanonicalError::new(self.code().canonical(), self.message().to_owned())
+            .unwrap_or_else(|_| {
+                crate::output::CanonicalError::new(
+                    crate::output::ErrorCode::HistoryUnavailable,
+                    "history is unavailable",
+                )
+                .expect("static fallback")
+            })
+    }
+}
 
 use thiserror::Error;
 

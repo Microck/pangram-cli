@@ -727,6 +727,262 @@ behavior enters this queue before implementation continues through that seam.
   the package bump is patch (foundation only). Phase 4 stays In progress;
   history commands, the analysis `--save` seam, and their adapter contract
   tests are subsequent packets.
+- 2026-08-02: The third bounded Phase 4 packet activates explicit `--save`
+  and automatic history-save integration at the adapter surface
+  (contracts.md 14.2 note), landing its independent-review remediation
+  contract-first and test-first in the same change. The observable surface:
+  `pangram detect --save` (manual, `saved_manual`) and the
+  `history.enabled = true` automatic gate (`saved_history`) persist every
+  completed detection (the terminal snapshot, its FTS payload, and one
+  `upstream_tasks` observation row per check) atomically, in one
+  transaction each (`HistoryStore::save_analysis_atomic`). Repeated-file
+  runs preserve the ordered tail after any one member's manual save
+  failure: every completed member renders exactly once in invocation order
+  with its own honest save state, and a later member still persists before
+  the canonical exit-7 envelope closes the series. An automatic save
+  failure emits exactly one sanitized `warning:` line per invocation and
+  never degrades a remote outcome; a primary render failure reports exit
+  1, never masked behind the history exit 7. Remotely observed reads
+  reconcile by upstream identity: repeated `task status`/`task wait` reads
+  refresh the one stored analysis row (`history::save::observation_merge`
+  + `update_observation_snapshot`), preserving the row's original
+  submission outcome, save state, local input/filename/FTS payload, and
+  creation time, while each fresh read's output keeps its own fresh `anl_`
+  identity and its own save outcome. Bulk submissions and observations
+  reconcile one `bulk_collections` row by `upstream_bulk_id`
+  (`find_bulk_collection_by_upstream` distinguishes SQL not-found from a
+  failure) with children and observation rows refreshed atomically
+  (`upsert_bulk_collection_atomic`) and local metadata (identity, caller
+  ID, input payload, creation time) preserved; accepted 202 children
+  persist truthfully with their attested task IDs, failed children with
+  their canonical check error, and unattested items stay `not_submitted`.
+  First enablement of durable plaintext history
+  (`config set history.enabled true` after unset/false) acknowledges
+  ADR 0004 with exactly one direct plaintext warning on stderr while the
+  command still exits 0; repeats, disables, and failed sets print nothing.
+  The remediation decomposed `src/history/operations.rs` into
+  `analysis_writes.rs`/`collections.rs`/`reads.rs`/`wire.rs` and split the
+  history-save loopback suite into persistence
+  (`history-save-detect-loopback.rs`, 404 lines), the detect
+  failure/render-precedence semantics
+  (`history-save-failures-loopback.rs`, 381 lines), the task/bulk
+  reconciliation and ADR 0004 transitions
+  (`history-save-reconciliation-loopback.rs`, 559 lines), and the
+  deterministic mixed-outcome proof
+  (`history-save-mixed-outcome-loopback.rs`, 350 lines), all over a shared
+  real harness (`tests/support/history_save_env.rs`) and all under the
+  800-line hygiene threshold. Five new real-SQLite store tests
+  (`tests/history-store-atomic.rs`, `tests/history-store-collections.rs`)
+  prove row+FTS+observation atomicity, whole-batch rollback, upstream-id
+  dedupe, and authorship preservation; seven detect failure semantics
+  loopback tests prove the manual ordered tail, one-warning automatic
+  failures (a single direct `warning:` line, never `note: warning:`), and
+  render precedence on `/dev/full`; seven reconciliation loopback tests
+  prove task refresh invariance with fresh output identity, bulk
+  dedupe/truthful children, and the ADR 0004 warning transitions; and the
+  deterministic mixed-outcome loopback test proves one member's real
+  SQLite insert failure leaves the ordered tail intact (the later member
+  persists with its row, FTS payload, and observation; exit 7 closes the
+  series). The package bump is minor for both packages (a new
+  user-visible capability). The history read, search, export, and
+  mutation commands remain planned for a later packet; MCP history stays
+  ungated.
+- 2026-08-02: The Packet C independent-review remediation folded
+  contract-first and test-first into the same change. The normative docs
+  (contracts.md 14.2 note, docs/history-contract.md) lock the durable
+  authorship invariance (a non-terminal refresh never erases an attested
+  terminal body), the accepted-children honesty rule (the HTTP 202 truth,
+  never fabricated all-queued children), the observed-children refresh for
+  every armed bulk read, and the narrow render-loss precedence (a failed
+  primary render always owns exit 1; the history attachment can never
+  overwrite it with exit 7). `RunningBulk::acceptance_children` plus the
+  new `src/analysis/bulk/children.rs` (split out of `assemble.rs` to stay
+  under the 1,000-line hygiene gate) now project the honest children of
+  the validated acceptance, and `Analyzer::bulk_observed_children` keeps
+  `bulk submit --wait`, `bulk status`, and `bulk wait` refreshing the same
+  `(bulk_id, bulk_index)` children from the documented results window. The
+  store coalesces terminal bodies on every refresh, and
+  `find_analysis_by_task` resolves deterministically (`ORDER BY
+  analysis_id`). The render layer tracks `primary_ok` and is exercised
+  through scripted faulting sinks plus a compiled `/dev/full` invocation.
+  The FileOrigin is honest per source (`file` with the JSONL basename for
+  a real file submission; `stdin` otherwise). Compiled loopback and
+  real-SQLite coverage gained the JSONL mixed-acceptance blocked-save
+  proof, the armed-history children refresh and one-warning fallback, the
+  deterministic task-lookup and bulk-child coalesce proofs, the text- and
+  JSON-surface render-precedence attribution, and three fetch-all drift
+  guards (a duplicated source position, an out-of-total position, and a
+  non-advancing empty page). Validation is complete on the disposable
+  Oracle Paris Crabbox box (slug `p4c-p2u-7d4b6b71-1595`): `cargo fmt
+  --check`, strict all-target Clippy under `-D warnings`, and the full
+  locked all-feature suite pass on stable Rust 1.97.1 (463 tests across
+  30 result groups, 0 failures) and under MSRV Rust 1.87.0 (build plus
+  the same 463 tests); generated contracts show no drift; `cargo audit`
+  reports no vulnerabilities over the 323-crate lockfile; the CI
+  `cargo deny check licenses` allow-list reports licenses ok;
+  `tools/check-hygiene.rs` passes with no errors.
+
+## Packet C remediation history (2026-08-02 to 2026-08-03)
+
+Rounds 1 through 5 folded independent-review findings into Packet C before
+its final certification pass:
+
+- Real SQLite and compiled-loopback coverage locked ordered-tail persistence,
+  one-warning automatic failures, render-failure precedence, and truthful bulk
+  acceptance children. History and bulk modules were decomposed below the
+  source-size gates without changing behavior.
+- Typed `history.enabled` transitions now warn exactly once for every accepted
+  true spelling, and acceptance-failed children preserve caller-owned JSONL
+  origin, basename, plaintext, and FTS data without inventing task identity.
+- Task and bulk identity reconciliation moved into bounded-retry `IMMEDIATE`
+  transactions with schema-enforced uniqueness. Concurrent real-store tests
+  prove deduplication, rollback, authorship preservation, and one invocation
+  warning across children-read and persistence phases.
+- The first exact-schema remediation rejected incompatible `user_version = 1`
+  bodies before any write pragma, preserving their bytes, and primary render
+  failures began carrying `primary_ok = false` through both JSON and text
+  outcome chains. The final certification below tightens that schema probe to
+  the complete catalog and closes the remaining task-first ordering gap.
+
+All five folds used disposable Oracle Paris aarch64 containers with isolated
+workroots and targets; stable and MSRV tests, strict Clippy, generated drift,
+audit/deny, hygiene, inventory, and secret/privacy checks passed for each
+recorded fold. One round-3 `crabbox warmup` accidentally claimed and immediately
+released `static_yoga` before any command ran; no Yoga workroot or cache was
+read or written. AGENTS.md remained excluded, and no credits, push, or PR were
+used.
+
+### Packet C remediation fold, round 6 (2026-08-03)
+
+Certification of the folded Packet C change `f7732c07` found two P1
+correctness defects; both are fixed contract-first and test-first in the
+same Packet C change with no observable scope change beyond the contracts
+themselves:
+
+- Exact schema-v1 catalog validation (P1). The round-5 structural probe
+  verified only name/kind presence plus four spot uniqueness/cascade
+  rules, so near-miss v1 bodies passed falsely: a wrong
+  `bulk_collections` unique column, a missing or wrong primary key, a
+  named index with wrong ordered columns (or a sneaked-in
+  `CREATE UNIQUE INDEX` reusing a contracted name), column nullability or
+  declared-type drift, a missing or retargeted foreign key, or an FTS5
+  table with wrong columns or tokenizer all opened as if they carried
+  the exact v1 surface. docs/history-contract.md now locks the exact v1
+  catalog surface section (every base table's full ordered columns with
+  declared types, nullability, and defaults; the exact primary keys; the
+  exact uniqueness index surface by origin and ordered columns, including
+  specifically `bulk_collections.upstream_bulk_id`; the two named indexes
+  with their ordered columns, uniqueness, and `created_at` direction and
+  a global named-index count that rejects extras; every foreign key with
+  its exact actions; and `analysis_search` as the exact FTS5 virtual
+  table with its contracted columns and `unicode61` tokenizer), and the
+  probe lives in the cohesive sibling `src/history/schema_v1.rs` (`store.rs`
+  at 594 lines and the probe at 635 lines stay under the
+  thresholds). The probe runs on every open strictly before any write
+  pragma, so a rejection still leaves the original file byte-for-byte
+  preserved. Real-SQLite regressions
+  (`tests/history-store-schema.rs`) build eighteen named incompatible
+  variants derived from the exact production body (wrong bulk unique
+  column; missing and wrong analyses primary keys; swapped status-index
+  columns; a unique bulk index masquerading under the contracted name;
+  nullability, declared-type, and default drift; the missing
+  pair-uniqueness, a missing or extra named index, an extra application
+  table, and the wrong cascade action; missing or retargeted lineage
+  foreign keys; and wrong FTS5 columns and tokenizer)
+  and prove each fails closed as `history_corrupt` with the original
+  bytes preserved, while the exact current body still opens and reopens
+  cleanly.
+- Order-independent task/bulk reconciliation (P1). A standalone task
+  observation saved before a bulk read of the same upstream task made the
+  bulk child insert collide with `UNIQUE (check_kind, upstream_task_id)`
+  and roll its whole batch back. contracts.md 14.2 and
+  docs/history-contract.md now lock the order-independence semantics:
+  inside the one immediate write transaction each bulk child resolves by
+  its membership AND every attested `(check_kind, upstream_task_id)` key
+  together, reusing the one existing durable row when they agree (a
+  standalone row gains its membership link through a refresh-only UPDATE
+  (never an INSERT), but a row already belonging to another collection or
+  position, or carrying only half a membership, fails closed rather than
+  being moved). A task-less bulk child cannot be correlated from a later
+  standalone task read alone. If it creates a distinct task-owning row, a
+  later bulk observation of that task against the occupied task-less membership
+  fails as ambiguous `history_corrupt` without merging evidence. Without that
+  competing row, the bulk read attaches the task to the membership. Reuse
+  preserves identity, authorship, save state, local input/FTS payload, and
+  creation time, and failing closed
+  as `history_write_failed` with the whole batch rolled back when the
+  candidates conflict (two task keys resolving two different rows, a
+  task-key row different from the membership row, or a membership holder
+  attesting an overlapping but different task set, including a replacement
+  task ID for the same check kind, or one candidate attesting two task IDs
+  for one check kind). The standalone task reconcile resolves across ALL
+  attested task keys, preserving bulk-first and failing contradictory reads
+  closed instead of picking or replacing a row. Real-SQLite coverage in
+  `tests/history-store-reconcile-{order,ambiguity}.rs` proves task-first adoption,
+  evidence-driven bulk-refresh-then-task reconciliation, no fabricated
+  direct adoption, cross-position and cross-collection rollback, conflicting
+  task-identity and occupied-membership rollback (whole batch, unrelated rows untouched),
+  same-key convergence before a later bulk read, no duplicate rows, and
+  preserved authorship/local input; compiled loopback coverage
+  `tests/history-save-order-loopback.rs` (split to stay under 800 lines) proves both
+  directions end to end through the compiled binary with no automatic-save
+  warning on an honest read.
+- Terminal body reconciliation is branch-aware on standalone, membership,
+  and adoption refreshes: body-empty terminal observations preserve the
+  stored body even when `completed_at` is present, a result clears a stale
+  error, an error clears a stale result, and both-present input fails the
+  atomic write closed.
+
+Validation for round 6 ran on the dedicated disposable Oracle Paris aarch64
+container `1d798b846d63` (lease `cbx_18e74e5a40ba`, slug
+`p4c-final-p1-7f3a9c`, SSH port 22896) through the explicit
+`crabbox-paris-provider.sh` provider and then its direct Oracle SSH workflow
+after the local warmup client timed out while the healthy container continued
+starting. Isolation was verified inside the box (`uname -m = aarch64`,
+`overlay` root), with unique workroot and stable/MSRV/tool targets. The Yoga
+Windows SSH host, static `local-container`, repo jobs, and `remoteuse-*`
+leases were never used.
+
+Stable Rust 1.97.1 formatting, 489 locked all-feature tests across 37 result
+groups, strict all-target Clippy, generated-contract regeneration with no
+drift, the 323-crate inventory, and the hygiene gate passed. Rust 1.87.0
+passed the locked all-feature build and the same 489 tests. Pinned
+`cargo-audit` 0.22.2 found no vulnerabilities in the 323-crate lockfile,
+`cargo-deny` 0.20.2 reported `licenses ok` under the CI allow-list, and the
+checksum-verified gitleaks 8.30.1 aarch64 directory scan found no leaks.
+No Pangram credits were spent; AGENTS.md remains the user's byte-exact
+uncommitted local edit; no push, no PR. Phase 4 stays In progress.
+
+### Packet C final certification remediation (2026-08-03)
+
+Certification of Packet C `083fe8b0` found two P1 correctness gaps and one P2
+maintainability gap, fixed without expanding the public history surface:
+
+- Exact-v1 validation now checks each identity and named index's uniqueness,
+  origin, `partial = 0`, ordered real key rows, `BINARY` collation, and sort
+  direction. Real SQLite collation, partial, expression, extra-key, origin,
+  and direction near misses fail before mutation with bytes preserved.
+- Standalone task reconciliation compares every incoming key with all evidence
+  owned by the selected row before mutation. Add and exact-refresh are allowed;
+  same-kind replacement rolls back; omitted kinds survive. Real SQLite tests
+  cover selection by another key, add/same/omitted cases, and concurrency.
+- The 885-line reconcile module is split into task, bulk, and common modules
+  below 800 lines, preserving one `HistoryStore` and its public API.
+
+Final exactness validation used explicit Oracle Paris external-provider
+container `cbx-pangram-p4c-ddl-recovery` (lease `cbx_e9fdd7257e90`), isolated
+workroots, its per-lease key, and an SSH `ProxyCommand`. Stable 1.97.1 passed
+formatting, 506 tests, Clippy, drift, inventory, and hygiene; MSRV 1.87.0
+passed the locked all-feature build and tests. Audit 0.22.2, deny 0.20.2, and
+checksum-verified gitleaks 8.30.1 passed. No credits, Yoga/static/repo jobs,
+local Docker, push, or PR were used; `AGENTS.md` stayed excluded and byte-exact.
+- 2026-08-04: Packet C first-open schema creation serializes under one SQLite `IMMEDIATE` transaction; real thread/process and rollback races pass.
+- 2026-08-04: Packet C closes the final exact-schema P1 by deriving a complete
+  canonical `sqlite_master` catalog from compiled `SCHEMA_V1` in isolated
+  memory before mutation, with PRAGMAs retained as a second probe. Real SQLite
+  tests reject hidden foreign-key, conflict-policy, and FTS5-option clauses
+  byte-preservingly while harmless SQL spelling and first open stay green.
+- 2026-08-05: Packet C final certification remediation disables URI parsing for literal filesystem history paths, rejects `detect --save --detach` before work, and keeps automatic detached snapshots ephemeral until terminal task evidence is observed; real Unix path and compiled CLI/loopback/SQLite regressions cover both findings.
 
 ## Out of scope
 

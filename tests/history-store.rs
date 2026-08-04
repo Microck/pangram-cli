@@ -59,6 +59,7 @@ fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
         input_json: format!("{{\"type\":\"text\",\"text\":{input_text:?},\"word_count\":4}}"),
         result_json: Some("{\"checks\":[]}".to_owned()),
         error_json: None,
+        upstream_version: Some("4.0".to_owned()),
         retry_of: None,
         rerun_of: None,
         created_at: timestamp("2026-08-01T10:00:00Z"),
@@ -145,6 +146,7 @@ fn fresh_database_exactly_matches_contract_schema_v1() {
         "input_json TEXT NOT NULL",
         "result_json TEXT",
         "error_json TEXT",
+        "upstream_version TEXT",
         "retry_of TEXT REFERENCES analyses(id)",
         "rerun_of TEXT REFERENCES analyses(id)",
         "created_at TEXT NOT NULL",
@@ -161,7 +163,7 @@ fn fresh_database_exactly_matches_contract_schema_v1() {
     let bulk = table("bulk_collections");
     for column in [
         "id TEXT PRIMARY KEY",
-        "upstream_bulk_id TEXT",
+        "upstream_bulk_id TEXT UNIQUE",
         "status TEXT NOT NULL",
         "submission_outcome TEXT NOT NULL",
         "total_items INTEGER NOT NULL",
@@ -187,6 +189,7 @@ fn fresh_database_exactly_matches_contract_schema_v1() {
         "last_stage TEXT",
         "observed_at TEXT NOT NULL",
         "PRIMARY KEY (analysis_id, check_kind)",
+        "UNIQUE (check_kind, upstream_task_id)",
     ] {
         assert!(
             tasks.contains(column),
@@ -354,6 +357,7 @@ fn save_analysis_persists_typed_columns_json_and_fts_in_one_transaction() {
 
     let stored = store.get_analysis(&record.id).unwrap();
     assert_eq!(stored, record);
+    assert_eq!(stored.upstream_version.as_deref(), Some("4.0"));
 
     let hits = store.search("mitochondria", 10).unwrap();
     assert_eq!(hits.len(), 1);
@@ -391,6 +395,7 @@ fn record_observation_updates_tasks_and_result_atomically() {
                 submission_outcome: SubmissionOutcome::Terminal,
                 result_json: Some("{\"checks\":[{\"kind\":\"ai_detection\"}]}".to_owned()),
                 error_json: None,
+                upstream_version: Some("4.1".to_owned()),
                 completed_at: timestamp("2026-08-01T10:06:00Z"),
                 search_input_text: Some("observed content".to_owned()),
                 search_filename: None,
@@ -408,6 +413,7 @@ fn record_observation_updates_tasks_and_result_atomically() {
     );
     assert_eq!(stored.completed_at, Some(timestamp("2026-08-01T10:06:00Z")));
     assert_eq!(stored.search_headline.as_deref(), Some("mostly AI"));
+    assert_eq!(stored.upstream_version.as_deref(), Some("4.1"));
 
     let (task_id, stage): (String, String) = store
         .with_connection(|connection| {
@@ -592,6 +598,7 @@ fn a_corrupt_database_file_fails_closed_without_replacement() {
 mod protection {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn create_establishes_owner_only_directory_and_file_modes() {
@@ -647,6 +654,26 @@ mod protection {
 
         let error = HistoryStore::open(root.path()).unwrap_err();
         assert_eq!(error.code(), HistoryErrorCode::InsecureHistoryPermissions);
+    }
+
+    #[test]
+    fn a_database_symlink_is_rejected_before_sqlite_and_preserves_its_target() {
+        let root = tempfile::tempdir().unwrap();
+        let history = root.path().join("history");
+        fs::create_dir(&history).unwrap();
+        fs::set_permissions(&history, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let target = root.path().join("protected-target");
+        let sentinel = b"not a sqlite database and never to be touched";
+        fs::write(&target, sentinel).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&target, history.join("pangram-history.db")).unwrap();
+
+        let error = HistoryStore::open(root.path()).unwrap_err();
+        assert_eq!(error.code(), HistoryErrorCode::HistoryUnavailable);
+        assert_eq!(fs::read(&target).unwrap(), sentinel);
+        assert!(!root.path().join("protected-target-wal").exists());
+        assert!(!root.path().join("protected-target-shm").exists());
     }
 }
 

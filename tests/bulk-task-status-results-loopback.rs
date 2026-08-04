@@ -485,6 +485,51 @@ async fn bulk_results_textless_success_exits_0_without_contract_drift() {
     fixture.shutdown().await;
 }
 
+// A remote-only results read keeps every piece of evidence already validated
+// on the terminal child analysis. The history child projector consumes this
+// same value, so this compiled-flow assertion prevents the returned child
+// from losing its upstream-attested input descriptor, version, task ID, or
+// last stage before persistence.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_preserves_terminal_child_input_and_upstream_evidence() {
+    let text = "attested remote result metadata survives projection";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": TASK_ID, "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success(text)}
+        ],
+        "failed_items": []
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID, "--limit", "100"])
+        .output()
+        .expect("run bulk results with complete terminal evidence");
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    let analysis = &envelope["data"]["items"][0]["analysis"];
+    assert_eq!(analysis["input"]["origin"], "unknown");
+    assert_eq!(analysis["input"]["byte_count"], text.len());
+    assert_eq!(
+        analysis["input"]["word_count"],
+        text.split_whitespace().count()
+    );
+    assert_eq!(analysis["provenance"]["upstream_version"], "4.0");
+    assert_eq!(analysis["provenance"]["upstream_task_ids"][0], TASK_ID);
+    assert_eq!(
+        analysis["checks"][0]["upstream"]["last_stage"],
+        "STAGE_SUCCESS"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
 // A fetch-all read over a multi-page job reassembles every walked page into
 // one canonical aggregate window: `offset: 0`, `limit: max(1, total_items)`
 // bounded by 1,000 (the complete set, not the 100-item walk granularity),
@@ -748,6 +793,108 @@ async fn task_wait_jsonl_progress_is_content_free_and_on_stderr() {
             "no content in progress: {event}"
         );
     }
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A fetch-all results walk over pages that repeat one source position is
+// contract drift, never merged silently: the process fails closed as
+// `upstream_contract_changed` with the network-or-upstream exit (6).
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_fetch_all_rejects_a_duplicate_position_across_pages() {
+    let fixture = ProtocolFixture::start().await;
+    // First page covers position 0 of a 2-position job; the same position
+    // arrives again on the next page (no union coverage advance).
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-000", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("first synthetic words")}
+        ],
+        "failed_items": []
+    })));
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 1,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-000", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("first synthetic words")}
+        ],
+        "failed_items": []
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID])
+        .output()
+        .expect("run bulk results with a duplicated position across pages");
+    assert_eq!(output.status.code(), Some(6));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "upstream_contract_changed");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// A fetch-all walk whose page carries a source position at or beyond the
+// job total is contract drift (no position can be `>= total_items`).
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_fetch_all_rejects_a_position_at_or_above_the_total() {
+    let fixture = ProtocolFixture::start().await;
+    // total_items=1 but the page claims source position 1: not covered by
+    // any valid window, so the read fails contract-clean.
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 1, "id": "row-001", "task_id": "task-001", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("spilled words")}
+        ],
+        "failed_items": []
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID])
+        .output()
+        .expect("run bulk results with an out-of-total position");
+    assert_eq!(output.status.code(), Some(6));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "upstream_contract_changed");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+// The documented page window validation failure (an empty page while
+// positions remain uncovered: non-advancing drift) also fails closed with
+// the contract category because an empty page can never terminate a
+// partially-covered fetch-all walk as a fake success.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_fetch_all_rejects_an_empty_page_before_full_coverage() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [],
+        "failed_items": []
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID])
+        .output()
+        .expect("run bulk results with a non-advancing empty page");
+    assert_eq!(output.status.code(), Some(6));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["error"]["code"], "upstream_contract_changed");
     assert_no_leak(&output);
     fixture.shutdown().await;
 }

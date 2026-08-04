@@ -13,7 +13,7 @@ mod onboarding;
 mod overrides;
 mod paths;
 #[cfg(windows)]
-mod windows_acl;
+pub(crate) mod windows_acl;
 
 pub use credentials::{
     CREDENTIALS_FILE_NAME, CredentialResolution, CredentialService, CredentialSource,

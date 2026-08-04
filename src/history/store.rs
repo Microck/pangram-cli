@@ -5,7 +5,6 @@
 //! applied per connection and read back through the same connection so the
 //! runtime value is proven, matching the Packet A probe style.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
@@ -17,10 +16,10 @@ pub const DATABASE_FILE_NAME: &str = "pangram-history.db";
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// The schema body docs/history-contract.md locks at `user_version = 1`.
-const SCHEMA_V1: &str = "
+pub(super) const SCHEMA_V1: &str = "
 CREATE TABLE bulk_collections (
   id TEXT PRIMARY KEY,
-  upstream_bulk_id TEXT,
+  upstream_bulk_id TEXT UNIQUE,
   status TEXT NOT NULL,
   submission_outcome TEXT NOT NULL,
   total_items INTEGER NOT NULL,
@@ -47,6 +46,7 @@ CREATE TABLE analyses (
   input_json TEXT NOT NULL,
   result_json TEXT,
   error_json TEXT,
+  upstream_version TEXT,
   retry_of TEXT REFERENCES analyses(id),
   rerun_of TEXT REFERENCES analyses(id),
   created_at TEXT NOT NULL,
@@ -61,7 +61,8 @@ CREATE TABLE upstream_tasks (
   upstream_task_id TEXT NOT NULL,
   last_stage TEXT,
   observed_at TEXT NOT NULL,
-  PRIMARY KEY (analysis_id, check_kind)
+  PRIMARY KEY (analysis_id, check_kind),
+  UNIQUE (check_kind, upstream_task_id)
 );
 
 CREATE VIRTUAL TABLE analysis_search USING fts5(
@@ -84,7 +85,7 @@ CREATE INDEX analyses_bulk_index
 /// adapters hold the store itself rather than borrowing the connection.
 #[derive(Debug)]
 pub struct HistoryStore {
-    connection: Connection,
+    connection: super::sidecars::GuardedConnection<super::sidecars::SidecarGuards, Connection>,
 }
 
 impl HistoryStore {
@@ -98,110 +99,109 @@ impl HistoryStore {
     /// Root-relative open for tests and tooling. The history directory is
     /// `directory_name` itself; `open` is the adapter-facing entry point.
     pub(crate) fn open_in(directory: PathBuf) -> Result<Self, HistoryError> {
+        Self::open_in_after_sidecar_checks(directory, || {})
+    }
+
+    pub(super) fn open_in_after_sidecar_checks(
+        directory: PathBuf,
+        after_sidecar_checks: impl FnOnce(),
+    ) -> Result<Self, HistoryError> {
+        // SQLite is compiled with URI support, so a relative filename that
+        // begins with `file:` could still acquire URI semantics even when
+        // SQLITE_OPEN_URI is absent. Make the user-selected directory
+        // absolute lexically before protection and opening: the resulting
+        // database filename cannot begin with the URI scheme, while every
+        // literal component (including `?` and `#`) remains unchanged.
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            std::env::current_dir()
+                .map_err(|_| {
+                    HistoryError::new(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "the history database path could not be resolved",
+                    )
+                })?
+                .join(directory)
+        };
         protection::establish_directory(&directory)?;
         let database = directory.join(DATABASE_FILE_NAME);
+        protection::establish_file(&database)?;
 
-        let exists = match fs::metadata(&database) {
-            Ok(metadata) => {
-                if !metadata.is_file() {
-                    return Err(HistoryError::new(
-                        HistoryErrorCode::HistoryUnavailable,
-                        "history database path is not a regular file",
-                    ));
-                }
-                true
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(_) => {
-                return Err(HistoryError::new(
-                    HistoryErrorCode::HistoryUnavailable,
-                    "cannot inspect the history database path",
-                ));
-            }
-        };
-
-        if exists {
-            protection::verify_file(&database)?;
+        let sidecars = [
+            database.with_extension("db-wal"),
+            database.with_extension("db-shm"),
+        ];
+        // Existing sidecars can be consulted by SQLite while opening or on
+        // the first read. Validate them before constructing any SQLite handle
+        // so a hostile alias cannot redirect recovery I/O or mutate either
+        // the database or its target.
+        for sidecar in &sidecars {
+            protection::verify_file_if_present(sidecar)?;
         }
+        let sidecar_guards = super::sidecars::SidecarGuards::pin(&sidecars)?;
+        after_sidecar_checks();
 
         // `Connection::open` is lazy: SQLite identifies the file format on
         // first real I/O. That is the integrity probe below; classifying a
         // mismatched file as corruption happens there, not here.
-        let connection = Connection::open(&database).map_err(|_| {
-            HistoryError::new(
-                HistoryErrorCode::HistoryUnavailable,
-                "SQLite could not open the history database",
-            )
-        })?;
+        let open_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let connection = super::sidecars::GuardedConnection::open_and_verify(
+            sidecar_guards,
+            || {
+                Connection::open_with_flags(&database, open_flags).map_err(|_| {
+                    HistoryError::new(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "SQLite could not open the history database",
+                    )
+                })
+            },
+            |_| {
+                // WAL and SHM sidecars created by a prior run must carry the
+                // same owner-only protection as the database itself; an
+                // insecure sidecar fails closed the same way the database
+                // would. The connection is already inside its lifetime guard,
+                // so this fallible check preserves close ordering on failure.
+                for sidecar in &sidecars {
+                    protection::verify_file_if_present(sidecar)?;
+                }
+                Ok(())
+            },
+        )?;
 
-        // A brand-new file must become owner-only before any page is written.
-        if !exists {
-            protection::restrict_file(&database)?;
-        }
-        // WAL and SHM sidecars created by a prior run must carry the same
-        // owner-only protection as the database itself; an insecure sidecar
-        // fails closed the same way the database would.
-        for sidecar in [
-            database.with_extension("db-wal"),
-            database.with_extension("db-shm"),
-        ] {
-            if sidecar.exists() {
-                protection::verify_file(&sidecar)?;
-            }
-        }
+        let mut store = Self { connection };
+        // Busy waiting is connection-local and does not mutate the database.
+        // It must precede the schema lock so concurrent first-use processes
+        // wait for the initializer instead of surfacing a transient failure.
+        store.set_busy_timeout()?;
 
-        let store = Self { connection };
-        // Corruption surfaces here, before any write pragma is tried.
-        if exists {
-            store.integrity_probe()?;
-        }
+        // Corruption surfaces before the schema transaction or any write
+        // pragma. SQLite treats a protected zero-byte file as an empty
+        // database, which is the one crash-left state initialization accepts.
+        store.integrity_probe()?;
+
+        // Classification and creation share one SQLite-owned write lock.
+        // The winner creates the complete schema and version atomically;
+        // every loser waits, then observes and validates that committed v1.
+        // BEGIN IMMEDIATE itself changes no database bytes, so incompatible
+        // existing files still fail closed without mutation.
+        store.initialize_or_validate_schema()?;
+
         store.prepare_connection()?;
 
         // WAL/SHM sidecars are created by SQLite lazily, after the WAL
         // pragma. Restrict them now so they always carry the same exact
         // owner-only mode as the database itself; verification already ran
         // for pre-existing sidecars above.
-        for sidecar in [
-            store.database_path().with_extension("db-wal"),
-            store.database_path().with_extension("db-shm"),
-        ] {
-            if sidecar.exists() {
-                protection::restrict_file(&sidecar)?;
+        for sidecar in &sidecars {
+            if protection::verify_file_if_present(sidecar)? {
+                protection::restrict_file(sidecar)?;
+                protection::verify_file(sidecar)?;
             }
         }
-
-        let user_version: u32 = store
-            .connection_ref()
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(|_| {
-                HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "schema probe")
-            })?;
-
-        match user_version {
-            0 => store.initialize_schema()?,
-            SCHEMA_VERSION => {}
-            newer if newer > SCHEMA_VERSION => {
-                return Err(HistoryError::new(
-                    HistoryErrorCode::HistoryCorrupt,
-                    format!(
-                        "the history database uses schema user_version {newer}, \
-                         which is newer than the supported version {SCHEMA_VERSION}. \
-                         Move the history directory aside and rerun the command; \
-                         the original file is preserved.",
-                    ),
-                ));
-            }
-            unknown => {
-                return Err(HistoryError::new(
-                    HistoryErrorCode::HistoryCorrupt,
-                    format!(
-                        "the history database uses unknown schema user_version \
-                         {unknown}. Move the history directory aside and rerun \
-                         the command; the original file is preserved.",
-                    ),
-                ));
-            }
-        }
+        store.connection.guards_mut().arm_cleanup();
 
         Ok(store)
     }
@@ -245,6 +245,61 @@ impl HistoryStore {
     /// The borrowed connection, for read helpers in the sibling module.
     pub(crate) fn connection_ref(&self) -> &Connection {
         &self.connection
+    }
+
+    /// Runs `operation` inside one `IMMEDIATE` transaction that commits on
+    /// success and rolls back on any failure. `IMMEDIATE` takes the database
+    /// write lock at `BEGIN`, so concurrent reconciliation processes
+    /// serialize on the write path for the whole atomic unit (the lookup,
+    /// the merge, and the insert-or-refresh) instead of racing a deferred
+    /// read that upgrades only at write time. A deferred transaction can
+    /// still surface `SQLITE_BUSY` at commit against a peer that already
+    /// holds the write lock, so a busy or locked commit is retried a bounded
+    /// number of times before failing closed as `history_write_failed`.
+    pub(crate) fn in_immediate_transaction<T>(
+        &mut self,
+        mut operation: impl FnMut(&rusqlite::Transaction<'_>) -> Result<T, HistoryError>,
+    ) -> Result<T, HistoryError> {
+        const MAX_BUSY_RETRIES: u32 = 8;
+        let mut attempt: u32 = 0;
+        loop {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|error| {
+                    busy_or(
+                        HistoryErrorCode::HistoryWriteFailed,
+                        "begin transaction",
+                        error,
+                    )
+                })?;
+            let outcome = operation(&transaction)?;
+            match transaction.commit() {
+                Ok(()) => return Ok(outcome),
+                Err(error) => {
+                    let is_busy = matches!(
+                        &error,
+                        rusqlite::Error::SqliteFailure(inner, _)
+                            if matches!(
+                                inner.code,
+                                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                            )
+                    );
+                    if is_busy && attempt < MAX_BUSY_RETRIES {
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            25 * u64::from(attempt),
+                        ));
+                        continue;
+                    }
+                    return Err(busy_or(
+                        HistoryErrorCode::HistoryWriteFailed,
+                        "commit transaction",
+                        error,
+                    ));
+                }
+            }
+        }
     }
 
     /// Runs `operation` inside one transaction that commits on success and
@@ -313,27 +368,87 @@ impl HistoryStore {
                     "enable secure delete",
                 )
             })?;
+        self.set_busy_timeout()?;
+        Ok(())
+    }
+
+    fn set_busy_timeout(&self) -> Result<(), HistoryError> {
         self.connection
             .pragma_update(None, "busy_timeout", 5_000u32)
             .map_err(|_| {
                 HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "set busy timeout")
-            })?;
-        Ok(())
+            })
     }
 
-    fn initialize_schema(&self) -> Result<(), HistoryError> {
-        self.connection.execute_batch(SCHEMA_V1).map_err(|_| {
-            HistoryError::from_sqlite(HistoryErrorCode::HistoryWriteFailed, "create schema")
-        })?;
-        self.connection
-            .pragma_update(None, "user_version", SCHEMA_VERSION)
-            .map_err(|_| {
-                HistoryError::from_sqlite(
-                    HistoryErrorCode::HistoryWriteFailed,
-                    "record schema version",
+    fn initialize_or_validate_schema(&mut self) -> Result<(), HistoryError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| {
+                busy_or(
+                    HistoryErrorCode::HistoryUnavailable,
+                    "serialize schema initialization",
+                    error,
                 )
             })?;
-        Ok(())
+        let user_version: u32 = transaction
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|_| {
+                HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "schema probe")
+            })?;
+
+        match user_version {
+            0 => {
+                let has_schema_objects: bool = transaction
+                    .query_row("SELECT EXISTS (SELECT 1 FROM sqlite_master)", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(|_| {
+                        HistoryError::from_sqlite(
+                            HistoryErrorCode::HistoryUnavailable,
+                            "empty schema probe",
+                        )
+                    })?;
+                if has_schema_objects {
+                    return Err(unknown_schema_version(0));
+                }
+                transaction.execute_batch(SCHEMA_V1).map_err(|_| {
+                    HistoryError::from_sqlite(HistoryErrorCode::HistoryWriteFailed, "create schema")
+                })?;
+                transaction
+                    .pragma_update(None, "user_version", SCHEMA_VERSION)
+                    .map_err(|_| {
+                        HistoryError::from_sqlite(
+                            HistoryErrorCode::HistoryWriteFailed,
+                            "record schema version",
+                        )
+                    })?;
+            }
+            SCHEMA_VERSION => {}
+            newer if newer > SCHEMA_VERSION => {
+                return Err(HistoryError::new(
+                    HistoryErrorCode::HistoryCorrupt,
+                    format!(
+                        "the history database uses schema user_version {newer}, \
+                         which is newer than the supported version {SCHEMA_VERSION}. \
+                         Move the history directory aside and rerun the command; \
+                         the original file is preserved.",
+                    ),
+                ));
+            }
+            unknown => return Err(unknown_schema_version(unknown)),
+        }
+
+        if !super::schema_v1::schema_structure_ok(&transaction)? {
+            return Err(incompatible_schema_v1());
+        }
+        transaction.commit().map_err(|error| {
+            busy_or(
+                HistoryErrorCode::HistoryUnavailable,
+                "commit schema initialization",
+                error,
+            )
+        })
     }
 
     /// A short real read against the SQLite engine that fails malformed or
@@ -363,17 +478,60 @@ impl HistoryStore {
     }
 }
 
+fn unknown_schema_version(version: u32) -> HistoryError {
+    HistoryError::new(
+        HistoryErrorCode::HistoryCorrupt,
+        format!(
+            "the history database uses unknown schema user_version \
+             {version}. Move the history directory aside and rerun \
+             the command; the original file is preserved.",
+        ),
+    )
+}
+
+fn incompatible_schema_v1() -> HistoryError {
+    HistoryError::new(
+        HistoryErrorCode::HistoryCorrupt,
+        "the history database claims schema user_version 1 but its \
+         stored structure does not match the exact schema v1 contract \
+         (missing or different tables, columns, indexes, uniqueness \
+         rules, foreign keys, or the FTS5 search table). \
+         Move the history directory aside and rerun the command; \
+         the original file is preserved.",
+    )
+}
+
+/// Maps a raw rusqlite failure onto the sanitized adapter error, keeping the
+/// busy/locked classification consistent with the retry loop above: the raw
+/// SQLite message is discarded (it can embed SQL text or values) and only the
+/// operation name is reported.
+fn busy_or(
+    code: HistoryErrorCode,
+    operation: &'static str,
+    _error: rusqlite::Error,
+) -> HistoryError {
+    HistoryError::from_sqlite(code, operation)
+}
+
 /// Filesystem protection of the history directory and database file.
 ///
 /// Unix enforces the exact `0700`/`0600` modes. Windows applies the Phase 1
 /// owner-only ACL policy through `config::windows_acl`; the `windows-sys`
 /// ACL types stay inside the existing crate module so this store adds no new
 /// ACL policy.
-mod protection {
+pub(super) mod protection {
     use std::fs;
     use std::path::Path;
 
     use crate::history::{HistoryError, HistoryErrorCode};
+
+    #[cfg(any(windows, test))]
+    const WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+    #[cfg(any(windows, test))]
+    const fn has_windows_reparse_attribute(attributes: u32) -> bool {
+        attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
 
     fn insecure() -> HistoryError {
         HistoryError::new(
@@ -389,28 +547,54 @@ mod protection {
         )
     }
 
+    fn unavailable() -> HistoryError {
+        HistoryError::new(
+            HistoryErrorCode::HistoryUnavailable,
+            "history database path is not a regular file",
+        )
+    }
+
     #[cfg(unix)]
     pub(super) fn establish_directory(directory: &Path) -> Result<(), HistoryError> {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::DirBuilderExt;
 
-        match fs::metadata(directory) {
-            Ok(metadata) => {
-                // An existing directory must already be owner-only. The contract
-                // fails closed rather than silently downgrading a shared or
-                // tampered-with directory.
-                if !metadata.is_dir() || metadata.permissions().mode() & 0o7777 != 0o700 {
-                    return Err(insecure());
-                }
-                Ok(())
-            }
+        match fs::symlink_metadata(directory) {
+            Ok(_) => verify_directory(directory),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // Fresh creation: set the exact mode on the open directory
-                // before any content lands. `set_permissions` on the created
-                // path is exact (no umask subtraction), matching the Phase 1
-                // atomic credential write.
-                fs::create_dir_all(directory).map_err(|_| restriction_failed())?;
-                fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
-                    .map_err(|_| restriction_failed())?;
+                // Build only the absent suffix, one component at a time. Each
+                // directory is born with 0700 through mkdir(2); unlike
+                // create_dir_all followed by chmod, no world-readable mode is
+                // ever observable. A concurrent creator is safe: AlreadyExists
+                // loses the race and then validates the exact object and mode.
+                let mut missing = Vec::new();
+                let mut cursor = directory;
+                loop {
+                    match fs::symlink_metadata(cursor) {
+                        Ok(metadata) => {
+                            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                                return Err(insecure());
+                            }
+                            break;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            missing.push(cursor.to_path_buf());
+                            cursor = cursor.parent().ok_or_else(restriction_failed)?;
+                        }
+                        Err(_) => return Err(restriction_failed()),
+                    }
+                }
+
+                for path in missing.iter().rev() {
+                    let mut builder = fs::DirBuilder::new();
+                    builder.mode(0o700);
+                    match builder.create(path) {
+                        Ok(()) => verify_directory(path)?,
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                            verify_directory(path)?;
+                        }
+                        Err(_) => return Err(restriction_failed()),
+                    }
+                }
                 verify_directory(directory)
             }
             Err(_) => Err(restriction_failed()),
@@ -421,30 +605,102 @@ mod protection {
     pub(super) fn verify_directory(directory: &Path) -> Result<(), HistoryError> {
         use std::os::unix::fs::PermissionsExt;
 
-        let metadata = fs::metadata(directory).map_err(|_| restriction_failed())?;
-        if metadata.permissions().mode() & 0o7777 != 0o700 {
+        let metadata = fs::symlink_metadata(directory).map_err(|_| restriction_failed())?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.permissions().mode() & 0o7777 != 0o700
+        {
             return Err(insecure());
         }
         Ok(())
     }
 
     #[cfg(unix)]
-    pub(super) fn restrict_file(file: &Path) -> Result<(), HistoryError> {
-        use std::os::unix::fs::PermissionsExt;
+    pub(super) fn establish_file(file: &Path) -> Result<(), HistoryError> {
+        use std::os::unix::fs::OpenOptionsExt;
 
-        fs::set_permissions(file, fs::Permissions::from_mode(0o600))
-            .map_err(|_| restriction_failed())
+        match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(file)
+        {
+            Ok(handle) => {
+                drop(handle);
+                restrict_file(file)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => verify_file(file),
+            Err(_) => Err(restriction_failed()),
+        }
     }
 
     #[cfg(unix)]
-    pub(super) fn verify_file(file: &Path) -> Result<(), HistoryError> {
+    pub(in crate::history) fn restrict_file(file: &Path) -> Result<(), HistoryError> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let (handle, metadata) = open_verified_regular_file(file)?;
+        handle
+            .set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|_| restriction_failed())?;
+        let restricted = handle.metadata().map_err(|_| restriction_failed())?;
+        if restricted.dev() != metadata.dev()
+            || restricted.ino() != metadata.ino()
+            || restricted.permissions().mode() & 0o7777 != 0o600
+        {
+            return Err(restriction_failed());
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify_file_if_present(file: &Path) -> Result<bool, HistoryError> {
+        match fs::symlink_metadata(file) {
+            Ok(_) => {
+                verify_file(file)?;
+                Ok(true)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(restriction_failed()),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(in crate::history) fn verify_file(file: &Path) -> Result<(), HistoryError> {
         use std::os::unix::fs::PermissionsExt;
 
-        let metadata = fs::metadata(file).map_err(|_| restriction_failed())?;
+        let (_handle, metadata) = open_verified_regular_file(file)?;
         if metadata.permissions().mode() & 0o7777 != 0o600 {
             return Err(insecure());
         }
         Ok(())
+    }
+
+    #[cfg(unix)]
+    fn open_verified_regular_file(file: &Path) -> Result<(fs::File, fs::Metadata), HistoryError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let before = fs::symlink_metadata(file).map_err(|_| restriction_failed())?;
+        if before.file_type().is_symlink() || !before.is_file() {
+            return Err(unavailable());
+        }
+        let handle = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file)
+            .map_err(|_| restriction_failed())?;
+        let opened = handle.metadata().map_err(|_| restriction_failed())?;
+        let after = fs::symlink_metadata(file).map_err(|_| restriction_failed())?;
+        if after.file_type().is_symlink()
+            || !after.is_file()
+            || !opened.is_file()
+            || before.dev() != opened.dev()
+            || before.ino() != opened.ino()
+            || after.dev() != opened.dev()
+            || after.ino() != opened.ino()
+        {
+            return Err(unavailable());
+        }
+        Ok((handle, opened))
     }
 
     #[cfg(windows)]
@@ -454,22 +710,84 @@ mod protection {
         // construction, so the directory rule matches the credentials one:
         // create, then protect what we own. The ACL seam is tested by the
         // Windows-native CI gate that owns `set_owner_only_acl`.
-        fs::create_dir_all(directory).map_err(|_| restriction_failed())?;
-        crate::config::windows_acl::set_owner_only_acl(directory).map_err(|_| restriction_failed())
+        match fs::symlink_metadata(directory) {
+            Ok(_) => verify_directory(directory),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir_all(directory).map_err(|_| restriction_failed())?;
+                verify_windows_object(directory, true)?;
+                crate::config::windows_acl::set_owner_only_acl(directory)
+                    .map_err(|_| restriction_failed())?;
+                verify_directory(directory)
+            }
+            Err(_) => Err(restriction_failed()),
+        }
     }
 
     #[cfg(windows)]
     pub(super) fn verify_directory(directory: &Path) -> Result<(), HistoryError> {
+        verify_windows_object(directory, true)?;
         crate::config::windows_acl::enforce_owner_only(directory).map_err(|_| insecure())
     }
 
     #[cfg(windows)]
-    pub(super) fn restrict_file(file: &Path) -> Result<(), HistoryError> {
-        crate::config::windows_acl::set_owner_only_acl(file).map_err(|_| restriction_failed())
+    pub(super) fn establish_file(file: &Path) -> Result<(), HistoryError> {
+        match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(file)
+        {
+            Ok(handle) => {
+                drop(handle);
+                restrict_file(file)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => verify_file(file),
+            Err(_) => Err(restriction_failed()),
+        }
     }
 
     #[cfg(windows)]
-    pub(super) fn verify_file(file: &Path) -> Result<(), HistoryError> {
+    pub(in crate::history) fn restrict_file(file: &Path) -> Result<(), HistoryError> {
+        verify_windows_object(file, false)?;
+        crate::config::windows_acl::set_owner_only_acl(file).map_err(|_| restriction_failed())?;
+        verify_file(file)
+    }
+
+    #[cfg(windows)]
+    pub(in crate::history) fn verify_file(file: &Path) -> Result<(), HistoryError> {
+        verify_windows_object(file, false)?;
         crate::config::windows_acl::enforce_owner_only(file).map_err(|_| insecure())
+    }
+
+    #[cfg(windows)]
+    fn verify_windows_object(path: &Path, directory: bool) -> Result<(), HistoryError> {
+        use std::os::windows::fs::MetadataExt;
+
+        let metadata = fs::symlink_metadata(path).map_err(|_| restriction_failed())?;
+        if has_windows_reparse_attribute(metadata.file_attributes())
+            || metadata.file_type().is_symlink()
+            || (directory && !metadata.is_dir())
+            || (!directory && !metadata.is_file())
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT, has_windows_reparse_attribute};
+
+        #[test]
+        fn every_windows_reparse_attribute_combination_is_rejected() {
+            assert!(!has_windows_reparse_attribute(0));
+            assert!(!has_windows_reparse_attribute(0x20));
+            assert!(has_windows_reparse_attribute(
+                WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            ));
+            assert!(has_windows_reparse_attribute(
+                WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT | 0x10 | 0x20
+            ));
+        }
     }
 }

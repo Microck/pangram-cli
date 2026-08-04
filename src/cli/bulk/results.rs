@@ -69,8 +69,11 @@ pub(super) fn bulk_results(
         );
     }
 
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    // Page reads persist nothing: the page surfaces stay read-only under the
+    // automatic gate (Packet C locks this minimized scope), so the service
+    // half of the preparation is unused here.
+    let (analyzer, _service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
     let runtime = match new_runtime(resolved, output, started) {

@@ -94,8 +94,8 @@ pub(super) fn bulk_submit(
     // Actual submission: only accepted work (a 202) keeps the pipelines. A
     // local observation failure after acceptance changes the local status
     // and exits 1, never a top-level failure envelope.
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
 
@@ -107,12 +107,29 @@ pub(super) fn bulk_submit(
     detect::install_sigint_driver();
     let progress = resolve_wait_progress(sub, output, streams);
     let wait_mode = wait;
+    let source_name = sub
+        .get_one::<String>("JSONL_PATH")
+        .filter(|path| path.as_str() != "-")
+        .and_then(|path| {
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        });
+    // The automatic-history gate decides before the runtime: the observed
+    // children fetch runs only when persistence is armed (contracts.md 14.2;
+    // bulk carries no `--save`). The one invocation warning latch is shared
+    // from the children-read phase through the persist phase, so a run in
+    // which both fail still emits exactly one `warning:` line.
+    let history_armed = detect::save::automatic_history_armed(&service);
+    let mut bulk_warning = detect::save::BulkSaveWarning::new();
     let result = runtime.block_on(async {
         let bridge = tokio::spawn(detect::bridge_sigint(stop.token().clone()));
         let cancel = stop.token().child_token();
         let outcome = match analyzer.submit_bulk(request, &cancel).await {
             Ok(running) => {
                 if wait_mode {
+                    let observed_running = running.clone();
                     let observed = running
                         .observe(
                             WaitOptions::UNBOUNDED,
@@ -124,7 +141,37 @@ pub(super) fn bulk_submit(
                             stop.clone(),
                         )
                         .await;
-                    Analyzed::Observed(observed)
+                    // Refresh the same stored children (contracts.md 14.2):
+                    // fetch the documented results window and rebuild each
+                    // child from its observed truth. A save-read failure
+                    // never degrades the observed collection: its one
+                    // sanitized automatic warning surfaces at the outcome,
+                    // and the children fall back to the acceptance truth the
+                    // 202 already attested (never a dropped or fabricated
+                    // series).
+                    let (children, children_read_failed) =
+                        if history_armed && matches!(observed, Ok(Ok(_))) {
+                            match analyzer
+                                .bulk_observed_children(
+                                    &observed_running,
+                                    source_name.as_deref(),
+                                    &cancel,
+                                )
+                                .await
+                            {
+                                Ok(children) => (children, false),
+                                Err(_) => (
+                                    observed_running.acceptance_children(
+                                        source_name.as_deref(),
+                                        UtcTimestamp::now(),
+                                    ),
+                                    true,
+                                ),
+                            }
+                        } else {
+                            (Vec::new(), false)
+                        };
+                    Analyzed::Observed(observed, children, children_read_failed)
                 } else {
                     Analyzed::Accepted(running)
                 }
@@ -143,9 +190,27 @@ pub(super) fn bulk_submit(
     });
     detect::reset_sigint_flag();
     match result {
-        Analyzed::Accepted(running) => submit_accepted_outcome(&running, output, started),
-        Analyzed::Observed(Ok(Ok(collection))) => {
+        Analyzed::Accepted(running) => {
+            submit_accepted_outcome(&running, source_name.as_deref(), &service, output, started)
+        }
+        Analyzed::Observed(Ok(Ok(collection)), children, children_read_failed) => {
             let exit = super::status_wait::collection_exit(&collection);
+            if children_read_failed {
+                // The read phase failed first: it owns the one invocation
+                // warning. The persist phase below flows through the same
+                // latch, so its failure can never emit a second line.
+                *bulk_warning.latch() = true;
+                detect::warning_stderr(
+                    streams,
+                    "automatic history save failed (the observed bulk children could not be read)",
+                );
+            }
+            let (collection, _) = detect::save::persist_bulk_collection(
+                &collection,
+                children,
+                &service,
+                &mut bulk_warning,
+            );
             succeed(
                 resolved,
                 CommandData::BulkWait(collection),
@@ -154,7 +219,7 @@ pub(super) fn bulk_submit(
                 started,
             )
         }
-        Analyzed::Observed(Ok(Err(failure))) => {
+        Analyzed::Observed(Ok(Err(failure)), _, _) => {
             let error = failure.into_error();
             observed_failure_outcome(
                 "the bulk job was accepted but its local observation failed",
@@ -163,7 +228,7 @@ pub(super) fn bulk_submit(
                 started,
             )
         }
-        Analyzed::Observed(Err(interrupted)) => {
+        Analyzed::Observed(Err(interrupted), _, _) => {
             let note = bulk_identity_note(&interrupted.identity);
             detect::interrupted_outcome(
                 ResolvedCommand::BulkWait,
@@ -192,7 +257,10 @@ fn bulk_json_format_error() -> CanonicalError {
 
 /// The intermediate flow states for a bulk submission run. Accepted keeps
 /// the running handle for the enqueue projection; Observed carries the
-/// observe outcome; Failed/Interrupted carry the canonical error.
+/// observe outcome, the observed children fetched for the history seam, and
+/// whether that fetch failed (the one automatic warning surfaces at the
+/// outcome, never degrading the remote read); Failed/Interrupted carry the
+/// canonical error.
 enum Analyzed {
     Accepted(crate::analysis::RunningBulk),
     Observed(
@@ -200,6 +268,8 @@ enum Analyzed {
             Result<BulkCollection, crate::analysis::BulkAnalysisError>,
             crate::analysis::InterruptedBulk,
         >,
+        Vec<(crate::domain::Analysis<CanonicalError>, Option<String>)>,
+        bool,
     ),
     Interrupted(CanonicalError, String),
     Failed(CanonicalError),
@@ -284,6 +354,7 @@ fn failure_status_envelope(error: CanonicalError, started: UtcTimestamp) -> Dete
         exit_code,
         envelopes: vec![envelope],
         rendered: false,
+        primary_ok: true,
     }
 }
 
@@ -293,8 +364,12 @@ fn failure_status_envelope(error: CanonicalError, started: UtcTimestamp) -> Dete
 /// immediately failed counts, and the derived collection status) without
 /// observing remotely; it never fabricates all-queued-zero counters over an
 /// acceptance that may already report immediate failures (contracts.md 12).
+/// Under the automatic history gate the accepted collection and its plan
+/// children persist through the same save seam.
 fn submit_accepted_outcome(
     running: &crate::analysis::RunningBulk,
+    source_name: Option<&str>,
+    service: &crate::config::ConfigService,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
 ) -> DetectOutcome {
@@ -324,6 +399,10 @@ fn submit_accepted_outcome(
             );
         }
     };
+    let children = running.acceptance_children(source_name, now);
+    let mut bulk_warning = detect::save::BulkSaveWarning::new();
+    let (collection, _) =
+        detect::save::persist_bulk_collection(&collection, children, service, &mut bulk_warning);
     succeed(
         ResolvedCommand::BulkSubmit,
         CommandData::BulkSubmit(crate::output::BulkSubmitOutput::collection(collection)),

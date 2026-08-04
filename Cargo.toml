@@ -142,12 +142,53 @@ name = "bulk-task-status-results-loopback"
 path = "tests/bulk-task-status-results-loopback.rs"
 required-features = ["dev-tools"]
 
+# Phase 4 Packet C: compiled-binary history save integration against the
+# loopback fixture and a real SQLite store in a temporary data directory.
+[[test]]
+name = "history-save-detect-loopback"
+path = "tests/history-save-detect-loopback.rs"
+required-features = ["dev-tools"]
+
+# Phase 4 Packet C remediation: the deterministic mixed-outcome proof (one
+# member's real SQLite insert fails; the later member still persists in order).
+[[test]]
+name = "history-save-mixed-outcome-loopback"
+path = "tests/history-save-mixed-outcome-loopback.rs"
+required-features = ["dev-tools"]
+
+# Phase 4 Packet C: the reconciliation semantics suite split out of the
+# failure suite so each stays under the source-size threshold.
+[[test]]
+name = "history-save-reconciliation-loopback"
+path = "tests/history-save-reconciliation-loopback.rs"
+required-features = ["dev-tools"]
+
+# Phase 4 Packet C remediation: order-independent task/bulk reconciliation
+# through the compiled binary, split out of the reconciliation suite so each
+# stays under the source-size threshold.
+[[test]]
+name = "history-save-order-loopback"
+path = "tests/history-save-order-loopback.rs"
+required-features = ["dev-tools"]
+
 # The golden regenerator is a maintenance tool only; the normal suite reads
 # the committed fixtures directly under strict `-D warnings`.
 [[test]]
 name = "projection-contract-golden"
 path = "tests/projection-contract-golden.rs"
 required-features = ["dev-tools"]
+
+# Phase 4 Packet C remediation: ambiguous taskless-membership reconciliation
+# split from the order suite so both remain below the source-size threshold.
+[[test]]
+name = "history-store-reconcile-ambiguity"
+path = "tests/history-store-reconcile-ambiguity.rs"
+
+# Rust-owned schema assertions split from the general domain contract suite so
+# both remain below the source-size threshold.
+[[test]]
+name = "domain-schema-contract"
+path = "tests/domain-schema-contract.rs"
 
 [profile.release]
 panic = "unwind"

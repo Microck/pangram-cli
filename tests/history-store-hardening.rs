@@ -48,6 +48,7 @@ fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
         input_json: format!("{{\"type\":\"text\",\"text\":{input_text:?},\"word_count\":4}}"),
         result_json: Some("{\"checks\":[]}".to_owned()),
         error_json: None,
+        upstream_version: None,
         retry_of: None,
         rerun_of: None,
         created_at: timestamp("2026-08-01T10:00:00Z"),
@@ -91,6 +92,7 @@ fn terminal_update_replaces_search_payload_in_the_same_transaction() {
                         .to_owned(),
                 ),
                 error_json: None,
+                upstream_version: None,
                 completed_at: timestamp("2026-08-01T12:00:00Z"),
                 search_input_text: Some("initial observation text only".to_owned()),
                 search_filename: None,
@@ -125,6 +127,139 @@ fn terminal_update_replaces_search_payload_in_the_same_transaction() {
         fts_count, 1,
         "in-transaction FTS replacement leaves one row"
     );
+}
+
+/// A typed terminal update may replace only a synchronized FTS payload. Any
+/// missing, duplicate, or malformed row is pre-existing corruption and must
+/// fail before the typed analysis changes. The failed transaction preserves
+/// both the database file bytes and the complete logical state.
+#[test]
+fn terminal_update_rejects_invalid_search_cardinality_or_content_without_mutation() {
+    for (suffix, corruption) in [("21", "missing"), ("22", "duplicate"), ("23", "malformed")] {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = open_store(&root);
+        let id_text = format!("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a{suffix}");
+        let id = AnalysisId::from_str(&id_text).unwrap();
+        store
+            .save_analysis(&analysis(&id_text, "terminal invariant baseline"))
+            .unwrap();
+        store
+            .with_connection(|connection| match corruption {
+                "missing" => connection.execute(
+                    "DELETE FROM analysis_search WHERE analysis_id = ?1",
+                    [&id_text],
+                ),
+                "duplicate" => connection.execute(
+                    "INSERT INTO analysis_search
+                        (analysis_id, input_text, filename, headline, source_urls)
+                     SELECT analysis_id, input_text, filename, headline, source_urls
+                     FROM analysis_search WHERE analysis_id = ?1",
+                    [&id_text],
+                ),
+                "malformed" => connection.execute(
+                    "UPDATE analysis_search SET input_text = 42 WHERE analysis_id = ?1",
+                    [&id_text],
+                ),
+                _ => unreachable!(),
+            })
+            .expect("raw connection")
+            .expect("install corruption");
+
+        let database_path = store.database_path().to_owned();
+        let before_bytes = fs::read(&database_path).expect("read database bytes");
+        let before_state = store
+            .with_connection(|connection| {
+                let analysis: (String, String, Option<String>, Option<String>, String) = connection
+                    .query_row(
+                        "SELECT status, submission_outcome, result_json, error_json, updated_at
+                         FROM analyses WHERE id = ?1",
+                        [&id_text],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                let search: Vec<(String, rusqlite::types::Value)> = connection
+                    .prepare(
+                        "SELECT analysis_id, input_text FROM analysis_search
+                         WHERE analysis_id = ?1 ORDER BY rowid",
+                    )
+                    .unwrap()
+                    .query_map([&id_text], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                (analysis, search)
+            })
+            .expect("logical state");
+
+        let error = store
+            .update_terminal_result(
+                &id,
+                &TerminalResult {
+                    status: AnalysisStatus::Failed,
+                    submission_outcome: SubmissionOutcome::Terminal,
+                    result_json: None,
+                    error_json: Some("{\"code\":\"replacement\"}".to_owned()),
+                    upstream_version: None,
+                    completed_at: timestamp("2026-08-02T12:00:00Z"),
+                    search_input_text: Some("replacement text".to_owned()),
+                    search_filename: None,
+                    search_headline: Some("replacement headline".to_owned()),
+                    search_source_urls: None,
+                },
+            )
+            .expect_err("corrupt synchronized FTS state must fail closed");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "{corruption}: {error:?}"
+        );
+
+        let after_state = store
+            .with_connection(|connection| {
+                let analysis: (String, String, Option<String>, Option<String>, String) = connection
+                    .query_row(
+                        "SELECT status, submission_outcome, result_json, error_json, updated_at
+                         FROM analyses WHERE id = ?1",
+                        [&id_text],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                let search: Vec<(String, rusqlite::types::Value)> = connection
+                    .prepare(
+                        "SELECT analysis_id, input_text FROM analysis_search
+                         WHERE analysis_id = ?1 ORDER BY rowid",
+                    )
+                    .unwrap()
+                    .query_map([&id_text], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                (analysis, search)
+            })
+            .expect("logical state");
+        assert_eq!(after_state, before_state, "{corruption}: logical mutation");
+        assert_eq!(
+            fs::read(&database_path).expect("reread database bytes"),
+            before_bytes,
+            "{corruption}: database-byte mutation"
+        );
+    }
 }
 
 // ----------------------------------------------- finding 3: structural --
@@ -212,5 +347,46 @@ mod sidecars {
 
         let error = HistoryStore::open(root.path()).unwrap_err();
         assert_eq!(error.code(), HistoryErrorCode::InsecureHistoryPermissions);
+    }
+
+    #[test]
+    fn hostile_existing_sidecar_alias_fails_before_database_or_target_mutation() {
+        use std::os::unix::fs::symlink;
+
+        for suffix in ["db-wal", "db-shm"] {
+            let root = tempfile::tempdir().unwrap();
+            let store = open_store(&root);
+            let database = store.database_path();
+            drop(store);
+
+            let database_before = fs::read(&database).expect("read database before hostile open");
+            let target = root.path().join(format!("hostile-{suffix}-target"));
+            fs::write(&target, b"hostile sidecar target sentinel").unwrap();
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+            let target_before = fs::read(&target).unwrap();
+            let sidecar = database.with_extension(suffix);
+            symlink(&target, &sidecar).unwrap();
+
+            let error = HistoryStore::open(root.path())
+                .expect_err("an existing sidecar alias must fail before SQLite opens");
+            assert_eq!(error.code(), HistoryErrorCode::HistoryUnavailable);
+            assert_eq!(
+                fs::read(&database).unwrap(),
+                database_before,
+                "{suffix}: rejected open mutated the database"
+            );
+            assert_eq!(
+                fs::read(&target).unwrap(),
+                target_before,
+                "{suffix}: rejected open mutated the hostile target"
+            );
+            assert!(
+                fs::symlink_metadata(&sidecar)
+                    .expect("sidecar alias remains")
+                    .file_type()
+                    .is_symlink(),
+                "{suffix}: hostile alias itself was replaced"
+            );
+        }
     }
 }

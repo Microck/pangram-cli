@@ -600,6 +600,88 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
                 valid: true,
             },
             Case {
+                name: "running bulk items may carry a sanitized last stage",
+                instance: success(
+                    "bulk_results",
+                    json!({
+                        "items": [{
+                            "index": 0,
+                            "status": "running",
+                            "last_stage": "STAGE_INFERENCE"
+                        }],
+                        "offset": 0,
+                        "limit": 1
+                    }),
+                ),
+                valid: true,
+            },
+            Case {
+                name: "queued bulk items reject last stage",
+                instance: success(
+                    "bulk_results",
+                    json!({
+                        "items": [{
+                            "index": 0,
+                            "status": "queued",
+                            "last_stage": "STAGE_QUEUED"
+                        }],
+                        "offset": 0,
+                        "limit": 1
+                    }),
+                ),
+                valid: false,
+            },
+            Case {
+                name: "succeeded bulk items reject last stage",
+                instance: success(
+                    "bulk_results",
+                    json!({
+                        "items": [{
+                            "index": 0,
+                            "status": "succeeded",
+                            "last_stage": "STAGE_SUCCESS",
+                            "analysis": analysis("succeeded")
+                        }],
+                        "offset": 0,
+                        "limit": 1
+                    }),
+                ),
+                valid: false,
+            },
+            Case {
+                name: "bulk item last stage must be non-empty",
+                instance: success(
+                    "bulk_results",
+                    json!({
+                        "items": [{
+                            "index": 0,
+                            "status": "running",
+                            "last_stage": ""
+                        }],
+                        "offset": 0,
+                        "limit": 1
+                    }),
+                ),
+                valid: false,
+            },
+            Case {
+                name: "bulk item last stage must be sanitized",
+                instance: success(
+                    "bulk_results",
+                    json!({
+                        "items": [{
+                            "index": 0,
+                            "status": "failed",
+                            "last_stage": "STAGE_\u{1b}[31mFAILED",
+                            "error": canonical_error("upstream_error", "upstream", false)
+                        }],
+                        "offset": 0,
+                        "limit": 1
+                    }),
+                ),
+                valid: false,
+            },
+            Case {
                 name: "failed bulk item cannot omit its error",
                 instance: success(
                     "bulk_results",

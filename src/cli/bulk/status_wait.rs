@@ -33,24 +33,64 @@ pub(super) fn bulk_status(
         Ok(id) => id,
         Err(error) => return detect::failure_outcome(resolved, output, started, error),
     };
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
     let runtime = match new_runtime(resolved, output, started) {
         Ok(runtime) => runtime,
         Err(outcome) => return outcome,
     };
+    // The one invocation warning latch, shared across the observed-children
+    // read phase and the persist phase below (contracts.md 14.2 note).
+    let mut bulk_warning = detect::save::BulkSaveWarning::new();
     let result = runtime.block_on(async {
         let cancel = CancellationToken::new();
-        analyzer
-            .observe_bulk(upstream_id)
-            .snapshot(&cancel, None)
-            .await
+        let running = analyzer.observe_bulk(upstream_id);
+        let observed_running = running.clone();
+        let collection = running.snapshot(&cancel, None).await;
+        // Refresh the same stored children (contracts.md 14.2): the status
+        // read fetched the counters; the children come from the documented
+        // results window. A save-read failure never degrades the status
+        // read: the children best-effort fallback keeps the refresh honest
+        // (an empty window refreshes counters without child rows), and its
+        // one sanitized automatic warning surfaces below.
+        let children = if detect::save::automatic_history_armed(&service) && collection.is_ok() {
+            // Upstream children of a job this process did not submit
+            // carry no locally held source name.
+            analyzer
+                .bulk_observed_children(&observed_running, None, &cancel)
+                .await
+                .map_err(|_| ())
+        } else {
+            Ok(Vec::new())
+        };
+        (collection, children)
     });
+    let (result, children) = result;
+    let (children, children_read_failed) = match children {
+        Ok(children) => (children, false),
+        Err(()) => (Vec::new(), true),
+    };
     match result {
         Ok(collection) => {
             let exit = collection_exit(&collection);
+            if children_read_failed {
+                // The read phase failed first: it owns the one invocation
+                // warning; the persist phase below flows through the same
+                // latch and stays silent on its own failure.
+                *bulk_warning.latch() = true;
+                detect::warning_stderr(
+                    streams,
+                    "automatic history save failed (the observed bulk children could not be read)",
+                );
+            }
+            let (collection, _) = detect::save::persist_bulk_collection(
+                &collection,
+                children,
+                &service,
+                &mut bulk_warning,
+            );
             succeed(
                 resolved,
                 CommandData::BulkStatus(collection),
@@ -84,8 +124,8 @@ pub(super) fn bulk_wait(
         Ok(timeout) => timeout,
         Err(outcome) => return outcome,
     };
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
     let runtime = match new_runtime(resolved, output, started) {
@@ -98,10 +138,14 @@ pub(super) fn bulk_wait(
         .unwrap_or(WaitOptions::UNBOUNDED);
     let stop = StopObserving::new();
     detect::install_sigint_driver();
+    // The one invocation warning latch, shared across phases (contracts.md
+    // 14.2 note).
+    let mut bulk_warning = detect::save::BulkSaveWarning::new();
     let result = runtime.block_on(async {
         let bridge = tokio::spawn(detect::bridge_sigint(stop.token().clone()));
-        let outcome = analyzer
-            .observe_bulk(upstream_id)
+        let running = analyzer.observe_bulk(upstream_id);
+        let observed_running = running.clone();
+        let outcome = running
             .observe(
                 options,
                 |event| match progress {
@@ -112,13 +156,44 @@ pub(super) fn bulk_wait(
                 stop.clone(),
             )
             .await;
+        let cancel = stop.token().child_token();
+        let children =
+            if detect::save::automatic_history_armed(&service) && matches!(outcome, Ok(Ok(_))) {
+                analyzer
+                    .bulk_observed_children(&observed_running, None, &cancel)
+                    .await
+                    .map_err(|_| ())
+            } else {
+                Ok(Vec::new())
+            };
         bridge.abort();
-        outcome
+        (outcome, children)
     });
     detect::reset_sigint_flag();
+    let (result, children) = result;
+    let (children, children_read_failed) = match children {
+        Ok(children) => (children, false),
+        Err(()) => (Vec::new(), true),
+    };
     match result {
         Ok(Ok(collection)) => {
             let exit = collection_exit(&collection);
+            if children_read_failed {
+                // The read phase failed first: it owns the one invocation
+                // warning; the persist phase below flows through the same
+                // latch and stays silent on its own failure.
+                *bulk_warning.latch() = true;
+                detect::warning_stderr(
+                    streams,
+                    "automatic history save failed (the observed bulk children could not be read)",
+                );
+            }
+            let (collection, _) = detect::save::persist_bulk_collection(
+                &collection,
+                children,
+                &service,
+                &mut bulk_warning,
+            );
             succeed(
                 resolved,
                 CommandData::BulkWait(collection),

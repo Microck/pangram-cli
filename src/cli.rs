@@ -167,6 +167,7 @@ pub fn runtime_command() -> Command {
             Arg::new("detach")
                 .long("detach")
                 .action(ArgAction::SetTrue)
+                .conflicts_with("save")
                 .help("Report the accepted task without waiting for the result"),
         )
         .arg(
@@ -181,6 +182,12 @@ pub fn runtime_command() -> Command {
                 .long("include-input")
                 .action(ArgAction::SetTrue)
                 .help("Include the submitted text in the canonical input record"),
+        )
+        .arg(
+            Arg::new("save")
+                .long("save")
+                .action(ArgAction::SetTrue)
+                .help("Persist this analysis in local history, even while automatic history is disabled"),
         )
         .arg(
             Arg::new("public-link")
@@ -590,22 +597,28 @@ fn bare_dispatch(arguments: &[OsString], streams: &dyn StreamTty) -> Option<RunO
     None
 }
 
+/// The configuration service and analyzer one analysis-family invocation
+/// resolved. The service is shared with the history save seam so
+/// `--data-dir`/`PANGRAM_DATA_DIR` precedence applies identically to storage.
+pub(crate) struct PreparedAnalysis {
+    pub(crate) analyzer: crate::analysis::Analyzer,
+    pub(crate) service: crate::config::ConfigService,
+}
+
 /// Builds configuration, credentials, and the analyzer for a detection
 /// request, returning them or (on failure) an already-renderable outcome.
-/// The triple is heavy, so a boxed tuple keeps the error type small.
 ///
 /// `output` is the fully resolved rendering policy from the already-planned
 /// request: prepare/credential/client failures surface through that exact
 /// format and error surface (F6), so explicit `--format pretty` emits a
 /// sanitized text error on stderr with empty stdout and its category exit
 /// unless `--error-format json` overrides it.
-#[allow(clippy::type_complexity)]
 fn prepare_detection(
     command: crate::output::ResolvedCommand,
     root_matches: &ArgMatches,
     output: crate::cli::detect::ResolvedOutput,
     started: crate::domain::UtcTimestamp,
-) -> Result<crate::analysis::Analyzer, crate::cli::detect::DetectOutcome> {
+) -> Result<PreparedAnalysis, crate::cli::detect::DetectOutcome> {
     let mut flags = crate::config::ConfigOverrides::default();
     if let Some(config) = root_matches.get_one::<String>("config") {
         flags = flags.with_config_file(config.clone());
@@ -627,8 +640,9 @@ fn prepare_detection(
     })?;
     let api_key = crate::cli::detect::resolve_api_key(&service)
         .map_err(|error| crate::cli::detect::failure_outcome(command, output, started, error))?;
-    crate::cli::detect::build_analyzer(&service, api_key)
-        .map_err(|error| crate::cli::detect::failure_outcome(command, output, started, error))
+    let analyzer = crate::cli::detect::build_analyzer(&service, api_key)
+        .map_err(|error| crate::cli::detect::failure_outcome(command, output, started, error))?;
+    Ok(PreparedAnalysis { analyzer, service })
 }
 
 /// Routes one `pangram bulk <verb>` invocation to the shared bulk/task
@@ -735,21 +749,28 @@ fn run_detection(
         Err(outcome) => return finish_detect(outcome),
     };
     let output = plan.resolved_output();
-    let analyzer = match prepare_detection(
+    let prepared = match prepare_detection(
         crate::output::ResolvedCommand::Detect,
         root_matches,
         output,
         crate::domain::UtcTimestamp::now(),
     ) {
-        Ok(analyzer) => analyzer,
+        Ok(prepared) => prepared,
         Err(outcome) => return finish_detect(outcome),
     };
-    finish_detect(crate::cli::detect::execute(&plan, analyzer, streams))
+    finish_detect(crate::cli::detect::execute(
+        &plan,
+        prepared.analyzer,
+        &prepared.service,
+        streams,
+    ))
 }
 
 /// Renders one executed detect command. When the dispatch already streamed a
 /// projection (or a text error), the process layer only reports the exit
-/// code; otherwise it prints the canonical JSON envelope(s) to stdout.
+/// code; otherwise it prints the canonical JSON envelope(s) to stdout. A
+/// write failure clears `primary_ok`, so a post-primary attachment can
+/// never overwrite the honest render exit (contracts.md 14.2 note).
 fn finish_detect(outcome: crate::cli::detect::DetectOutcome) -> RunOutcome {
     if outcome.rendered {
         return RunOutcome {
@@ -919,6 +940,7 @@ mod tests {
         try_parse(&["detect", "t", "--format", "xml"]).unwrap_err();
         try_parse(&["detect", "t", "--progress", "sometimes"]).unwrap_err();
         try_parse(&["detect", "t", "--detach", "extra"]).unwrap_err();
+        try_parse(&["detect", "t", "--detach", "--save"]).unwrap_err();
         try_parse(&["detect", "--file"]).unwrap_err();
         for format in ["json", "jsonl", "toon", "markdown", "pretty"] {
             try_parse(&["detect", "t", "--format", format]).unwrap();
@@ -929,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_help_lists_the_phase_two_surface() {
+    fn detect_help_lists_the_phase_four_surface() {
         let mut command = runtime_command();
         let detect = command.find_subcommand_mut("detect").unwrap();
         let rendered = detect.render_help().to_string();
@@ -939,6 +961,7 @@ mod tests {
             "--detach",
             "--format",
             "--include-input",
+            "--save",
             "--public-link",
             "--timeout",
             "--progress",

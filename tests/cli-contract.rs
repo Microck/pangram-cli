@@ -386,20 +386,49 @@ fn readme_available_table_matches_the_available_top_level_grammar() {
     );
 }
 
-/// N4: `--save` stays in the normative grammar (Phase 4 history) but is not
-/// an available Phase 2 capability: the generated reference marks it planned,
-/// and the compiled runtime rejects it before any billable work.
+/// N4 (Phase 4 Packet C): `--save` graduated on `detect` only. It is
+/// available in the Rust-owned grammar and accepted by the compiled parser
+/// (the loopback suite owns its end-to-end persistence semantics); the
+/// planned `plagiarism`/`analyze` rows keep it planned, and the bulk/task
+/// surfaces still reject the flag as unknown.
 #[test]
-fn save_is_planned_in_the_reference_and_rejected_at_runtime() {
+fn save_is_available_on_detect_and_nowhere_else() {
     let save = argument(command(&["detect"]), "--save");
-    assert_eq!(save.availability, Availability::Planned);
+    assert_eq!(save.availability, Availability::Available);
 
+    // The compiled detect parser accepts the flag (no usage error). The
+    // hermetic root has no credentials, so the run reaches the canonical
+    // missing-key failure instead, proving the parse succeeded.
     let output = pangram()
         .args(["detect", "--save", "some text"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.status.code(), Some(4));
+    let envelope: Value = serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert_eq!(envelope["error"]["code"], "missing_api_key");
+
+    for path in [&["plagiarism"][..], &["analyze"][..]] {
+        let save = argument(command(path), "--save");
+        assert_eq!(save.availability, Availability::Planned);
+    }
+    // The bulk and task surfaces carry no `--save`: unknown-argument usage
+    // errors before any source read or network access.
+    for arguments in [
+        &[
+            "bulk",
+            "submit",
+            "--save",
+            "--max-billable-units",
+            "5",
+            "items.jsonl",
+        ][..],
+        &["task", "status", "--save", "task-123"][..],
+        &["bulk", "status", "--save", "blk-123"][..],
+    ] {
+        let output = pangram().args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?} rejected");
+        assert!(output.stdout.is_empty());
+    }
 }
 
 #[test]

@@ -5,11 +5,10 @@ use microck_pangram_cli::domain::{
     BulkCounters, BulkId, BulkItem, BulkItemState, BulkPage, BulkSubmissionItem,
     BulkSubmissionPlan, Check, CheckKind, CheckState, CheckStatus, FileInput, LocalOperationId,
     OrderedChecks, Provenance, Sha256Hash, SubmissionOutcome, SubmissionOutcomeUnknownDetails,
-    TEXT_BILLING_UNIT_WORDS, UpstreamBulkId, UpstreamIdentity, UpstreamTaskIds, UtcTimestamp,
+    TEXT_BILLING_UNIT_WORDS, UpstreamBulkId, UpstreamIdentity, UtcTimestamp,
     bulk_estimated_billable_units, derive_parent_status, text_billable_units,
 };
 use proptest::prelude::*;
-use schemars::schema_for;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use uuid::Version;
@@ -363,16 +362,67 @@ fn bulk_item_states_reject_inapplicable_payload_fields_even_when_null() {
 }
 
 #[test]
+fn bulk_item_last_stage_is_state_bound_non_empty_and_sanitized() {
+    for valid in [
+        json!({"index": 0, "status": "running"}),
+        json!({"index": 0, "status": "running", "last_stage": "STAGE_INFERENCE"}),
+        json!({
+            "index": 0,
+            "status": "failed",
+            "last_stage": "STAGE_FAILED",
+            "error": {"message": "failed"}
+        }),
+    ] {
+        assert!(serde_json::from_value::<BulkItem<Value>>(valid).is_ok());
+    }
+
+    for invalid in [
+        json!({"index": 0, "status": "queued", "last_stage": "STAGE_QUEUED"}),
+        json!({
+            "index": 0,
+            "status": "succeeded",
+            "last_stage": "STAGE_SUCCESS",
+            "analysis": analysis_value("queued", "not_submitted", "queued", false)
+        }),
+        json!({"index": 0, "status": "running", "last_stage": ""}),
+        json!({"index": 0, "status": "running", "last_stage": " STAGE_INFERENCE"}),
+        json!({
+            "index": 0,
+            "status": "failed",
+            "last_stage": "STAGE_\u{1b}[31mFAILED",
+            "error": {"message": "failed"}
+        }),
+    ] {
+        assert!(serde_json::from_value::<BulkItem<Value>>(invalid).is_err());
+    }
+
+    assert!(
+        BulkItem::<Value>::new(
+            0,
+            None,
+            None,
+            None,
+            Some("STAGE_SUCCESS".to_owned()),
+            BulkItemState::Queued,
+        )
+        .is_err(),
+        "domain construction rejects a stage on a queued item"
+    );
+}
+
+#[test]
 fn bulk_item_state_serialization_remains_flat() {
-    let item = BulkItem {
-        index: 2,
-        caller_id: Some("row-2".to_owned()),
-        analysis_id: None,
-        upstream_task_id: None,
-        state: BulkItemState::Failed {
+    let item = BulkItem::new(
+        2,
+        Some("row-2".to_owned()),
+        None,
+        None,
+        None,
+        BulkItemState::Failed {
             error: json!({"message": "failed"}),
         },
-    };
+    )
+    .unwrap();
 
     assert_eq!(
         serde_json::to_value(item).unwrap(),
@@ -734,67 +784,10 @@ fn every_optional_domain_field_requires_omission_instead_of_null() {
     );
     assert_missing_succeeds_and_null_fails::<BulkItem<Value>>(
         json!({"index": 0, "status": "running"}),
-        &["caller_id", "analysis_id", "upstream_task_id"],
+        &["caller_id", "analysis_id", "upstream_task_id", "last_stage"],
     );
     assert_missing_succeeds_and_null_fails::<BulkPage<Value>>(
         json!({"items": [], "offset": 0, "limit": 1}),
         &["next_offset"],
     );
-}
-
-#[test]
-fn bulk_json_schemas_expose_runtime_numeric_bounds() {
-    let counters = serde_json::to_value(schema_for!(BulkCounters)).unwrap();
-    assert_eq!(counters["properties"]["total_items"]["minimum"], json!(1));
-
-    let collection = serde_json::to_value(schema_for!(BulkCollection)).unwrap();
-    assert_eq!(
-        collection["properties"]["estimated_billable_units"]["minimum"],
-        json!(1)
-    );
-
-    let page = serde_json::to_value(schema_for!(BulkPage<Value>)).unwrap();
-    assert_eq!(page["properties"]["limit"]["minimum"], json!(1));
-    assert_eq!(page["properties"]["limit"]["maximum"], json!(1000));
-}
-
-#[test]
-fn pangram_4_detection_schema_exposes_current_result_fields() {
-    let schema = serde_json::to_value(schema_for!(AiDetectionResult)).unwrap();
-
-    assert_eq!(
-        schema["$defs"]["AiClassification"]["enum"],
-        json!(["ai", "human", "mixed"])
-    );
-    assert_eq!(
-        schema["$defs"]["Segment"]["required"],
-        json!([
-            "text",
-            "label",
-            "ai_assistance_score",
-            "confidence",
-            "start_index",
-            "end_index",
-            "word_count",
-            "token_length",
-            "humanizer_score",
-            "is_humanized"
-        ])
-    );
-}
-
-#[test]
-fn provenance_uses_a_neutral_upstream_version_name() {
-    let schema = serde_json::to_value(schema_for!(Provenance)).unwrap();
-
-    assert!(schema["properties"].get("upstream_version").is_some());
-    assert!(schema["properties"].get("api_version").is_none());
-    assert!(schema["properties"].get("model_version").is_none());
-}
-
-#[test]
-fn upstream_task_ids_schema_requires_unique_items() {
-    let schema = serde_json::to_value(schema_for!(UpstreamTaskIds)).unwrap();
-
-    assert_eq!(schema["uniqueItems"], json!(true));
 }

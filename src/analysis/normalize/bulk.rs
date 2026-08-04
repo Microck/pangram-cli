@@ -22,6 +22,7 @@ use super::contract_changed;
 /// accepted/failed item outcomes, cross-checked against the plan's validated
 /// input count. Preserving index, caller ID, and task ID exactly is the
 /// anti-fabrication guarantee.
+#[derive(Clone)]
 pub(in crate::analysis) struct NormalizedBulkPlan {
     pub(in crate::analysis) accepted: Vec<NormalizedBulkItemOutcome>,
     pub(in crate::analysis) failed: Vec<NormalizedBulkItemOutcome>,
@@ -32,9 +33,11 @@ pub(in crate::analysis) struct NormalizedBulkPlan {
 /// `error` is present only for a failed item. The canonical caller ID is
 /// resolved from the validated local plan by source index (not echoed here),
 /// so the worker cannot substitute identities.
+#[derive(Clone)]
 pub(in crate::analysis) struct NormalizedBulkItemOutcome {
     pub(in crate::analysis) index: u64,
     pub(in crate::analysis) task_id: Option<UpstreamTaskId>,
+    pub(in crate::analysis) last_stage: Option<String>,
     pub(in crate::analysis) error: Option<String>,
 }
 
@@ -112,6 +115,7 @@ pub(in crate::analysis) fn normalize_bulk_acceptance(
                 UpstreamTaskId::new(item.task_id.as_str())
                     .map_err(|_| contract_changed("accepted_items.task_id", "empty"))?,
             ),
+            last_stage: None,
             error: None,
         });
     }
@@ -132,6 +136,10 @@ pub(in crate::analysis) fn normalize_bulk_acceptance(
         failed.push(NormalizedBulkItemOutcome {
             index: item.index,
             task_id: None,
+            last_stage: item
+                .stage
+                .as_ref()
+                .map(|stage| super::sanitize_upstream_message(stage.as_str())),
             error: Some(
                 item.error
                     .clone()
@@ -350,7 +358,10 @@ pub(in crate::analysis) enum NormalizedItemResult {
     /// A terminal success document and the worker's task identity.
     Succeeded(NormalizedBulkSuccess),
     /// A documented in-progress entry (`result: null`): a running child.
-    Running { task_id: Option<UpstreamTaskId> },
+    Running {
+        task_id: Option<UpstreamTaskId>,
+        last_stage: Option<String>,
+    },
 }
 
 /// One succeeded result item: the task identity and the normalized Pangram 4
@@ -363,8 +374,14 @@ pub(in crate::analysis) struct NormalizedBulkSuccess {
 impl NormalizedBulkSuccess {
     /// The in-progress result-item outcome: no content, only the worker's
     /// optional task identity (which may be null for very early items).
-    fn running(task_id: Option<UpstreamTaskId>) -> NormalizedItemResult {
-        NormalizedItemResult::Running { task_id }
+    fn running(
+        task_id: Option<UpstreamTaskId>,
+        last_stage: Option<String>,
+    ) -> NormalizedItemResult {
+        NormalizedItemResult::Running {
+            task_id,
+            last_stage,
+        }
     }
 }
 
@@ -463,6 +480,7 @@ pub(in crate::analysis) fn normalize_items_page(
         outcomes.push(item_outcome(
             item.index,
             item.task_id.as_ref(),
+            item.stage.as_ref(),
             item.error.clone(),
             item.error.is_some(),
         )?);
@@ -552,7 +570,15 @@ pub(in crate::analysis) fn normalize_results_page(
                 // completed siblings. Preserve it as an in-flight outcome
                 // rather than treating the null as a missing result.
                 if succeeded
-                    .insert(item.index, NormalizedBulkSuccess::running(task_id))
+                    .insert(
+                        item.index,
+                        NormalizedBulkSuccess::running(
+                            task_id,
+                            item.stage
+                                .as_ref()
+                                .map(|stage| super::sanitize_upstream_message(stage.as_str())),
+                        ),
+                    )
                     .is_some()
                 {
                     return Err(contract_changed(
@@ -566,7 +592,13 @@ pub(in crate::analysis) fn normalize_results_page(
 
     let mut failed = HashMap::with_capacity(response.failed_items.len());
     for item in &response.failed_items {
-        let outcome = item_outcome(item.index, item.task_id.as_ref(), item.error.clone(), true)?;
+        let outcome = item_outcome(
+            item.index,
+            item.task_id.as_ref(),
+            item.stage.as_ref(),
+            item.error.clone(),
+            true,
+        )?;
         if failed.insert(item.index, outcome).is_some() {
             return Err(contract_changed(
                 "failed_items.index",
@@ -626,6 +658,7 @@ fn validate_index_in_window(
 fn item_outcome(
     index: u64,
     task_id: Option<&NonEmptyString>,
+    stage: Option<&NonEmptyString>,
     error: Option<String>,
     failed: bool,
 ) -> Result<NormalizedBulkItemOutcome, CanonicalError> {
@@ -643,6 +676,7 @@ fn item_outcome(
     Ok(NormalizedBulkItemOutcome {
         index,
         task_id,
+        last_stage: stage.map(|stage| super::sanitize_upstream_message(stage.as_str())),
         error: if failed { error } else { None },
     })
 }

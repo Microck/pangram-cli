@@ -24,6 +24,7 @@
 pub(crate) mod client;
 mod inputs;
 mod render;
+pub(crate) mod save;
 
 pub(crate) use client::{
     bridge_sigint, build_analyzer, credential_error, install_sigint_driver, reset_sigint_flag,
@@ -32,8 +33,9 @@ pub(crate) use client::{
 pub(crate) use render::{
     DetectOutcome, analysis_exit_code, early_failure, elapsed_ms, failure_outcome, identity_note,
     internal_error, interrupted_outcome, note_stderr, primary_outcome, sanitize_for_stderr,
-    usage_error,
+    usage_error, warning_stderr,
 };
+pub(crate) use save::SaveStoreGate;
 
 use clap::ArgMatches;
 
@@ -90,6 +92,7 @@ pub(crate) enum Source {
 pub(crate) struct DetectArgs {
     detach: bool,
     include_input: bool,
+    save: bool,
     public_link: bool,
     format: Option<OutputFormat>,
     progress: ProgressMode,
@@ -104,6 +107,7 @@ impl DetectArgs {
         Self {
             detach: false,
             include_input: false,
+            save: false,
             public_link: false,
             format: None,
             progress: ProgressMode::Auto,
@@ -156,6 +160,7 @@ impl DetectArgs {
         Ok(Self {
             detach: matches.get_flag("detach"),
             include_input: matches.get_flag("include-input"),
+            save: matches.get_flag("save"),
             public_link: matches.get_flag("public-link"),
             format,
             progress,
@@ -166,12 +171,14 @@ impl DetectArgs {
 }
 
 /// A fully validated, priced detection plan: its output projection, progress
-/// mode, and resolved inputs. Constructing it performs no billable work.
+/// mode, resolved inputs, and the history gate. Constructing it performs no
+/// billable work and never opens or creates history storage.
 pub(crate) struct DetectionPlan {
     arguments: DetectArgs,
     output: ResolvedOutput,
     progress: ProgressMode,
     inputs: Vec<ResolvedInput>,
+    history_gate: SaveStoreGate,
 }
 
 /// Parses arguments, validates input, and enforces the billable-unit ceiling
@@ -208,12 +215,18 @@ pub(crate) fn plan(
         ));
     }
 
+    // Resolve the history gate without touching storage: the configuration
+    // read decides whether the automatic path is armed, and `--save` arms
+    // the manual path. Opening the database waits until a completed analysis
+    // exists to persist, so a disabled run never creates the directory.
+    let history_gate = save::resolve_gate(arguments.save);
     let progress = resolve_progress(arguments.progress, output, streams);
     Ok(DetectionPlan {
         arguments,
         output,
         progress,
         inputs,
+        history_gate,
     })
 }
 
@@ -227,10 +240,12 @@ impl DetectionPlan {
 }
 
 /// Runs a priced plan against the analyzer. By this point credentials and the
-/// client exist, so only submission, observation, and rendering remain.
+/// client exist, so only submission, observation, persistence, and rendering
+/// remain.
 pub(crate) fn execute(
     plan: &DetectionPlan,
     analyzer: Analyzer,
+    service: &crate::config::ConfigService,
     streams: &dyn StreamTty,
 ) -> DetectOutcome {
     let started_at = crate::domain::UtcTimestamp::now();
@@ -281,8 +296,8 @@ pub(crate) fn execute(
                 Ok(analysis) => members.push(analysis),
                 // An accepted task's local observation failure or a genuine
                 // local interruption unwinds the whole run with its canonical
-                // envelope; these already-reported billable members are not
-                // re-rendered (their costs are logged in history later).
+                // envelope; those members never completed, so nothing is
+                // persisted for them.
                 Err(flow) => {
                     run = Err(flow);
                     break;
@@ -295,22 +310,22 @@ pub(crate) fn execute(
     // A finished flow must not leak its interrupt into the next run.
     client::reset_sigint_flag();
 
+    let command = crate::output::ResolvedCommand::Detect;
     match outcome {
-        Ok(members) => success_outcome(output, started_at, members),
+        Ok(members) => {
+            let (members, save_failure) =
+                save::persist_analyses(members, plan.history_gate, service);
+            let mut outcome = success_outcome(output, started_at, members);
+            if let Some(error) = save_failure {
+                outcome.attach_failure(command, output, started_at, error);
+            }
+            outcome
+        }
         Err(flow) => match flow {
-            Flow::Failed(error) => failure_outcome(
-                crate::output::ResolvedCommand::Detect,
-                output,
-                started_at,
-                error,
-            ),
-            Flow::Interrupted(error, note) => interrupted_outcome(
-                crate::output::ResolvedCommand::Detect,
-                output,
-                started_at,
-                error,
-                note,
-            ),
+            Flow::Failed(error) => failure_outcome(command, output, started_at, error),
+            Flow::Interrupted(error, note) => {
+                interrupted_outcome(command, output, started_at, error, note)
+            }
         },
     }
 }

@@ -1950,6 +1950,15 @@
             }
           ]
         },
+        "last_stage": {
+          "description": "Sanitized provider diagnostic stage for running or failed items.",
+          "type": [
+            "string"
+          ],
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[\\x21-\\x7e](?:[\\x20-\\x7e]{0,198}[\\x21-\\x7e])?$"
+        },
         "status": {
           "enum": [
             "queued",
@@ -2023,6 +2032,30 @@
             "required": [
               "analysis"
             ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "queued",
+                  "succeeded"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "last_stage"
+              ]
+            }
           }
         }
       ]

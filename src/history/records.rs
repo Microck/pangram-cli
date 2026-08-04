@@ -65,6 +65,8 @@ pub struct StoredAnalysis {
     pub input_json: String,
     pub result_json: Option<String>,
     pub error_json: Option<String>,
+    /// Validated Pangram protocol version most recently observed.
+    pub upstream_version: Option<String>,
     pub retry_of: Option<AnalysisId>,
     pub rerun_of: Option<AnalysisId>,
     pub created_at: UtcTimestamp,

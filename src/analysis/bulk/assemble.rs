@@ -102,28 +102,39 @@ pub(super) fn assemble_results_page(
                         )?,
                         None => build_observed_success_analysis(success, upstream_bulk_id, now)?,
                     };
-                    items.push(BulkItem {
-                        index,
-                        caller_id,
-                        analysis_id: Some(analysis.id),
-                        upstream_task_id: task_id,
-                        state: crate::domain::BulkItemState::Succeeded {
-                            analysis: Box::new(analysis),
-                        },
-                    });
+                    items.push(
+                        BulkItem::new(
+                            index,
+                            caller_id,
+                            Some(analysis.id),
+                            task_id,
+                            None,
+                            crate::domain::BulkItemState::Succeeded {
+                                analysis: Box::new(analysis),
+                            },
+                        )
+                        .map_err(invalid_bulk_item)?,
+                    );
                 }
-                NormalizedItemResult::Running { task_id } => {
+                NormalizedItemResult::Running {
+                    task_id,
+                    last_stage,
+                } => {
                     // A documented `result: null` entry: a running child with
                     // no analysis content yet. With a plan the caller ID is
                     // preserved from the trusted local plan; on a resumed
                     // read the worker identity is the only provenance.
-                    items.push(BulkItem {
-                        index,
-                        caller_id: caller_id_at(plan, index),
-                        analysis_id: None,
-                        upstream_task_id: task_id,
-                        state: crate::domain::BulkItemState::Running,
-                    });
+                    items.push(
+                        BulkItem::new(
+                            index,
+                            caller_id_at(plan, index),
+                            None,
+                            task_id,
+                            last_stage,
+                            crate::domain::BulkItemState::Running,
+                        )
+                        .map_err(invalid_bulk_item)?,
+                    );
                 }
             }
         } else if let Some(outcome) = failed.get(&index) {
@@ -131,15 +142,19 @@ pub(super) fn assemble_results_page(
                 Some(plan) => build_terminal_failed_analysis(plan_item_at(plan, index)?, outcome)?,
                 None => build_observed_failed_analysis(outcome, upstream_bulk_id)?,
             };
-            items.push(BulkItem {
-                index,
-                caller_id: caller_id_at(plan, index),
-                analysis_id: Some(analysis.id),
-                upstream_task_id: outcome.task_id.clone(),
-                state: crate::domain::BulkItemState::Failed {
-                    error: outcome_error(outcome),
-                },
-            });
+            items.push(
+                BulkItem::new(
+                    index,
+                    caller_id_at(plan, index),
+                    Some(analysis.id),
+                    outcome.task_id.clone(),
+                    outcome.last_stage.clone(),
+                    crate::domain::BulkItemState::Failed {
+                        error: outcome_error(outcome),
+                    },
+                )
+                .map_err(invalid_bulk_item)?,
+            );
         }
     }
     Ok(items)
@@ -163,6 +178,7 @@ pub(super) fn assemble_items_metadata_page(
         let NormalizedBulkItemOutcome {
             index,
             task_id,
+            last_stage,
             error,
         } = outcome;
         let caller_id = caller_id_at(plan, index);
@@ -171,6 +187,7 @@ pub(super) fn assemble_items_metadata_page(
                 let outcome = NormalizedBulkItemOutcome {
                     index,
                     task_id: task_id.clone(),
+                    last_stage: last_stage.clone(),
                     error,
                 };
                 let analysis = match plan {
@@ -179,32 +196,47 @@ pub(super) fn assemble_items_metadata_page(
                     }
                     None => build_observed_failed_analysis(&outcome, upstream_bulk_id)?,
                 };
-                items.push(BulkItem {
-                    index,
-                    caller_id,
-                    analysis_id: Some(analysis.id),
-                    upstream_task_id: task_id,
-                    state: crate::domain::BulkItemState::Failed {
-                        error: outcome_error(&outcome),
-                    },
-                });
+                items.push(
+                    BulkItem::new(
+                        index,
+                        caller_id,
+                        Some(analysis.id),
+                        task_id,
+                        last_stage,
+                        crate::domain::BulkItemState::Failed {
+                            error: outcome_error(&outcome),
+                        },
+                    )
+                    .map_err(invalid_bulk_item)?,
+                );
             }
             None => {
                 // Accepted in-flight work: a running metadata entry whose
                 // upstream task identity is the worker's. A missing task_id
                 // on accepted work is tolerated here (the metadata page may
                 // carry null task_id for very early items).
-                items.push(BulkItem {
-                    index,
-                    caller_id,
-                    analysis_id: None,
-                    upstream_task_id: task_id,
-                    state: crate::domain::BulkItemState::Running,
-                });
+                items.push(
+                    BulkItem::new(
+                        index,
+                        caller_id,
+                        None,
+                        task_id,
+                        last_stage,
+                        crate::domain::BulkItemState::Running,
+                    )
+                    .map_err(invalid_bulk_item)?,
+                );
             }
         }
     }
     Ok(items)
+}
+
+fn invalid_bulk_item(_error: crate::domain::DomainError) -> CanonicalError {
+    super::contract_symptom(
+        "last_stage",
+        "normalized bulk item violated the canonical stage contract",
+    )
 }
 
 fn plan_item_at(
@@ -286,7 +318,10 @@ fn build_terminal_failed_analysis(
     let state = CheckState::Failed {
         upstream: Some(crate::domain::UpstreamIdentity {
             task_id: outcome.task_id.clone(),
-            last_stage: None,
+            last_stage: outcome
+                .last_stage
+                .clone()
+                .and_then(|stage| crate::domain::NonEmptyString::new(stage).ok()),
         }),
         error,
     };
@@ -404,7 +439,10 @@ fn build_observed_failed_analysis(
     let state = CheckState::Failed {
         upstream: Some(crate::domain::UpstreamIdentity {
             task_id: outcome.task_id.clone(),
-            last_stage: None,
+            last_stage: outcome
+                .last_stage
+                .clone()
+                .and_then(|stage| crate::domain::NonEmptyString::new(stage).ok()),
         }),
         error,
     };
@@ -444,7 +482,7 @@ fn build_observed_failed_analysis(
 /// The canonical input descriptor for one item, derived ONLY from the
 /// validated local plan: origin, SHA-256, byte/word counts. Upstream result
 /// text is never reparsed as the item's input (contracts section 9.1).
-fn trusted_text_input(plan_item: &crate::domain::BulkSubmissionItem) -> TextInput {
+pub(super) fn trusted_text_input(plan_item: &crate::domain::BulkSubmissionItem) -> TextInput {
     let text = plan_item.text();
     let byte_count = u64::try_from(text.len()).unwrap_or(u64::MAX);
     TextInput::new(
@@ -458,7 +496,7 @@ fn trusted_text_input(plan_item: &crate::domain::BulkSubmissionItem) -> TextInpu
     .expect("a local text input descriptor is total")
 }
 
-fn outcome_error(outcome: &NormalizedBulkItemOutcome) -> CanonicalError {
+pub(super) fn outcome_error(outcome: &NormalizedBulkItemOutcome) -> CanonicalError {
     let message = outcome
         .error
         .as_deref()
@@ -469,6 +507,12 @@ fn outcome_error(outcome: &NormalizedBulkItemOutcome) -> CanonicalError {
         "upstream_message".to_owned(),
         serde_json::Value::from(reduced),
     );
+    if let Some(last_stage) = &outcome.last_stage {
+        details.insert(
+            "upstream_stage".to_owned(),
+            serde_json::Value::from(last_stage.clone()),
+        );
+    }
     CanonicalError::new(
         ErrorCode::UpstreamAnalysisFailed,
         "Pangram could not analyze the submitted text.",
