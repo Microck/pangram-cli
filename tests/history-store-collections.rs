@@ -8,8 +8,12 @@
 
 #![forbid(unsafe_code)]
 
+#[path = "support/history_store.rs"]
+mod history_store_support;
+
 use std::str::FromStr;
 
+use history_store_support::prepared_child;
 use microck_pangram_cli::domain::{
     AnalysisId, AnalysisStatus, BulkCounters, BulkId, SaveState, Sha256Hash, SubmissionOutcome,
     UtcTimestamp,
@@ -35,26 +39,39 @@ fn collection(id: &str, upstream: Option<&str>, created: &str) -> StoredBulkColl
 }
 
 fn child(id: &str, bulk_id: &str, index: i64, caller: Option<&str>) -> StoredAnalysis {
+    let input = format!("item {index} text");
+    let name = format!("item-{index}.jsonl");
+    let input_sha256 = Sha256Hash::digest(&input);
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: Some((BulkId::from_str(bulk_id).expect("bulk id"), index)),
         caller_id: caller.map(str::to_owned),
         status: AnalysisStatus::Queued,
-        submission_outcome: SubmissionOutcome::NotSubmitted,
+        submission_outcome: SubmissionOutcome::Accepted,
         save_state: SaveState::SavedHistory,
         input_kind: InputKind::Text,
-        input_sha256: Sha256Hash::from_bytes([9; 32]),
-        display_name: Some(format!("item-{index}.jsonl")),
-        input_json: format!("{{\"type\":\"text\",\"text\":\"item {index}\"}}"),
+        input_sha256,
+        display_name: Some(name.clone()),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "file",
+            "name": name,
+            "sha256": input_sha256,
+            "byte_count": input.len(),
+            "word_count": 3,
+            "text": input
+        })
+        .to_string(),
         result_json: None,
         error_json: None,
         upstream_version: None,
         retry_of: None,
         rerun_of: None,
+        submitted_at: Some(timestamp("2026-08-01T08:59:00Z")),
         created_at: timestamp("2026-08-01T09:00:00Z"),
         updated_at: timestamp("2026-08-01T09:00:00Z"),
         completed_at: None,
-        search_input_text: Some(format!("item {index} text")),
+        search_input_text: Some(input),
         search_filename: Some(format!("item-{index}.jsonl")),
         search_headline: None,
         search_source_urls: None,
@@ -72,17 +89,14 @@ fn upsert_bulk_collection_inserts_children_and_resolves_by_upstream() {
         Some("upstream-bulk-9"),
         "2026-08-01T09:00:00Z",
     );
-    let children = vec![(
-        child(
-            "anl_01983c20-0180-7a80-a001-000000000011",
-            "bulk_01983c20-0180-7a80-a001-0000000000aa",
-            0,
-            Some("row-000"),
-        ),
-        Vec::new(),
-    )];
+    let children = vec![prepared_child(child(
+        "anl_01983c20-0180-7a80-a001-000000000011",
+        "bulk_01983c20-0180-7a80-a001-0000000000aa",
+        0,
+        Some("row-000"),
+    ))];
     store
-        .upsert_bulk_collection_atomic(&record, &children)
+        .reconcile_bulk_collection_complete(&record, &children)
         .expect("insert commits");
 
     let found = store
@@ -117,7 +131,7 @@ fn upsert_bulk_collection_reconciles_without_duplicates_and_preserves_authorship
         Some("row-000"),
     );
     store
-        .upsert_bulk_collection_atomic(&first, &[(first_child, Vec::new())])
+        .reconcile_bulk_collection_complete(&first, &[prepared_child(first_child)])
         .expect("first save commits");
 
     // Later observation of the SAME job reconciled by upstream id: the
@@ -144,13 +158,14 @@ fn upsert_bulk_collection_reconciles_without_duplicates_and_preserves_authorship
     observed_child.status = AnalysisStatus::Succeeded;
     observed_child.submission_outcome = SubmissionOutcome::Accepted;
     observed_child.save_state = SaveState::Ephemeral;
+    observed_child.completed_at = Some(timestamp("2026-08-02T12:00:00Z"));
     observed_child.input_json = "{}".to_owned();
     observed_child.display_name = None;
     observed_child.search_input_text = None;
     observed_child.search_filename = None;
 
     store
-        .upsert_bulk_collection_atomic(&refreshed, &[(observed_child, Vec::new())])
+        .reconcile_bulk_collection_complete(&refreshed, &[prepared_child(observed_child)])
         .expect("refresh commits");
 
     // Still exactly one collection row, deduped by upstream identity.

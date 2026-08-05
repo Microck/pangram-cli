@@ -22,7 +22,7 @@
 #![allow(clippy::result_large_err)]
 
 pub(crate) mod client;
-mod inputs;
+pub(crate) mod inputs;
 mod render;
 pub(crate) mod save;
 
@@ -31,9 +31,9 @@ pub(crate) use client::{
     resolve_api_key,
 };
 pub(crate) use render::{
-    DetectOutcome, analysis_exit_code, early_failure, elapsed_ms, failure_outcome, identity_note,
-    internal_error, interrupted_outcome, note_stderr, primary_outcome, sanitize_for_stderr,
-    usage_error, warning_stderr,
+    DetectOutcome, analysis_command_outcome, analysis_exit_code, early_failure, elapsed_ms,
+    failure_outcome, identity_note, internal_error, interrupted_outcome, note_stderr,
+    primary_outcome, sanitize_for_stderr, usage_error, warning_stderr,
 };
 pub(crate) use save::SaveStoreGate;
 
@@ -313,8 +313,13 @@ pub(crate) fn execute(
     let command = crate::output::ResolvedCommand::Detect;
     match outcome {
         Ok(members) => {
+            let retained_texts = plan
+                .inputs
+                .iter()
+                .map(|input| input.text.clone())
+                .collect::<Vec<_>>();
             let (members, save_failure) =
-                save::persist_analyses(members, plan.history_gate, service);
+                save::persist_analyses(members, &retained_texts, plan.history_gate, service);
             let mut outcome = success_outcome(output, started_at, members);
             if let Some(error) = save_failure {
                 outcome.attach_failure(command, output, started_at, error);
@@ -469,7 +474,7 @@ async fn analyze_one(
 /// `acceptance_unknown` for an ambiguous issued send, `terminal` otherwise.
 /// The member never carries upstream identity: an unaccepted submission has
 /// no real task id or result, so none is fabricated.
-fn failed_member(
+pub(crate) fn failed_member(
     request: &AnalysisRequest,
     error: CanonicalError,
 ) -> crate::domain::Analysis<CanonicalError> {
@@ -498,7 +503,7 @@ fn failed_member(
         crate::domain::SaveState::Ephemeral,
         provenance,
         None,
-        None,
+        request.rerun_of(),
         now,
         now,
         None,

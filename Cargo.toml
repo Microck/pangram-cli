@@ -142,6 +142,13 @@ name = "bulk-task-status-results-loopback"
 path = "tests/bulk-task-status-results-loopback.rs"
 required-features = ["dev-tools"]
 
+# Compiled-binary task status/wait integration split from the bulk suite so
+# both targets remain below the source-size threshold.
+[[test]]
+name = "task-status-wait-loopback"
+path = "tests/task-status-wait-loopback.rs"
+required-features = ["dev-tools"]
+
 # Phase 4 Packet C: compiled-binary history save integration against the
 # loopback fixture and a real SQLite store in a temporary data directory.
 [[test]]

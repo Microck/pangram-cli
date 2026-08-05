@@ -3,14 +3,13 @@
 //! domain values into [`StoredAnalysis`], [`StoredBulkCollection`], and
 //! [`StoredUpstreamTask`] inserts.
 //!
-//! JSON columns carry exactly the canonical schema-major-1 bodies the output
-//! projection would render (the input record as submitted, the terminal
-//! result, the canonical check error as the full typed error object). The
-//! search payload follows product-spec 10.4: submitted text when the caller
-//! explicitly included it (`--include-input`), the input filename, the AI
-//! detection headline, and plagiarism source URLs. Bulk child input text is
-//! locally held plaintext from the caller's own JSONL, so it indexes even
-//! without an include flag. Nothing else (no credentials, headers, raw
+//! JSON columns carry canonical schema-major-1 bodies. A locally authored
+//! retained input includes its caller-owned plaintext even when the primary
+//! output omitted `--include-input`; manual save or enabled automatic history
+//! is the separate retention choice that authorizes it. Terminal results and
+//! canonical check errors remain full typed values. The search payload follows
+//! product-spec 10.4: retained submitted text, the input filename, the AI
+//! detection headline, and plagiarism source URLs. Nothing else (no credentials, headers, raw
 //! response bodies, segments, or matched text) ever lands in a row.
 
 use crate::domain::{
@@ -18,7 +17,9 @@ use crate::domain::{
 };
 use crate::output::CanonicalError;
 
-use super::records::{InputKind, StoredAnalysis, StoredBulkCollection, StoredUpstreamTask};
+use super::records::{
+    InputKind, StoredAnalysis, StoredBulkCollection, StoredCheck, StoredUpstreamTask,
+};
 use super::{HistoryError, HistoryErrorCode};
 
 /// Projects one canonical analysis onto its schema v1 row (typed columns,
@@ -27,7 +28,28 @@ pub fn stored_analysis(
     analysis: &Analysis<CanonicalError>,
     save_state: SaveState,
 ) -> Result<StoredAnalysis, HistoryError> {
-    let input_json = serde_json::to_string(&analysis.input)
+    stored_analysis_with_retained_text(analysis, save_state, None)
+}
+
+/// Projects a locally submitted analysis while retaining caller-owned
+/// plaintext for truthful history show/rerun even when the primary output
+/// omitted `--include-input`.
+pub fn stored_analysis_with_retained_text(
+    analysis: &Analysis<CanonicalError>,
+    save_state: SaveState,
+    retained_text: Option<&str>,
+) -> Result<StoredAnalysis, HistoryError> {
+    let mut input_value = serde_json::to_value(&analysis.input)
+        .map_err(|_| serialization_failure("serialize analysis input"))?;
+    if let (Some(text), Some(input)) = (retained_text, input_value.as_object_mut()) {
+        if input.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+            input.insert(
+                "text".to_owned(),
+                serde_json::Value::String(text.to_owned()),
+            );
+        }
+    }
+    let input_json = serde_json::to_string(&input_value)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
 
     // Terminal payloads: a succeeded check stores its result; a failed check
@@ -74,8 +96,11 @@ pub fn stored_analysis(
         }
     }
 
-    let (input_kind, input_sha256, display_name, search_input_text, search_filename) =
+    let (input_kind, input_sha256, display_name, mut search_input_text, search_filename) =
         project_input(analysis);
+    if retained_text.is_some() && analysis.input().is_some() {
+        search_input_text = retained_text.map(str::to_owned);
+    }
 
     Ok(StoredAnalysis {
         id: analysis.id,
@@ -91,8 +116,9 @@ pub fn stored_analysis(
         result_json,
         error_json,
         upstream_version: analysis.provenance().upstream_version.clone(),
-        retry_of: None,
-        rerun_of: None,
+        retry_of: analysis.retry_of(),
+        rerun_of: analysis.rerun_of(),
+        submitted_at: analysis.provenance().submitted_at,
         created_at: analysis.created_at,
         updated_at: analysis.updated_at,
         completed_at: analysis.completed_at,
@@ -158,6 +184,92 @@ pub fn stored_observations(analysis: &Analysis<CanonicalError>) -> Vec<StoredUps
     tasks
 }
 
+/// Projects every canonical check into its authoritative ordered payload
+/// row. The check table, rather than the parent row's legacy aggregate body
+/// columns, is the reconstruction source of truth.
+pub fn stored_checks(
+    analysis: &Analysis<CanonicalError>,
+) -> Result<Vec<StoredCheck>, HistoryError> {
+    analysis
+        .checks()
+        .iter()
+        .enumerate()
+        .map(|(index, check)| {
+            let (check_kind, status, result_json, error_json) =
+                match check {
+                    Check::AiDetection(state) => match state {
+                        CheckState::Queued { .. } => (
+                            crate::domain::CheckKind::AiDetection,
+                            crate::domain::CheckStatus::Queued,
+                            None,
+                            None,
+                        ),
+                        CheckState::Running { .. } => (
+                            crate::domain::CheckKind::AiDetection,
+                            crate::domain::CheckStatus::Running,
+                            None,
+                            None,
+                        ),
+                        CheckState::Succeeded { result, .. } => (
+                            crate::domain::CheckKind::AiDetection,
+                            crate::domain::CheckStatus::Succeeded,
+                            Some(serde_json::to_string(result).map_err(|_| {
+                                serialization_failure("serialize AI detection result")
+                            })?),
+                            None,
+                        ),
+                        CheckState::Failed { error, .. } => (
+                            crate::domain::CheckKind::AiDetection,
+                            crate::domain::CheckStatus::Failed,
+                            None,
+                            Some(serde_json::to_string(error).map_err(|_| {
+                                serialization_failure("serialize AI detection error")
+                            })?),
+                        ),
+                    },
+                    Check::Plagiarism(state) => match state {
+                        CheckState::Queued { .. } => (
+                            crate::domain::CheckKind::Plagiarism,
+                            crate::domain::CheckStatus::Queued,
+                            None,
+                            None,
+                        ),
+                        CheckState::Running { .. } => (
+                            crate::domain::CheckKind::Plagiarism,
+                            crate::domain::CheckStatus::Running,
+                            None,
+                            None,
+                        ),
+                        CheckState::Succeeded { result, .. } => (
+                            crate::domain::CheckKind::Plagiarism,
+                            crate::domain::CheckStatus::Succeeded,
+                            Some(serde_json::to_string(result).map_err(|_| {
+                                serialization_failure("serialize plagiarism result")
+                            })?),
+                            None,
+                        ),
+                        CheckState::Failed { error, .. } => (
+                            crate::domain::CheckKind::Plagiarism,
+                            crate::domain::CheckStatus::Failed,
+                            None,
+                            Some(serde_json::to_string(error).map_err(|_| {
+                                serialization_failure("serialize plagiarism error")
+                            })?),
+                        ),
+                    },
+                };
+            Ok(StoredCheck {
+                analysis_id: analysis.id,
+                check_index: u8::try_from(index).expect("at most two checks"),
+                check_kind,
+                status,
+                result_json,
+                error_json,
+            })
+        })
+        .collect()
+}
+
 fn check_state_upstream<R, E>(
     state: &CheckState<R, E>,
 ) -> Option<&crate::domain::UpstreamIdentity> {
@@ -169,9 +281,10 @@ fn check_state_upstream<R, E>(
     }
 }
 
-/// The input-column projection. The search text is the include-input text
-/// for a locally submitted analysis, `None` for a remotely authored read
-/// (which never carries submitted text; contracts.md 4.6).
+/// The input-column projection. The ordinary projection sees text only when
+/// the analysis carries it; the retained-text entry point above supplies the
+/// separately authorized plaintext for a local save. Remotely authored reads
+/// never fabricate submitted text (contracts.md 4.6).
 #[allow(clippy::type_complexity)]
 fn project_input(
     analysis: &Analysis<CanonicalError>,
@@ -314,6 +427,7 @@ mod tests {
             upstream_version: Some("4.0".to_owned()),
             retry_of: None,
             rerun_of: None,
+            submitted_at: Some(instant("2026-08-01T09:59:00Z")),
             created_at: instant("2026-08-01T10:00:00Z"),
             updated_at: instant("2026-08-01T10:00:00Z"),
             completed_at: None,

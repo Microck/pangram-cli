@@ -152,13 +152,14 @@ pub(crate) fn automatic_history_armed(service: &crate::config::ConfigService) ->
 /// never opened, so a disabled run creates no directory or database.
 pub(crate) fn persist_analyses(
     analyses: Vec<Analysis<CanonicalError>>,
+    retained_texts: &[String],
     gate: SaveStoreGate,
     service: &crate::config::ConfigService,
 ) -> (Vec<Analysis<CanonicalError>>, Option<CanonicalError>) {
     let Some(policy) = policy_for(gate, service) else {
         return (analyses, None);
     };
-    persist_series(analyses, policy, service.paths().data_dir())
+    persist_series(analyses, retained_texts, policy, service.paths().data_dir())
 }
 
 /// Persists one remotely observed analysis (a `task status`/`task wait`
@@ -232,6 +233,7 @@ pub(crate) fn persist_bulk_collection(
     let provisional_id = collection.id();
     let mut prepared: Vec<(
         crate::history::StoredAnalysis,
+        Vec<crate::history::StoredCheck>,
         Vec<crate::history::StoredUpstreamTask>,
     )> = Vec::with_capacity(children.len());
     for (index, (child, caller_id)) in children.iter().enumerate() {
@@ -253,10 +255,17 @@ pub(crate) fn persist_bulk_collection(
                 ..task
             })
             .collect();
-        prepared.push((record, observations));
+        let checks = match crate::history::save::stored_checks(child) {
+            Ok(checks) => checks,
+            Err(error) => {
+                automatic_warning_once(&error, warning.latch());
+                continue;
+            }
+        };
+        prepared.push((record, checks, observations));
     }
     let row = crate::history::save::stored_bulk_collection(collection);
-    if let Err(error) = store.reconcile_bulk_collection_atomic(&row, &prepared) {
+    if let Err(error) = store.reconcile_bulk_collection_complete(&row, &prepared) {
         automatic_warning_once(&error, warning.latch());
     }
 
@@ -278,8 +287,18 @@ fn persist_observed(
     if !automatic_enabled(service) {
         return (analysis, ());
     }
-    let mut store = match HistoryStore::open(service.paths().data_dir()) {
-        Ok(store) => store,
+    let nonterminal = matches!(
+        analysis.status(),
+        AnalysisStatus::Queued | AnalysisStatus::Running
+    );
+    let store = if nonterminal {
+        HistoryStore::open_existing(service.paths().data_dir())
+    } else {
+        HistoryStore::open(service.paths().data_dir()).map(Some)
+    };
+    let mut store = match store {
+        Ok(Some(store)) => store,
+        Ok(None) => return (analysis, ()),
         Err(error) => {
             automatic_warning_once(&error, warned);
             return (analysis, ());
@@ -302,12 +321,38 @@ fn persist_observed(
     // performs its own lookup, so a concurrent second process can never
     // race a duplicate durable row in.
     let observed_at = analysis.updated_at;
-    let outcome =
-        store.reconcile_observed_analysis_atomic(&record, &observations, observed_at, |prior| {
-            crate::history::save::observation_merge(&analysis, prior)
-        });
+    let checks = match crate::history::save::stored_checks(&analysis) {
+        Ok(checks) => checks,
+        Err(error) => {
+            automatic_warning_once(&error, warned);
+            return (analysis, ());
+        }
+    };
+    let merge = |prior: &crate::history::StoredAnalysis| {
+        crate::history::save::observation_merge(&analysis, prior)
+    };
+    let outcome = if nonterminal {
+        store.reconcile_existing_observed_analysis_complete(
+            &record,
+            &checks,
+            &observations,
+            observed_at,
+            merge,
+        )
+    } else {
+        store.reconcile_observed_analysis_complete(
+            &record,
+            &checks,
+            &observations,
+            observed_at,
+            merge,
+        )
+    };
     match outcome {
         Ok(_) => (analysis.with_save_state(SaveState::SavedHistory), ()),
+        Err(error) if nonterminal && error.code() == crate::history::HistoryErrorCode::NotFound => {
+            (analysis, ())
+        }
         Err(error) => {
             automatic_warning_once(&error, warned);
             (analysis, ())
@@ -320,6 +365,7 @@ fn persist_observed(
 /// save outcome (contracts.md 14.2 note). The tail is never dropped.
 fn persist_series(
     analyses: Vec<Analysis<CanonicalError>>,
+    retained_texts: &[String],
     policy: SavePolicy,
     data_dir: &std::path::Path,
 ) -> (Vec<Analysis<CanonicalError>>, Option<CanonicalError>) {
@@ -345,12 +391,17 @@ fn persist_series(
     let mut warned = false;
     let mut first_error: Option<HistoryError> = None;
     let mut saved = Vec::with_capacity(analyses.len());
-    for analysis in analyses {
+    for (index, analysis) in analyses.into_iter().enumerate() {
         if !is_terminal(&analysis) {
             saved.push(analysis);
             continue;
         }
-        match save_one(&mut store, &analysis, save_state) {
+        match save_one(
+            &mut store,
+            &analysis,
+            save_state,
+            retained_texts.get(index).map(String::as_str),
+        ) {
             Ok(()) => saved.push(analysis.with_save_state(save_state)),
             Err(error) => {
                 if policy.manual {
@@ -375,35 +426,23 @@ fn persist_series(
     (saved, save_failure)
 }
 
-/// Persists one analysis atomically: the row insert plus one observation
-/// row per check with an upstream task identity (the current remote
-/// observation), committed in one transaction so a mid-write failure can
-/// never leave a half-committed analysis. A bulk child additionally carries
-/// its `(bulk_id, bulk_index)` membership link and caller ID into the same
-/// row.
-pub(crate) fn save_one_with_membership(
-    store: &mut HistoryStore,
-    analysis: &Analysis<CanonicalError>,
-    save_state: SaveState,
-    bulk: Option<(crate::domain::BulkId, i64)>,
-    caller_id: Option<String>,
-) -> Result<(), HistoryError> {
-    let mut record = crate::history::save::stored_analysis(analysis, save_state)?;
-    record.bulk = bulk;
-    record.caller_id = caller_id;
-    store.save_analysis_atomic(
-        &record,
-        &crate::history::save::stored_observations(analysis),
-    )
-}
-
 /// Persists one local top analysis (no bulk membership link).
 fn save_one(
     store: &mut HistoryStore,
     analysis: &Analysis<CanonicalError>,
     save_state: SaveState,
+    retained_text: Option<&str>,
 ) -> Result<(), HistoryError> {
-    save_one_with_membership(store, analysis, save_state, None, None)
+    let record = crate::history::save::stored_analysis_with_retained_text(
+        analysis,
+        save_state,
+        retained_text,
+    )?;
+    store.save_analysis_complete(
+        &record,
+        &crate::history::save::stored_checks(analysis)?,
+        &crate::history::save::stored_observations(analysis),
+    )
 }
 
 /// Store-open failure: the manual path surfaces the canonical error; the

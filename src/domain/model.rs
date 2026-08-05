@@ -656,6 +656,16 @@ impl<E> Analysis<E> {
         self.input.as_ref()
     }
 
+    #[must_use]
+    pub const fn retry_of(&self) -> Option<AnalysisId> {
+        self.retry_of
+    }
+
+    #[must_use]
+    pub const fn rerun_of(&self) -> Option<AnalysisId> {
+        self.rerun_of
+    }
+
     /// Records the save state the history store committed for this analysis
     /// (contracts.md 4.2). The field never affects the status derivation, so
     /// the adapter flips it right before projecting, after persistence.

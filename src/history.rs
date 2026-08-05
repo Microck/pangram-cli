@@ -23,16 +23,19 @@
 //!   invents, normalizes, or logs their content
 //!
 //! No repository trait, ORM, async layer, daemon, or second backend exists:
-//! this is the only history module. History remains disabled by default; no
-//! adapter surface is activated by this packet.
+//! this is the only history module. Automatic retention remains disabled by
+//! default; the CLI list/show/search/delete/clear adapter calls this store.
 
 mod analysis_writes;
 mod collections;
+mod export;
+mod read_validation;
 mod reads;
 mod reconcile;
 mod records;
 pub(crate) mod save;
 mod schema_v1;
+mod search;
 mod sidecars;
 mod store;
 mod wire;
@@ -40,7 +43,8 @@ mod wire;
 pub use analysis_writes::{ObservationSnapshot, TerminalResult};
 pub use reconcile::{ReconciledAnalysis, ReconciledBulk};
 pub use records::{
-    InputKind, StoredAnalysis, StoredBulkCollection, StoredSearchHit, StoredUpstreamTask,
+    InputKind, StoredAnalysis, StoredBulkCollection, StoredCheck, StoredSearchHit,
+    StoredUpstreamTask,
 };
 pub use store::{DATABASE_DIRECTORY_NAME, DATABASE_FILE_NAME, HistoryStore, SCHEMA_VERSION};
 

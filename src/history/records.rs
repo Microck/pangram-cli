@@ -5,8 +5,8 @@
 //! adapters; the store treats them as opaque strings and never re-serializes.
 
 use crate::domain::{
-    AnalysisId, AnalysisStatus, BulkCounters, BulkId, CheckKind, SaveState, Sha256Hash,
-    SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisStatus, BulkCounters, BulkId, CheckKind, CheckStatus, SaveState,
+    Sha256Hash, SubmissionOutcome, UtcTimestamp,
 };
 
 /// The canonical input discriminator of an `analyses` row.
@@ -69,6 +69,9 @@ pub struct StoredAnalysis {
     pub upstream_version: Option<String>,
     pub retry_of: Option<AnalysisId>,
     pub rerun_of: Option<AnalysisId>,
+    /// Canonical local submission time. Resumed observations without local
+    /// authorship leave this absent.
+    pub submitted_at: Option<UtcTimestamp>,
     pub created_at: UtcTimestamp,
     pub updated_at: UtcTimestamp,
     pub completed_at: Option<UtcTimestamp>,
@@ -123,12 +126,26 @@ pub struct StoredUpstreamTask {
     pub observed_at: UtcTimestamp,
 }
 
+/// One authoritative ordered canonical check payload. Unlike
+/// `upstream_tasks`, this row exists for every check, including local
+/// failures and queued checks without an upstream identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCheck {
+    pub analysis_id: AnalysisId,
+    pub check_index: u8,
+    pub check_kind: CheckKind,
+    pub status: CheckStatus,
+    pub result_json: Option<String>,
+    pub error_json: Option<String>,
+}
+
 /// The projection of an `analyses` search result: identity plus the display
 /// columns a summary needs, without the heavy JSON bodies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSearchHit {
     pub analysis_id: AnalysisId,
     pub status: AnalysisStatus,
+    pub checks: Vec<CheckKind>,
     pub save_state: SaveState,
     pub input_kind: InputKind,
     pub display_name: Option<String>,

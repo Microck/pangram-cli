@@ -9,11 +9,12 @@
 use std::str::FromStr;
 
 use microck_pangram_cli::domain::{
-    AnalysisId, AnalysisStatus, CheckKind, SaveState, Sha256Hash, SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisStatus, CheckKind, CheckStatus, SaveState, Sha256Hash, SubmissionOutcome,
+    UtcTimestamp,
 };
 use microck_pangram_cli::history::{
     HistoryError, HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis,
-    StoredUpstreamTask,
+    StoredCheck, StoredUpstreamTask,
 };
 
 fn timestamp(value: &str) -> UtcTimestamp {
@@ -21,6 +22,7 @@ fn timestamp(value: &str) -> UtcTimestamp {
 }
 
 fn analysis(id: &str) -> StoredAnalysis {
+    let input_sha256 = Sha256Hash::digest("evidence");
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: None,
@@ -29,14 +31,23 @@ fn analysis(id: &str) -> StoredAnalysis {
         submission_outcome: SubmissionOutcome::Terminal,
         save_state: SaveState::SavedHistory,
         input_kind: InputKind::Text,
-        input_sha256: Sha256Hash::from_bytes([8; 32]),
+        input_sha256,
         display_name: None,
-        input_json: "{\"type\":\"text\",\"text\":\"evidence\"}".to_owned(),
-        result_json: Some("{\"headline\":\"Human-written\"}".to_owned()),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "literal",
+            "sha256": input_sha256,
+            "byte_count": 8,
+            "word_count": 1,
+            "text": "evidence"
+        })
+        .to_string(),
+        result_json: Some(ai_result()),
         error_json: None,
         upstream_version: None,
         retry_of: None,
         rerun_of: None,
+        submitted_at: Some(timestamp("2026-08-02T09:59:00Z")),
         created_at: timestamp("2026-08-02T10:00:00Z"),
         updated_at: timestamp("2026-08-02T10:01:00Z"),
         completed_at: Some(timestamp("2026-08-02T10:01:00Z")),
@@ -45,6 +56,53 @@ fn analysis(id: &str) -> StoredAnalysis {
         search_headline: Some("Human-written".to_owned()),
         search_source_urls: None,
     }
+}
+
+fn ai_result() -> String {
+    serde_json::json!({
+        "classification": "human",
+        "headline": "Human-written",
+        "prediction": "Human",
+        "fraction_ai": 0.0,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0,
+        "num_ai_segments": 0,
+        "num_ai_assisted_segments": 0,
+        "num_human_segments": 1,
+        "segments": []
+    })
+    .to_string()
+}
+
+fn checks(id: &str) -> Vec<StoredCheck> {
+    let analysis_id = AnalysisId::from_str(id).expect("analysis id");
+    vec![
+        StoredCheck {
+            analysis_id,
+            check_index: 0,
+            check_kind: CheckKind::AiDetection,
+            status: CheckStatus::Succeeded,
+            result_json: Some(ai_result()),
+            error_json: None,
+        },
+        StoredCheck {
+            analysis_id,
+            check_index: 1,
+            check_kind: CheckKind::Plagiarism,
+            status: CheckStatus::Succeeded,
+            result_json: Some(
+                serde_json::json!({
+                    "plagiarism_detected": false,
+                    "total_sentences": 1,
+                    "plagiarized_sentence_count": 0,
+                    "percent_plagiarized": 0.0,
+                    "matches": []
+                })
+                .to_string(),
+            ),
+            error_json: None,
+        },
+    ]
 }
 
 fn task(
@@ -101,8 +159,9 @@ fn selection_by_one_key_cannot_replace_another_owned_kind() {
     let mut store = HistoryStore::open(root.path()).expect("open store");
     let stored_id = "anl_01983c20-0180-7a80-a001-00000000f101";
     store
-        .reconcile_observed_analysis_atomic(
+        .save_analysis_complete(
             &analysis(stored_id),
+            &checks(stored_id),
             &[
                 task(stored_id, CheckKind::AiDetection, "ai-original", "AI_DONE"),
                 task(
@@ -112,8 +171,6 @@ fn selection_by_one_key_cannot_replace_another_owned_kind() {
                     "PLAG_DONE",
                 ),
             ],
-            timestamp("2026-08-02T10:01:00Z"),
-            running_merge,
         )
         .expect("seed evidence");
 
@@ -170,16 +227,15 @@ fn selected_row_allows_add_same_and_omitted_kinds() {
     let mut store = HistoryStore::open(root.path()).expect("open store");
     let stored_id = "anl_01983c20-0180-7a80-a001-00000000f111";
     store
-        .reconcile_observed_analysis_atomic(
+        .save_analysis_complete(
             &analysis(stored_id),
+            &checks(stored_id),
             &[task(
                 stored_id,
                 CheckKind::AiDetection,
                 "ai-same",
                 "AI_SEED",
             )],
-            timestamp("2026-08-02T10:01:00Z"),
-            running_merge,
         )
         .expect("seed evidence");
 
@@ -236,14 +292,13 @@ fn concurrent_same_and_replacement_refreshes_preserve_owned_evidence() {
     let path = root.path().to_path_buf();
     let stored_id = "anl_01983c20-0180-7a80-a001-00000000f121";
     let mut seed = HistoryStore::open(&path).expect("open seed store");
-    seed.reconcile_observed_analysis_atomic(
+    seed.save_analysis_complete(
         &analysis(stored_id),
+        &checks(stored_id),
         &[
             task(stored_id, CheckKind::AiDetection, "ai-owned", "AI_SEED"),
             task(stored_id, CheckKind::Plagiarism, "plag-common", "PLAG_SEED"),
         ],
-        timestamp("2026-08-02T10:01:00Z"),
-        running_merge,
     )
     .expect("seed evidence");
     drop(seed);

@@ -111,11 +111,13 @@ CREATE TABLE analyses (
   input_sha256 TEXT NOT NULL,
   display_name TEXT,
   input_json TEXT NOT NULL,
+  check_count INTEGER NOT NULL DEFAULT 1 CHECK (check_count BETWEEN 1 AND 2),
   result_json TEXT,
   error_json TEXT,
   upstream_version TEXT,
-  retry_of TEXT REFERENCES analyses(id),
-  rerun_of TEXT REFERENCES analyses(id),
+  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  submitted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,
@@ -130,6 +132,17 @@ CREATE TABLE upstream_tasks (
   observed_at TEXT NOT NULL,
   PRIMARY KEY (analysis_id, check_kind),
   UNIQUE (check_kind, upstream_task_id)
+);
+
+CREATE TABLE analysis_checks (
+  analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+  check_index INTEGER NOT NULL,
+  check_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result_json TEXT,
+  error_json TEXT,
+  PRIMARY KEY (analysis_id, check_index),
+  UNIQUE (analysis_id, check_kind)
 );
 
 CREATE VIRTUAL TABLE analysis_search USING fts5(

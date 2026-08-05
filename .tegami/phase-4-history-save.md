@@ -9,27 +9,33 @@ packages:
 Activated local history persistence for completed detection, bulk, and task
 workflows (Phase 4 Packet C; contracts.md 14.2 note, docs/history-contract.md,
 product-spec 10). `pangram detect --save` now persists the completed analysis
-envelope - input as submitted (with the submitted text only when
-`--include-input` was given), terminal result or canonical check error, typed
-lifecycle state, and current observation identity - even while automatic
-history is disabled, and reports `save_state: saved_manual`. The automatic
-gate (`config set history.enabled true`) saves every completed detect analysis
-as `saved_history`, and additionally records bulk submissions (the collection
+envelope - including the submitted plaintext whenever manual save or enabled
+automatic history authorizes retention, regardless of whether
+`--include-input` was used for the primary output - together with the terminal
+result or canonical check error, typed lifecycle state, and current
+observation identity. It works while automatic history is disabled and
+reports `save_state: saved_manual`. The automatic gate (`config set
+history.enabled true`) saves every completed detect analysis as
+`saved_history`, and additionally records bulk submissions (the collection
 plus its plan children in bulk-index order, each carrying its `(bulk_id,
-bulk_index)` membership link and caller ID) and task status/wait observations
-(a repeated read of one remote task refreshes the one saved row instead of
-duplicating it). A manual save failure surfaces as a canonical local-history
-error (exit 7) after the honest envelopes render in order with their own
-truthful save states; an automatic failure produces exactly one sanitized
-stderr warning per invocation and never fails the remote result. When neither
-path applies, no history directory or database is opened or created.
+bulk_index)` membership link and caller ID) and terminal task status/wait
+observations (a repeated read of one remote task refreshes the one saved row
+instead of duplicating it). Queued and running task observations remain
+ephemeral and do not open history. A manual save failure surfaces as a
+canonical local-history error (exit 7) after the honest envelopes render in
+order with their own truthful save states; an automatic failure produces
+exactly one sanitized stderr warning per invocation and never fails the
+remote result. When neither path applies, no history directory or database is
+opened or created.
 Enabling automatic history for the first time (`config set history.enabled
 true` after it was unset or false) acknowledges ADR 0004 with exactly one
 direct plaintext warning on stderr: history stores submitted content and
-results unencrypted in the local data directory. The bulk and task surfaces
-carry no `--save`, and `history save` is rejected as an unknown argument; the
-history read, search, export, and mutation commands remain planned for a later
-packet.
+results unencrypted in the local data directory. Saved plaintext is redacted
+from `history show` by default but is exposed by `history show
+--include-input`; `history export` includes retained content unless
+`--redact-content` is requested. The bulk and task surfaces carry no `--save`,
+and `history save` is rejected as an unknown argument. History data remains
+subject to the owner-only local filesystem boundary; it is not encrypted.
 
 ## Fixed
 

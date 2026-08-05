@@ -5,6 +5,7 @@ use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
 pub(crate) mod bulk;
 pub(crate) mod detect;
 pub mod grammar;
+mod history;
 mod local_setup;
 
 pub(crate) use crate::config::redact_io;
@@ -346,7 +347,7 @@ pub fn runtime_command() -> Command {
                 .value_name("ID")
                 .num_args(1)
                 .required(true)
-                .help("The upstream Pangram task identity"),
+                .help("An upstream Pangram task identity or saved local anl_ identity"),
         );
 
     let task_wait = Command::new("wait")
@@ -356,7 +357,7 @@ pub fn runtime_command() -> Command {
                 .value_name("ID")
                 .num_args(1)
                 .required(true)
-                .help("The upstream Pangram task identity"),
+                .help("An upstream Pangram task identity or saved local anl_ identity"),
         )
         .arg(
             Arg::new("timeout")
@@ -427,6 +428,7 @@ pub fn runtime_command() -> Command {
         .subcommand(detect)
         .subcommand(bulk)
         .subcommand(task)
+        .subcommand(history::command())
 }
 
 /// Parses a caller-supplied argv without exiting the process.
@@ -529,6 +531,7 @@ where
         Some(("detect", sub)) => execute_detect(sub, global, streams),
         Some(("bulk", sub)) => execute_bulk_leaf(sub, &matches, global, streams),
         Some(("task", sub)) => execute_task_leaf(sub, &matches, global, streams),
+        Some(("history", sub)) => finish_detect(history::execute(sub, &matches, global, streams)),
         // A bare literal-text reach (`pangram some text`) resolves to implicit
         // detection; the literal `-` reads stdin. A bare launch with no text
         // and no subcommand falls through to the successful help surface (the
@@ -896,7 +899,7 @@ mod tests {
         for unknown in ["--frobnicate", "-z", "--not-a-real-flag"] {
             try_parse(&[unknown]).unwrap_err();
         }
-        for literal in ["history", "mcp", "update", "agent", "plagiarism"] {
+        for literal in ["mcp", "update", "agent", "plagiarism"] {
             let parsed = try_parse(&[literal]).unwrap();
             assert_eq!(parsed.get_one::<String>("TEXT").unwrap(), literal);
             assert!(parsed.subcommand().is_none());

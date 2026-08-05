@@ -75,6 +75,13 @@ jobs:
         run: cargo build --locked
       - name: Test
         run: cargo test --locked --all-features
+      - name: Enforce 10k history-search release budget
+        if: matrix.toolchain == '1.97.1'
+        run: >-
+          timeout 300s cargo test --release --locked --all-features
+          --test history-search-performance
+          -- --exact representative_indexed_search_at_ten_thousand_analyses_stays_under_budget
+          --nocapture
       - name: Prove one-package workspace
         if: matrix.toolchain == '1.97.1'
         run: |
@@ -118,6 +125,10 @@ jobs:
           toolchain: "1.97.1"
       - name: Run Windows credential ACL integration tests
         run: cargo test --locked --test windows-credential-acl
+      - name: Run Windows history ACL and reparse integration tests
+        run: cargo test --locked --test windows-history-security
+      - name: Run Windows history sidecar lifetime tests
+        run: cargo test --locked --lib history::sidecars::
 
   supply-chain:
     name: Supply chain

@@ -18,6 +18,7 @@ fn timestamp(value: &str) -> UtcTimestamp {
 }
 
 fn standalone(id: &str, input: &str) -> StoredAnalysis {
+    let input_sha256 = Sha256Hash::digest(input);
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: None,
@@ -26,14 +27,37 @@ fn standalone(id: &str, input: &str) -> StoredAnalysis {
         submission_outcome: SubmissionOutcome::Terminal,
         save_state: SaveState::SavedHistory,
         input_kind: InputKind::Text,
-        input_sha256: Sha256Hash::from_bytes([7; 32]),
+        input_sha256,
         display_name: None,
-        input_json: format!("{{\"type\":\"text\",\"text\":{input:?}}}"),
-        result_json: Some("{\"headline\":\"Human-written\"}".to_owned()),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "literal",
+            "sha256": input_sha256,
+            "byte_count": input.len(),
+            "word_count": input.split_whitespace().count(),
+            "text": input
+        })
+        .to_string(),
+        result_json: Some(
+            serde_json::json!({
+                "classification": "human",
+                "headline": "Human-written",
+                "prediction": "Human",
+                "fraction_ai": 0.0,
+                "fraction_ai_assisted": 0.0,
+                "fraction_human": 1.0,
+                "num_ai_segments": 0,
+                "num_ai_assisted_segments": 0,
+                "num_human_segments": 1,
+                "segments": []
+            })
+            .to_string(),
+        ),
         error_json: None,
         upstream_version: None,
         retry_of: None,
         rerun_of: None,
+        submitted_at: Some(timestamp("2026-08-01T09:59:00Z")),
         created_at: timestamp("2026-08-01T10:00:00Z"),
         updated_at: timestamp("2026-08-01T10:05:00Z"),
         completed_at: Some(timestamp("2026-08-01T10:05:00Z")),

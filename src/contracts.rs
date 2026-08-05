@@ -16,8 +16,8 @@ use thiserror::Error;
 
 use crate::cli::{FULL_GRAMMAR, runtime_command};
 use crate::domain::{
-    Analysis, AnalysisPage, BulkCollection, BulkItem, BulkPage, Check, CheckStatus, OrderedChecks,
-    SubmissionOutcomeUnknownDetails,
+    Analysis, AnalysisSummaryPage, BulkCollection, BulkItem, BulkPage, Check, CheckStatus,
+    OrderedChecks, SubmissionOutcomeUnknownDetails,
 };
 use crate::output::{
     CanonicalError, EnvelopeMeta, ErrorCode, ExitCode, ResolvedCommand,
@@ -431,7 +431,7 @@ fn output_schema() -> Value {
         data_condition(&["bulk_results"], schema_ref::<BulkPage<CanonicalError>>()),
         data_condition(
             &["history_list", "history_search"],
-            schema_ref::<AnalysisPage<CanonicalError>>(),
+            schema_ref::<AnalysisSummaryPage>(),
         ),
         data_condition(
             &[

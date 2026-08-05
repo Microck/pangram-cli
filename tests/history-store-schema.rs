@@ -50,6 +50,7 @@ CREATE TABLE analyses (
   input_sha256 TEXT NOT NULL,
   display_name TEXT,
   input_json TEXT NOT NULL,
+  check_count INTEGER NOT NULL DEFAULT 1 CHECK (check_count BETWEEN 1 AND 2),
   result_json TEXT,
   error_json TEXT,
   retry_of TEXT REFERENCES analyses(id),
@@ -159,11 +160,13 @@ CREATE TABLE analyses (
   input_sha256 TEXT NOT NULL,
   display_name TEXT,
   input_json TEXT NOT NULL,
+  check_count INTEGER NOT NULL DEFAULT 1 CHECK (check_count BETWEEN 1 AND 2),
   result_json TEXT,
   error_json TEXT,
   upstream_version TEXT,
-  retry_of TEXT REFERENCES analyses(id),
-  rerun_of TEXT REFERENCES analyses(id),
+  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  submitted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,
@@ -177,6 +180,16 @@ CREATE TABLE upstream_tasks (
   observed_at TEXT NOT NULL,
   PRIMARY KEY (analysis_id, check_kind),
   UNIQUE (check_kind, upstream_task_id)
+);
+CREATE TABLE analysis_checks (
+  analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+  check_index INTEGER NOT NULL,
+  check_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result_json TEXT,
+  error_json TEXT,
+  PRIMARY KEY (analysis_id, check_index),
+  UNIQUE (analysis_id, check_kind)
 );
 CREATE VIRTUAL TABLE analysis_search USING fts5(
   analysis_id UNINDEXED, input_text, filename, headline, source_urls,
@@ -286,6 +299,7 @@ CREATE INDEX analyses_bulk_index ON analyses(bulk_id, bulk_index);
         "upstream version missing" => {
             exact_v1.replace("  upstream_version TEXT,\n", "")
         }
+        "submitted at missing" => exact_v1.replace("  submitted_at TEXT,\n", ""),
         // Declared type drift on one counter column.
         "bulk status type" => exact_v1.replacen(
             "  status TEXT NOT NULL,\n  submission_outcome",
@@ -347,18 +361,22 @@ CREATE INDEX analyses_bulk_index ON analyses(bulk_id, bulk_index);
         ),
         // analyses loses its own self-referencing retry foreign key.
         "retry foreign key missing" => exact_v1.replace(
-            "  retry_of TEXT REFERENCES analyses(id),",
+            "  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,",
             "  retry_of TEXT,",
         ),
         // analyses re-points its retry foreign key at the wrong table.
         "retry foreign key wrong target" => exact_v1.replace(
-            "  retry_of TEXT REFERENCES analyses(id),",
+            "  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,",
             "  retry_of TEXT REFERENCES bulk_collections(id),",
         ),
         // The rerun lineage key is independently contracted.
         "rerun foreign key missing" => exact_v1.replace(
-            "  rerun_of TEXT REFERENCES analyses(id),",
+            "  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,",
             "  rerun_of TEXT,",
+        ),
+        "lineage delete action wrong" => exact_v1.replace(
+            "  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,",
+            "  retry_of TEXT REFERENCES analyses(id) ON DELETE CASCADE,",
         ),
         // SQLite's foreign-key PRAGMA does not preserve these declaration
         // clauses. The canonical sqlite_master catalog must still reject
@@ -368,12 +386,12 @@ CREATE INDEX analyses_bulk_index ON analyses(bulk_id, bulk_index);
             "  bulk_id TEXT REFERENCES bulk_collections(id) MATCH FULL,",
         ),
         "foreign key deferrable initially" => exact_v1.replace(
-            "  retry_of TEXT REFERENCES analyses(id),",
-            "  retry_of TEXT REFERENCES analyses(id) DEFERRABLE INITIALLY DEFERRED,",
+            "  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,",
+            "  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,",
         ),
         "foreign key not deferrable initially" => exact_v1.replace(
-            "  rerun_of TEXT REFERENCES analyses(id),",
-            "  rerun_of TEXT REFERENCES analyses(id) NOT DEFERRABLE INITIALLY IMMEDIATE,",
+            "  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,",
+            "  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL NOT DEFERRABLE INITIALLY IMMEDIATE,",
         ),
         // Index PRAGMAs preserve the key shape but not the conflict policy
         // written on a table constraint.
@@ -425,7 +443,12 @@ CREATE INDEX analyses_bulk_index ON analyses(bulk_id, bulk_index);
                 "CREATE INDEX analyses_bulk_index ON analyses(bulk_id, bulk_index);",
                 "create index \"analyses_bulk_index\"\n\
                  on \"analyses\" ( \"bulk_id\" , \"bulk_index\" ) ; -- trailing comment",
-            ),
+            )
+            .replace(
+                "CHECK (check_count BETWEEN 1 AND 2)",
+                "check (check_count between 1 and 2)",
+            )
+            .replace("ON DELETE SET NULL", "on delete set null"),
         other => panic!("unhandled deviation marker: {other}"),
     };
     assert_ne!(
@@ -461,6 +484,7 @@ fn every_named_incompatible_v1_deviation_is_rejected_as_history_corrupt() {
         "bulk index made unique",
         "result_json not null",
         "upstream version missing",
+        "submitted at missing",
         "bulk status type",
         "bulk status default",
         "extra virtual generated column",
@@ -475,6 +499,7 @@ fn every_named_incompatible_v1_deviation_is_rejected_as_history_corrupt() {
         "retry foreign key missing",
         "retry foreign key wrong target",
         "rerun foreign key missing",
+        "lineage delete action wrong",
         "foreign key match clause",
         "foreign key deferrable initially",
         "foreign key not deferrable initially",
@@ -565,11 +590,13 @@ CREATE TABLE analyses (
   input_sha256 TEXT NOT NULL,
   display_name TEXT,
   input_json TEXT NOT NULL,
+  check_count INTEGER NOT NULL DEFAULT 1 CHECK (check_count BETWEEN 1 AND 2),
   result_json TEXT,
   error_json TEXT,
   upstream_version TEXT,
-  retry_of TEXT REFERENCES analyses(id),
-  rerun_of TEXT REFERENCES analyses(id),
+  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  submitted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT
@@ -629,11 +656,13 @@ CREATE TABLE analyses (
   input_sha256 TEXT NOT NULL,
   display_name TEXT,
   input_json TEXT NOT NULL,
+  check_count INTEGER NOT NULL DEFAULT 1 CHECK (check_count BETWEEN 1 AND 2),
   result_json TEXT,
   error_json TEXT,
   upstream_version TEXT,
-  retry_of TEXT REFERENCES analyses(id),
-  rerun_of TEXT REFERENCES analyses(id),
+  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  submitted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,

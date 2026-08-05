@@ -2,219 +2,18 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::OnceLock;
 
-use microck_pangram_cli::cli::{
-    ArgumentSpec, Availability, CommandKind, CommandSpec, FULL_GRAMMAR,
-};
+use microck_pangram_cli::cli::{Availability, CommandKind, FULL_GRAMMAR};
 use serde_json::Value;
 
-/// One hermetic filesystem root shared by every compiled-binary spawn in
-/// this file. Credential, config, data, and home state live under it so no
-/// subprocess can see a stored key, a host credential helper, or a real
-/// config. It is built once and kept alive for the whole test process.
-struct HermeticRoot {
-    _root: tempfile::TempDir,
-}
+#[path = "support/cli_contract_env.rs"]
+mod harness;
 
-fn hermetic_env(root: &tempfile::TempDir) -> Vec<(String, String)> {
-    let home = root.path().join("home");
-    let xdg_config = root.path().join("xdg-config");
-    let xdg_data = root.path().join("xdg-data");
-    let config = root.path().join("pangram.toml");
-    let data = root.path().join("data");
-    for directory in [&home, &xdg_config, &xdg_data, &data] {
-        fs::create_dir_all(directory).unwrap();
-    }
-    [
-        ("HOME", home.to_str().unwrap()),
-        ("XDG_CONFIG_HOME", xdg_config.to_str().unwrap()),
-        ("XDG_DATA_HOME", xdg_data.to_str().unwrap()),
-        ("PANGRAM_CONFIG", config.to_str().unwrap()),
-        ("PANGRAM_DATA_DIR", data.to_str().unwrap()),
-        ("CI", "true"),
-        ("TERM", "dumb"),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_string(), value.to_string()))
-    .collect()
-}
-
-fn hermetic_root() -> &'static HermeticRoot {
-    static ROOT: OnceLock<HermeticRoot> = OnceLock::new();
-    ROOT.get_or_init(|| {
-        let root = tempfile::tempdir().unwrap();
-        HermeticRoot { _root: root }
-    })
-}
-
-fn pangram() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_pangram"));
-    // Hermetic by default: remove any inherited credential override and root
-    // all config/data/home state in a private temporary directory so no
-    // stored credential or production billing path is reachable. A test that
-    // needs a key sets it deliberately on the child it spawns.
-    command.env_remove("PANGRAM_API_KEY");
-    let root = hermetic_root();
-    for (key, value) in hermetic_env(&root._root) {
-        command.env(key, value);
-    }
-    command
-}
-
-const HELP: &str = "\
-Unofficial Pangram terminal client
-
-Usage: pangram [OPTIONS] [TEXT] [COMMAND]
-
-Commands:
-  auth    Manage the locally stored Pangram API key
-  config  Inspect and edit the local Pangram configuration
-  doctor  Run local diagnostics without network access or credential validation
-  detect  Detect AI-generated text through Pangram 4
-  bulk    Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
-  task    Inspect or wait for a Pangram 4 text task
-  help    Print this message or the help of the given subcommand(s)
-
-Arguments:
-  [TEXT]  Bare text analyzes it through AI detection; the literal `-` reads stdin
-
-Options:
-      --config <PATH>          Explicit configuration file path for this invocation
-      --data-dir <PATH>        Explicit history and state directory for this invocation
-      --error-format <FORMAT>  Surface failures as a JSON envelope or a text message [possible values: json, text]
-      --no-color               Disable terminal color in pretty output
-  -h, --help                   Print help
-  -V, --version                Print version
-";
-
-const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
-    "agent",
-    "analyze",
-    "completions",
-    "history",
-    "mcp",
-    "plagiarism",
-    "skills",
-    "update",
-];
-
-// Phase 2 runtime dependencies: the Phase 1 set plus the async analysis core
-// (Tokio runtime utilities, the rustls-only Reqwest client, and
-// CancellationToken support). The analysis module owns every network path.
-// `toon-format` joins for the canonical TOON projection of the JSON envelope.
-const PHASE_4_RUNTIME_DEPENDENCIES: &[&str] = &[
-    "clap",
-    "directories",
-    "jiff",
-    "reqwest",
-    "rpassword",
-    "rusqlite",
-    "schemars",
-    "secrecy",
-    "serde",
-    "serde_json",
-    "sha2",
-    "signal-hook",
-    "thiserror",
-    "toon-format",
-    "tokio",
-    "tokio-util",
-    "toml",
-    "url",
-    "uuid",
-    "windows-sys",
-    "zeroize",
-];
-
-const FORBIDDEN_NETWORK_APIS: &[&str] = &[
-    "hyper::",
-    "ureq::",
-    "curl::",
-    "std::net::",
-    "std::os::unix::net::",
-    "tokio::net::",
-    "mio::net::",
-    "socket2::",
-    "TcpStream::",
-    "TcpListener::",
-    "UdpSocket::",
-    "UnixStream::",
-    "UnixListener::",
-    "Command::new(\"curl\")",
-    "Command::new(\"wget\")",
-];
-
-const FORBIDDEN_NETWORK_ENDPOINTS: &[&str] = &[
-    "text.external-api.pangram.com",
-    "file-external.api.pangram.com",
-    "plagiarism.api.pangram.com",
-    "github.com/Microck/pangram-cli/releases/latest/download",
-];
-
-fn command(path: &[&str]) -> &'static CommandSpec {
-    FULL_GRAMMAR
-        .commands
-        .iter()
-        .find(|command| command.path == path)
-        .unwrap_or_else(|| panic!("missing command path: {path:?}"))
-}
-
-fn argument(command: &'static CommandSpec, name: &str) -> &'static ArgumentSpec {
-    command
-        .arguments
-        .iter()
-        .find(|argument| argument.name == name)
-        .unwrap_or_else(|| panic!("missing argument {name} on {:?}", command.path))
-}
-
-fn rust_source_paths() -> Vec<PathBuf> {
-    fn collect(directory: &std::path::Path, paths: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                collect(&path, paths);
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-                paths.push(path);
-            }
-        }
-    }
-
-    let mut paths = Vec::new();
-    collect(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut paths,
-    );
-    paths.sort();
-    paths
-}
-
-fn code_before_line_comment(line: &str) -> &str {
-    let bytes = line.as_bytes();
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut index = 0;
-
-    while index + 1 < bytes.len() {
-        let byte = bytes[index];
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-        } else if byte == b'"' {
-            in_string = true;
-        } else if byte == b'/' && bytes[index + 1] == b'/' {
-            return &line[..index];
-        }
-        index += 1;
-    }
-
-    line
-}
+use harness::{
+    FORBIDDEN_NETWORK_APIS, FORBIDDEN_NETWORK_ENDPOINTS, HELP, PHASE_4_RUNTIME_DEPENDENCIES,
+    PLANNED_TOP_LEVEL_COMMANDS, argument, code_before_line_comment, command, pangram,
+    rust_source_paths,
+};
 
 #[test]
 fn help_lists_only_implemented_command_entries() {
@@ -291,6 +90,7 @@ fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
         .commands
         .iter()
         .filter(|command| command.availability == Availability::Planned)
+        .filter(|command| command.path.len() == 1)
         .filter_map(|command| command.path.first().copied())
         .collect();
     let expected: BTreeSet<_> = PLANNED_TOP_LEVEL_COMMANDS.iter().copied().collect();
@@ -428,6 +228,30 @@ fn save_is_available_on_detect_and_nowhere_else() {
         let output = pangram().args(arguments).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{arguments:?} rejected");
         assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn every_activated_history_argument_is_available() {
+    for path in [
+        &["history", "list"][..],
+        &["history", "show"][..],
+        &["history", "search"][..],
+        &["history", "delete"][..],
+        &["history", "clear"][..],
+        &["history", "export"][..],
+        &["history", "rerun"][..],
+    ] {
+        let spec = command(path);
+        assert_eq!(spec.availability, Availability::Available);
+        for argument in spec.arguments {
+            assert_eq!(
+                argument.availability,
+                Availability::Available,
+                "activated argument {} on {path:?} remains planned",
+                argument.name
+            );
+        }
     }
 }
 

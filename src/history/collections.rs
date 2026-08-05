@@ -13,7 +13,9 @@ use rusqlite::params;
 
 use crate::domain::BulkId;
 
-use super::analysis_writes::upsert_observation_row;
+use super::analysis_writes::{
+    insert_check_rows, legacy_checks_for_reconcile, set_check_count, upsert_observation_row,
+};
 use super::records::{StoredAnalysis, StoredBulkCollection, StoredUpstreamTask};
 use super::store::HistoryStore;
 use super::wire::{BulkRow, row_to_analysis, row_to_bulk};
@@ -27,7 +29,10 @@ impl HistoryStore {
         &mut self,
         record: &StoredBulkCollection,
     ) -> Result<(), HistoryError> {
-        self.in_transaction(|transaction| insert_bulk_row(transaction, record))
+        self.in_transaction(|transaction| {
+            insert_bulk_row(transaction, record)?;
+            super::read_validation::certify_bulk_aggregate(transaction, &record.id)
+        })
     }
 
     /// Resolves the stored collection that reconciles one upstream bulk job,
@@ -92,10 +97,87 @@ impl HistoryStore {
         children: &[(StoredAnalysis, Vec<StoredUpstreamTask>)],
     ) -> Result<(), HistoryError> {
         self.in_immediate_transaction(|transaction| {
+            let mut existing = std::collections::BTreeSet::new();
+            if transaction
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM bulk_collections WHERE id = ?1)",
+                    [collection.id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "read bulk collection",
+                    )
+                })?
+            {
+                existing.insert(collection.id);
+            }
+            if let Some(upstream) = &collection.upstream_bulk_id {
+                let by_upstream = transaction
+                    .query_row(
+                        "SELECT id FROM bulk_collections WHERE upstream_bulk_id = ?1",
+                        [upstream],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map(Some)
+                    .or_else(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                        _ => Err(HistoryError::from_sqlite(
+                            HistoryErrorCode::HistoryUnavailable,
+                            "read bulk collection",
+                        )),
+                    })?;
+                if let Some(id) = by_upstream {
+                    existing.insert(id.parse().map_err(|_| {
+                        HistoryError::new(
+                            HistoryErrorCode::HistoryCorrupt,
+                            "the stored bulk collection identity is invalid",
+                        )
+                    })?);
+                }
+            }
+            for id in existing {
+                super::read_validation::certify_bulk_aggregate(transaction, &id)?;
+            }
+            // A child may resolve to a pre-existing standalone row by its
+            // observation identity even when this collection is new. Prove
+            // every such candidate before the collection upsert performs
+            // the transaction's first write.
+            for (child, observations) in children {
+                super::reconcile::validate_existing_child_state_tx(
+                    transaction,
+                    child,
+                    observations,
+                )?;
+            }
             super::reconcile::upsert_bulk_row_tx(transaction, collection)?;
             for (child, observations) in children {
                 let stored_id =
                     super::reconcile::upsert_child_row_tx(transaction, child, observations)?;
+                let stored_check_rows = transaction
+                    .query_row(
+                        "SELECT COUNT(*) FROM analysis_checks WHERE analysis_id = ?1",
+                        [stored_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| {
+                        HistoryError::from_sqlite(
+                            HistoryErrorCode::HistoryCorrupt,
+                            "read check count",
+                        )
+                    })?;
+                if stored_check_rows == 0 {
+                    let rebound_checks = legacy_checks_for_reconcile(child, observations)?
+                        .into_iter()
+                        .map(|check| super::records::StoredCheck {
+                            analysis_id: stored_id,
+                            ..check
+                        })
+                        .collect::<Vec<_>>();
+                    insert_check_rows(transaction, &rebound_checks)?;
+                    set_check_count(transaction, stored_id, rebound_checks.len())?;
+                }
                 for task in observations {
                     // Rebind onto the child's stored identity: a refreshed
                     // child's row keeps its first-saved id, so its task rows
@@ -108,7 +190,7 @@ impl HistoryStore {
                     upsert_observation_row(transaction, &rebound)?;
                 }
             }
-            Ok(())
+            super::read_validation::certify_bulk_aggregate(transaction, &collection.id)
         })
     }
 
@@ -117,13 +199,14 @@ impl HistoryStore {
     /// Same structural FTS rule as `get_analysis`: a member row missing its
     /// synchronized search entry is corruption, not an absent payload.
     pub fn list_bulk_analyses(&self, bulk: &BulkId) -> Result<Vec<StoredAnalysis>, HistoryError> {
-        self.with_connection_result(|connection| {
+        self.with_read_snapshot(|connection| {
+            super::search::certify_search_index(connection)?;
             let mut statement = connection
                 .prepare(
                     "SELECT id, bulk_id, bulk_index, caller_id, status, submission_outcome,
                             save_state, input_type, input_sha256, display_name, input_json,
                             result_json, error_json, upstream_version, retry_of, rerun_of,
-                            created_at, updated_at, completed_at
+                            submitted_at, created_at, updated_at, completed_at
                      FROM analyses WHERE bulk_id = ?1 ORDER BY bulk_index",
                 )
                 .map_err(|_| {

@@ -5,7 +5,11 @@ use rusqlite::params;
 
 use crate::domain::AnalysisId;
 
-use super::super::analysis_writes::replace_search_row;
+use super::super::analysis_writes::{
+    certify_stored_check_rows, replace_check_rows, replace_search_row, set_check_count,
+    validate_check_rows,
+};
+use super::super::records::StoredCheck;
 use super::super::wire::{wire_outcome, wire_status};
 use super::super::{HistoryError, HistoryErrorCode, ObservationSnapshot};
 
@@ -39,23 +43,47 @@ pub(in crate::history) fn update_observation_snapshot_tx(
     id: &AnalysisId,
     observed_at: crate::domain::UtcTimestamp,
     snapshot: &ObservationSnapshot,
+    authoritative_checks: &[StoredCheck],
+    replace_authoritative_checks: bool,
 ) -> Result<(), HistoryError> {
     let prior_search = child_search_by_id_tx(transaction, id)?;
-    let (body_result_sql, body_error_sql) =
-        match incoming_body(&snapshot.result_json, &snapshot.error_json)? {
-            IncomingBody::Empty => ("COALESCE(?4, result_json)", "COALESCE(?5, error_json)"),
-            IncomingBody::Result => ("?4", "NULL"),
-            IncomingBody::Error => ("NULL", "?5"),
-        };
+    let prior_terminal = stored_terminal_snapshot_tx(transaction, id)?;
+    certify_stored_check_rows(transaction, id)?;
+    let checks = authoritative_checks
+        .iter()
+        .cloned()
+        .map(|check| StoredCheck {
+            analysis_id: *id,
+            ..check
+        })
+        .collect::<Vec<_>>();
+    let incoming_body = incoming_body(&snapshot.result_json, &snapshot.error_json)?;
+    let terminal_dominates = prior_terminal && matches!(incoming_body, IncomingBody::Empty);
+    let replace_checks = !terminal_dominates
+        && (replace_authoritative_checks || !matches!(incoming_body, IncomingBody::Empty));
+    if replace_checks {
+        validate_check_rows(*id, &checks)?;
+    }
+    let (body_result_sql, body_error_sql) = match incoming_body {
+        IncomingBody::Empty => ("COALESCE(?4, result_json)", "COALESCE(?5, error_json)"),
+        IncomingBody::Result => ("?4", "NULL"),
+        IncomingBody::Error => ("NULL", "?5"),
+    };
     let statement = format!(
         "UPDATE analyses SET
-            status = ?2,
-            submission_outcome = ?3,
+            status = CASE WHEN ?9 THEN status ELSE ?2 END,
+            submission_outcome = CASE WHEN ?9 THEN submission_outcome ELSE ?3 END,
             result_json = {body_result_sql},
             error_json = {body_error_sql},
-            upstream_version = COALESCE(?6, upstream_version),
+            upstream_version = CASE
+                WHEN ?9 THEN upstream_version
+                ELSE COALESCE(?6, upstream_version)
+            END,
             updated_at = ?7,
-            completed_at = COALESCE(?8, completed_at)
+            completed_at = CASE
+                WHEN ?9 THEN completed_at
+                ELSE COALESCE(?8, completed_at)
+            END
          WHERE id = ?1"
     );
     let written = transaction
@@ -70,6 +98,7 @@ pub(in crate::history) fn update_observation_snapshot_tx(
                 snapshot.upstream_version,
                 observed_at.to_string(),
                 snapshot.completed_at.map(|instant| instant.to_string()),
+                terminal_dominates,
             ],
         )
         .map_err(|_| {
@@ -84,14 +113,22 @@ pub(in crate::history) fn update_observation_snapshot_tx(
             "the recorded analysis no longer exists",
         ));
     }
-    let search = (
+    if replace_checks {
+        replace_check_rows(transaction, *id, &checks)?;
+        set_check_count(transaction, *id, checks.len())?;
+    }
+    let search = if terminal_dominates {
         prior_search
-            .0
-            .or_else(|| snapshot.search_input_text.clone()),
-        prior_search.1.or_else(|| snapshot.search_filename.clone()),
-        snapshot.search_headline.clone().or(prior_search.2),
-        snapshot.search_source_urls.clone().or(prior_search.3),
-    );
+    } else {
+        (
+            prior_search
+                .0
+                .or_else(|| snapshot.search_input_text.clone()),
+            prior_search.1.or_else(|| snapshot.search_filename.clone()),
+            snapshot.search_headline.clone().or(prior_search.2),
+            snapshot.search_source_urls.clone().or(prior_search.3),
+        )
+    };
     replace_search_row(
         transaction,
         &id.to_string(),
@@ -100,6 +137,37 @@ pub(in crate::history) fn update_observation_snapshot_tx(
         &search.2,
         &search.3,
     )
+}
+
+pub(super) fn stored_terminal_snapshot_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &AnalysisId,
+) -> Result<bool, HistoryError> {
+    transaction
+        .query_row(
+            "SELECT result_json IS NOT NULL OR error_json IS NOT NULL
+             FROM analyses WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| {
+            HistoryError::from_sqlite(
+                HistoryErrorCode::HistoryCorrupt,
+                "read terminal observation snapshot",
+            )
+        })
+}
+
+/// Validates one existing durable analysis through the exact canonical
+/// reconstruction used by `history show`, while borrowing the caller's
+/// transaction. Reconciliation calls this before its first mutation so
+/// corrupt input/provenance, lineage, membership, checks, task evidence, or
+/// FTS state can never be silently repaired by an upsert.
+pub(super) fn certify_existing_analysis_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &AnalysisId,
+) -> Result<(), HistoryError> {
+    super::super::read_validation::certify_analysis_aggregate(transaction, id)
 }
 
 /// The stored search payload columns synchronized with one analysis row.

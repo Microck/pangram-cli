@@ -171,7 +171,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
             SaveState::Ephemeral,
             self.provenance(None),
             None,
-            None,
+            self.request.rerun_of(),
             self.created_at,
             now,
             None,
@@ -210,7 +210,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
             SaveState::Ephemeral,
             provenance,
             None,
-            None,
+            self.request.rerun_of(),
             self.created_at,
             now,
             Some(now),
@@ -234,7 +234,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
             SaveState::Ephemeral,
             self.provenance(Some(now)),
             None,
-            None,
+            self.request.rerun_of(),
             self.created_at,
             now,
             Some(now),
@@ -798,7 +798,7 @@ fn observed_terminal_task_success(
     let now = UtcTimestamp::now();
     let input = task.normalized_text.as_deref().map(|text| {
         let byte_count = u64::try_from(text.len()).unwrap_or(u64::MAX);
-        let word_count = u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX);
+        let word_count = super::canonical_text_word_count(text);
         crate::domain::AnalysisInput::Text(
             crate::domain::TextInput::new(
                 crate::domain::TextOrigin::Unknown,

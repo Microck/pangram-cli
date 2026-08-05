@@ -9,9 +9,10 @@ and AI agents that need stable JSON and MCP contracts.
 > `auth` (persistent API-key setup and status), `config` (list/get/set/path),
 > `doctor` (local diagnostics), `detect` (Pangram 4 text AI detection,
 > including bare literal text, `-`, and piped stdin), `bulk` (submit, status,
-> wait, and results for asynchronous bulk detection), and `task`
-> (status and wait for one Pangram text task) are compiled and available.
-> Plagiarism and combined analysis, `history`, and the TUI and stdio MCP
+> wait, and results for asynchronous bulk detection), `task`
+> (status and wait for one Pangram text task), and `history` (list, show,
+> literal-text search, delete, clear, export, and rerun) are compiled and available.
+> Plagiarism and combined analysis, and the TUI and stdio MCP
 > server remain planned and are not available yet. Live Pangram conformance
 > is pending and public release support (including live file and plagiarism
 > conformance) is still gated; compiled contract and loopback protocol tests
@@ -108,6 +109,7 @@ Available today:
 | `pangram doctor` | Run local, non-billable diagnostics |
 | `pangram bulk` | Submit and inspect asynchronous bulk detection |
 | `pangram task` | Inspect or wait for a Pangram text task |
+| `pangram history` | List, show, search, delete, clear, export, and rerun optional local history |
 
 Planned:
 
@@ -116,7 +118,6 @@ Planned:
 | `pangram` (TUI) | Launch the interactive terminal interface |
 | `pangram plagiarism` | Run plagiarism checking |
 | `pangram analyze` | Run AI detection and plagiarism together |
-| `pangram history` | Manage optional local analysis history |
 | `pangram mcp` | Run or install the typed stdio MCP server |
 | `pangram agent` | Print the embedded agent usage guide |
 | `pangram skills` | List and load version-matched embedded skills |

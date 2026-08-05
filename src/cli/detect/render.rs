@@ -275,6 +275,38 @@ pub(super) fn success_outcome(
     }
 }
 
+/// Renders one canonical analysis for a non-detect command while preserving
+/// the shared format, error, flush, and remote-outcome exit rules.
+pub(crate) fn analysis_command_outcome(
+    command: ResolvedCommand,
+    output: ResolvedOutput,
+    started_at: crate::domain::UtcTimestamp,
+    analysis: crate::domain::Analysis<CanonicalError>,
+) -> DetectOutcome {
+    let data = match command {
+        ResolvedCommand::HistoryRerun => CommandData::HistoryRerun(analysis),
+        _ => return internal_outcome(command, output, started_at),
+    };
+    let envelope = CommandEnvelope::success(
+        data,
+        EnvelopeMeta::default()
+            .with_started_at(started_at)
+            .with_duration_ms(elapsed_ms(started_at)),
+    );
+    let exit_code = analysis_exit_code(match envelope.data() {
+        Some(CommandData::HistoryRerun(analysis)) => analysis,
+        _ => unreachable!("history rerun envelope"),
+    })
+    .as_u8();
+    emit_primary(
+        command,
+        std::slice::from_ref(&envelope),
+        output,
+        exit_code,
+        started_at,
+    )
+}
+
 /// The process exit for a success envelope derives from its canonical
 /// content exactly as the contract maps it (contracts.md 12): a partial
 /// result exits 3; a failed analysis exits per its terminal check error's

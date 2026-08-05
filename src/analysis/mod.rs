@@ -51,6 +51,7 @@ pub use handle::{
     AnalysisProgress, Analyzer, InterruptedAnalysis, OperationIdentity, RunningAnalysis,
     StopObserving,
 };
+pub(crate) use task::canonical_text_word_count;
 pub use task::{Accepted, AcceptedInput, AnalysisRequest, AnalysisResult, TaskError};
 pub use upstream::{
     AcceptedBulk, AnalysisError, SubmissionFailure, UpstreamClient, UpstreamEndpoints,

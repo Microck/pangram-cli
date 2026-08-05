@@ -4,15 +4,21 @@ use rusqlite::params;
 
 use crate::domain::BulkId;
 
-use super::super::analysis_writes::{ANALYSES_INSERT, replace_search_row, upsert_observation_row};
+use super::super::analysis_writes::{
+    ANALYSES_INSERT, legacy_checks_for_reconcile, replace_check_rows, replace_search_row,
+    set_check_count, upsert_observation_row, validate_check_rows,
+};
 use super::super::collections::BULK_INSERT;
-use super::super::records::{StoredAnalysis, StoredUpstreamTask};
+use super::super::records::{StoredAnalysis, StoredCheck, StoredUpstreamTask};
 use super::super::store::HistoryStore;
 use super::super::wire::{AnalysisRow, BulkRow, wire_status};
 use super::super::{HistoryError, HistoryErrorCode};
-use super::common::{IncomingBody, SearchColumns, child_search_by_id_tx, incoming_body};
+use super::common::{
+    IncomingBody, SearchColumns, certify_existing_analysis_tx, child_search_by_id_tx,
+    incoming_body, stored_terminal_snapshot_tx,
+};
 use super::task::task_lookup_targets;
-use super::{PreparedChild, ReconciledBulk};
+use super::{CompletePreparedChild, PreparedChild, ReconciledBulk};
 
 impl HistoryStore {
     /// Atomically reconciles one remotely read or submitted bulk collection
@@ -39,9 +45,41 @@ impl HistoryStore {
         collection: &super::super::records::StoredBulkCollection,
         children: &[PreparedChild],
     ) -> Result<ReconciledBulk, HistoryError> {
+        let complete = children
+            .iter()
+            .map(|(child, observations)| {
+                Ok((
+                    child.clone(),
+                    legacy_checks_for_reconcile(child, observations)?,
+                    observations.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, HistoryError>>()?;
+        self.reconcile_bulk_collection_impl(collection, &complete, false)
+    }
+
+    /// Reconciles a bulk collection while replacing every child's complete
+    /// authoritative ordered check payload in the same transaction.
+    pub fn reconcile_bulk_collection_complete(
+        &mut self,
+        collection: &super::super::records::StoredBulkCollection,
+        children: &[CompletePreparedChild],
+    ) -> Result<ReconciledBulk, HistoryError> {
+        self.reconcile_bulk_collection_impl(collection, children, true)
+    }
+
+    fn reconcile_bulk_collection_impl(
+        &mut self,
+        collection: &super::super::records::StoredBulkCollection,
+        children: &[CompletePreparedChild],
+        authoritative_checks: bool,
+    ) -> Result<ReconciledBulk, HistoryError> {
         self.in_immediate_transaction(|transaction| {
-            for (child, _) in children {
+            for (child, checks, _) in children {
                 incoming_body(&child.result_json, &child.error_json)?;
+                if authoritative_checks {
+                    validate_check_rows(child.id, checks)?;
+                }
             }
             let stored_id: BulkId = match &collection.upstream_bulk_id {
                 Some(upstream) => {
@@ -68,6 +106,24 @@ impl HistoryStore {
                 }
                 None => collection.id,
             };
+            // The upstream identity is authoritative. If it resolves an
+            // existing collection, certify that collection and all of its
+            // members before the upsert can repair or overwrite anything.
+            let resolved_exists = transaction
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM bulk_collections WHERE id = ?1)",
+                    [stored_id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "read bulk collection",
+                    )
+                })?;
+            if resolved_exists {
+                super::super::read_validation::certify_bulk_aggregate(transaction, &stored_id)?;
+            }
             // `inserted` is true exactly when no stored row for the resolved
             // identity existed before this transaction wrote one.
             let pre_existing: bool = transaction
@@ -88,15 +144,15 @@ impl HistoryStore {
 
             // Certify every existing analysis row this reconciliation may
             // read or refresh before the collection upsert performs the
-            // transaction's first write. Both a taskless membership and any
-            // distinct task-key owner must own exactly one well-typed FTS row
-            // before the ambiguous-provenance check can fail closed.
-            for (child, observations) in children {
+            // transaction's first write. The exact canonical `history show`
+            // reconstruction covers parent/check state, task evidence, FTS,
+            // input/provenance, lineage, and bulk membership.
+            for (child, _, observations) in children {
                 let rebound = StoredAnalysis {
                     bulk: child.bulk.map(|(_, index)| (stored_id, index)),
                     ..child.clone()
                 };
-                validate_child_search_state_tx(transaction, &rebound, observations)?;
+                validate_existing_child_state_tx(transaction, &rebound, observations)?;
             }
 
             // Upsert the collection row on the resolved stored identity.
@@ -106,7 +162,7 @@ impl HistoryStore {
             };
             upsert_bulk_row_tx(transaction, &row)?;
 
-            for (child, observations) in children {
+            for (child, checks, observations) in children {
                 // Rebind the membership link onto the stored collection
                 // identity, then upsert the child resolved by BOTH
                 // identities at once (its `(bulk_id, bulk_index)`
@@ -120,6 +176,37 @@ impl HistoryStore {
                     ..child.clone()
                 };
                 let child_id = upsert_child_row_tx(transaction, &rebound, observations)?;
+                let rebound_checks = checks
+                    .iter()
+                    .cloned()
+                    .map(|check| StoredCheck {
+                        analysis_id: child_id,
+                        ..check
+                    })
+                    .collect::<Vec<_>>();
+                let stored_check_rows = transaction
+                    .query_row(
+                        "SELECT COUNT(*) FROM analysis_checks WHERE analysis_id = ?1",
+                        [child_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|_| {
+                        HistoryError::from_sqlite(
+                            HistoryErrorCode::HistoryCorrupt,
+                            "read check count",
+                        )
+                    })?;
+                let body = incoming_body(&child.result_json, &child.error_json)?;
+                let terminal_dominates = matches!(body, IncomingBody::Empty)
+                    && stored_terminal_snapshot_tx(transaction, &child_id)?;
+                let replace_checks = !terminal_dominates
+                    && (stored_check_rows == 0
+                        || authoritative_checks
+                        || !matches!(body, IncomingBody::Empty));
+                if replace_checks {
+                    replace_check_rows(transaction, child_id, &rebound_checks)?;
+                    set_check_count(transaction, child_id, rebound_checks.len())?;
+                }
                 for task in observations {
                     let rebound_observation = StoredUpstreamTask {
                         analysis_id: child_id,
@@ -128,6 +215,7 @@ impl HistoryStore {
                     upsert_observation_row(transaction, &rebound_observation)?;
                 }
             }
+            super::super::read_validation::certify_bulk_aggregate(transaction, &stored_id)?;
             Ok(ReconciledBulk {
                 stored_id,
                 inserted,
@@ -136,10 +224,10 @@ impl HistoryStore {
     }
 }
 
-/// Validates the synchronized FTS row for every existing analysis that one
-/// child reconciliation can involve. This preflight is read-only and runs
-/// before the bulk transaction's first write.
-fn validate_child_search_state_tx(
+/// Validates every complete stored aggregate that one child reconciliation
+/// can involve. This preflight is read-only and runs before the bulk
+/// transaction's first write.
+pub(in crate::history) fn validate_existing_child_state_tx(
     transaction: &rusqlite::Transaction<'_>,
     record: &StoredAnalysis,
     observations: &[StoredUpstreamTask],
@@ -150,11 +238,18 @@ fn validate_child_search_state_tx(
             "a bulk child without its membership link cannot be reconciled",
         ));
     };
+    let mut candidates = std::collections::BTreeSet::new();
+    if super::super::reads::stored_analysis_opt_on(transaction, &record.id)?.is_some() {
+        candidates.insert(record.id);
+    }
     if let Some(membership) = child_prior_state_tx(transaction, bulk_id, bulk_index)? {
-        child_search_by_id_tx(transaction, &membership)?;
+        candidates.insert(membership);
     }
     if let Some(task_target) = task_lookup_targets(transaction, observations)? {
-        child_search_by_id_tx(transaction, &task_target)?;
+        candidates.insert(task_target);
+    }
+    for candidate in candidates {
+        certify_existing_analysis_tx(transaction, &candidate)?;
     }
     Ok(())
 }
@@ -173,11 +268,37 @@ pub(in crate::history) fn upsert_bulk_row_tx(
                 "{BULK_INSERT}
                  ON CONFLICT (id) DO UPDATE SET
                     upstream_bulk_id = COALESCE(excluded.upstream_bulk_id, bulk_collections.upstream_bulk_id),
-                    status = excluded.status,
-                    total_items = excluded.total_items,
-                    accepted = excluded.accepted,
-                    succeeded = excluded.succeeded,
-                    failed = excluded.failed,
+                    status = CASE
+                        WHEN bulk_collections.completed_at IS NOT NULL
+                             AND excluded.completed_at IS NULL
+                        THEN bulk_collections.status ELSE excluded.status
+                    END,
+                    submission_outcome = CASE
+                        WHEN bulk_collections.completed_at IS NOT NULL
+                             AND excluded.completed_at IS NULL
+                        THEN bulk_collections.submission_outcome
+                        ELSE excluded.submission_outcome
+                    END,
+                    total_items = CASE
+                        WHEN bulk_collections.completed_at IS NOT NULL
+                             AND excluded.completed_at IS NULL
+                        THEN bulk_collections.total_items ELSE excluded.total_items
+                    END,
+                    accepted = CASE
+                        WHEN bulk_collections.completed_at IS NOT NULL
+                             AND excluded.completed_at IS NULL
+                        THEN bulk_collections.accepted ELSE excluded.accepted
+                    END,
+                    succeeded = CASE
+                        WHEN bulk_collections.completed_at IS NOT NULL
+                             AND excluded.completed_at IS NULL
+                        THEN bulk_collections.succeeded ELSE excluded.succeeded
+                    END,
+                    failed = CASE
+                        WHEN bulk_collections.completed_at IS NOT NULL
+                             AND excluded.completed_at IS NULL
+                        THEN bulk_collections.failed ELSE excluded.failed
+                    END,
                     estimated_billable_units = MAX(bulk_collections.estimated_billable_units, excluded.estimated_billable_units),
                     updated_at = excluded.updated_at,
                     completed_at = COALESCE(excluded.completed_at, bulk_collections.completed_at)"
@@ -221,6 +342,24 @@ pub(in crate::history) fn upsert_child_row_tx(
             "a bulk child without its membership link cannot be reconciled",
         ));
     };
+    let total_items = transaction
+        .query_row(
+            "SELECT total_items FROM bulk_collections WHERE id = ?1",
+            [bulk_id.to_string()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| {
+            HistoryError::from_sqlite(
+                HistoryErrorCode::HistoryWriteFailed,
+                "validate bulk child membership",
+            )
+        })?;
+    if bulk_index < 0 || bulk_index >= total_items {
+        return Err(HistoryError::new(
+            HistoryErrorCode::HistoryWriteFailed,
+            "a bulk child index is outside its collection range",
+        ));
+    }
 
     let prior_id = child_prior_state_tx(transaction, bulk_id, bulk_index)?;
     let prior_search = prior_id
@@ -284,12 +423,12 @@ pub(in crate::history) fn upsert_child_row_tx(
             // authorship, save state, local input, and creation time stay
             // exactly as first recorded.
             let adopted_search = child_search_by_id_tx(transaction, &stored_id)?;
-            refresh_existing_child_tx(transaction, &stored_id, record)?;
+            let terminal_dominates = refresh_existing_child_tx(transaction, &stored_id, record)?;
             // The membership-holder search payload coalesces onto the
             // adopted row's own search payload (its locally held content
             // wins over a body-less refresh).
             let (input_text, filename, headline, source_urls) =
-                coalesce_search_tx(record, adopted_search);
+                coalesce_search_tx(record, adopted_search, terminal_dominates);
             replace_search_row(
                 transaction,
                 &stored_id.to_string(),
@@ -305,15 +444,15 @@ pub(in crate::history) fn upsert_child_row_tx(
             // (or a first save inserts), through the conflict-targeted
             // upsert with its authorship/coalescing rules.
             let row = AnalysisRow::of(record);
-            let (body_result_sql, body_error_sql) =
-                match incoming_body(&record.result_json, &record.error_json)? {
-                    IncomingBody::Empty => (
-                        "COALESCE(excluded.result_json, analyses.result_json)",
-                        "COALESCE(excluded.error_json, analyses.error_json)",
-                    ),
-                    IncomingBody::Result => ("excluded.result_json", "NULL"),
-                    IncomingBody::Error => ("NULL", "excluded.error_json"),
-                };
+            let body = incoming_body(&record.result_json, &record.error_json)?;
+            let (body_result_sql, body_error_sql) = match body {
+                IncomingBody::Empty => (
+                    "COALESCE(excluded.result_json, analyses.result_json)",
+                    "COALESCE(excluded.error_json, analyses.error_json)",
+                ),
+                IncomingBody::Result => ("excluded.result_json", "NULL"),
+                IncomingBody::Error => ("NULL", "excluded.error_json"),
+            };
             let completed_sql = if record.completed_at.is_some() {
                 "excluded.completed_at"
             } else {
@@ -324,12 +463,36 @@ pub(in crate::history) fn upsert_child_row_tx(
                     &format!(
                         "{ANALYSES_INSERT}
                          ON CONFLICT (bulk_id, bulk_index) DO UPDATE SET
-                            status = excluded.status,
+                            status = CASE
+                                WHEN analyses.result_json IS NOT NULL
+                                     OR analyses.error_json IS NOT NULL
+                                THEN CASE
+                                    WHEN excluded.result_json IS NULL
+                                         AND excluded.error_json IS NULL
+                                    THEN analyses.status
+                                    ELSE excluded.status
+                                END
+                                ELSE excluded.status
+                            END,
                             result_json = {body_result_sql},
                             error_json = {body_error_sql},
-                            upstream_version = COALESCE(excluded.upstream_version, analyses.upstream_version),
+                            upstream_version = CASE
+                                WHEN (analyses.result_json IS NOT NULL
+                                      OR analyses.error_json IS NOT NULL)
+                                     AND excluded.result_json IS NULL
+                                     AND excluded.error_json IS NULL
+                                THEN analyses.upstream_version
+                                ELSE COALESCE(excluded.upstream_version, analyses.upstream_version)
+                            END,
                             updated_at = excluded.updated_at,
-                            completed_at = {completed_sql}"
+                            completed_at = CASE
+                                WHEN (analyses.result_json IS NOT NULL
+                                      OR analyses.error_json IS NOT NULL)
+                                     AND excluded.result_json IS NULL
+                                     AND excluded.error_json IS NULL
+                                THEN analyses.completed_at
+                                ELSE {completed_sql}
+                            END"
                     ),
                     row.as_params(),
                 )
@@ -341,8 +504,11 @@ pub(in crate::history) fn upsert_child_row_tx(
                 })?;
 
             let search_id = prior_id.unwrap_or(record.id);
+            let terminal_dominates = prior_id.is_some()
+                && matches!(body, IncomingBody::Empty)
+                && stored_terminal_snapshot_tx(transaction, &search_id)?;
             let (input_text, filename, headline, source_urls) =
-                coalesce_search_tx(record, prior_search);
+                coalesce_search_tx(record, prior_search, terminal_dominates);
             replace_search_row(
                 transaction,
                 &search_id.to_string(),
@@ -409,13 +575,15 @@ fn refresh_existing_child_tx(
     transaction: &rusqlite::Transaction<'_>,
     stored_id: &crate::domain::AnalysisId,
     record: &StoredAnalysis,
-) -> Result<(), HistoryError> {
-    let (body_result_sql, body_error_sql) =
-        match incoming_body(&record.result_json, &record.error_json)? {
-            IncomingBody::Empty => ("COALESCE(?3, result_json)", "COALESCE(?4, error_json)"),
-            IncomingBody::Result => ("?3", "NULL"),
-            IncomingBody::Error => ("NULL", "?4"),
-        };
+) -> Result<bool, HistoryError> {
+    let body = incoming_body(&record.result_json, &record.error_json)?;
+    let terminal_dominates =
+        matches!(body, IncomingBody::Empty) && stored_terminal_snapshot_tx(transaction, stored_id)?;
+    let (body_result_sql, body_error_sql) = match body {
+        IncomingBody::Empty => ("COALESCE(?3, result_json)", "COALESCE(?4, error_json)"),
+        IncomingBody::Result => ("?3", "NULL"),
+        IncomingBody::Error => ("NULL", "?4"),
+    };
     let completed_sql = if record.completed_at.is_some() {
         "?7"
     } else {
@@ -424,14 +592,17 @@ fn refresh_existing_child_tx(
     let statement = if record.bulk.is_some() {
         format!(
             "UPDATE analyses SET
-                status = ?2,
+                status = CASE WHEN ?10 THEN status ELSE ?2 END,
                 result_json = {body_result_sql},
                 error_json = {body_error_sql},
                 bulk_id = ?5,
                 bulk_index = ?6,
-                upstream_version = COALESCE(?8, upstream_version),
+                upstream_version = CASE
+                    WHEN ?10 THEN upstream_version
+                    ELSE COALESCE(?8, upstream_version)
+                END,
                 updated_at = ?9,
-                completed_at = {completed_sql}
+                completed_at = CASE WHEN ?10 THEN completed_at ELSE {completed_sql} END
              WHERE id = ?1
                AND ((bulk_id IS NULL AND bulk_index IS NULL)
                     OR (bulk_id = ?5 AND bulk_index = ?6))"
@@ -439,12 +610,15 @@ fn refresh_existing_child_tx(
     } else {
         format!(
             "UPDATE analyses SET
-                status = ?2,
+                status = CASE WHEN ?10 THEN status ELSE ?2 END,
                 result_json = {body_result_sql},
                 error_json = {body_error_sql},
-                upstream_version = COALESCE(?8, upstream_version),
+                upstream_version = CASE
+                    WHEN ?10 THEN upstream_version
+                    ELSE COALESCE(?8, upstream_version)
+                END,
                 updated_at = ?9,
-                completed_at = {completed_sql}
+                completed_at = CASE WHEN ?10 THEN completed_at ELSE {completed_sql} END
              WHERE id = ?1"
         )
     };
@@ -465,6 +639,7 @@ fn refresh_existing_child_tx(
                 record.completed_at.map(|instant| instant.to_string()),
                 record.upstream_version,
                 record.updated_at.to_string(),
+                terminal_dominates,
             ],
         )
         .map_err(|_| {
@@ -476,7 +651,7 @@ fn refresh_existing_child_tx(
             "adopt bulk child",
         ));
     }
-    Ok(())
+    Ok(terminal_dominates)
 }
 
 /// The search payload of the adopted child row, so the refresh coalesces
@@ -542,7 +717,14 @@ fn child_attested_task_keys_tx(
 /// first when the newer observation actually supplies it. This preserves
 /// first-recorded local input and lets a later terminal observation replace
 /// a stale headline or source URL.
-fn coalesce_search_tx(record: &StoredAnalysis, prior: SearchColumns) -> SearchColumns {
+fn coalesce_search_tx(
+    record: &StoredAnalysis,
+    prior: SearchColumns,
+    terminal_dominates: bool,
+) -> SearchColumns {
+    if terminal_dominates {
+        return prior;
+    }
     (
         prior.0.or_else(|| record.search_input_text.clone()),
         prior.1.or_else(|| record.search_filename.clone()),

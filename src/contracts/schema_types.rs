@@ -5,7 +5,8 @@
 use schemars::JsonSchema;
 
 use crate::domain::{
-    Analysis, AnalysisPage, BulkCollection, BulkPage, SubmissionOutcomeUnknownDetails,
+    Analysis, AnalysisPage, AnalysisSummaryPage, BulkCollection, BulkPage,
+    SubmissionOutcomeUnknownDetails,
 };
 use crate::output::{
     AuthStatus, BulkDryRun, CanonicalError, ConfigGetStatus, ConfigListStatus, ConfigPathStatus,
@@ -21,6 +22,7 @@ pub(super) enum OutputRegistry {
     BulkDryRun(BulkDryRun),
     BulkPage(BulkPage<CanonicalError>),
     AnalysisPage(AnalysisPage<CanonicalError>),
+    AnalysisSummaryPage(AnalysisSummaryPage),
     Mutation(MutationAcknowledgement),
     Auth(AuthStatus),
     ConfigList(ConfigListStatus),

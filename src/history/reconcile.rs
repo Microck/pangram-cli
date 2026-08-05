@@ -13,9 +13,9 @@ mod task;
 
 use crate::domain::{AnalysisId, BulkId, SaveState};
 
-use super::records::{StoredAnalysis, StoredUpstreamTask};
-pub(super) use bulk::{upsert_bulk_row_tx, upsert_child_row_tx};
-pub(super) use common::{child_search_by_id_tx, update_observation_snapshot_tx};
+use super::records::{StoredAnalysis, StoredCheck, StoredUpstreamTask};
+pub(super) use bulk::{upsert_bulk_row_tx, upsert_child_row_tx, validate_existing_child_state_tx};
+pub(super) use common::update_observation_snapshot_tx;
 
 /// The outcome of one atomic observed-analysis reconciliation: the stored
 /// row's identity, its untouched `save_state`, and whether this reconcile
@@ -41,3 +41,6 @@ pub struct ReconciledBulk {
 /// One already-prepared child of a bulk reconcile, handed to the store with
 /// its membership link and observation rows.
 pub(crate) type PreparedChild = (StoredAnalysis, Vec<StoredUpstreamTask>);
+
+/// One bulk child with its authoritative ordered checks and task evidence.
+pub(crate) type CompletePreparedChild = (StoredAnalysis, Vec<StoredCheck>, Vec<StoredUpstreamTask>);

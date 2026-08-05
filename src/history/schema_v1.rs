@@ -15,29 +15,16 @@
 
 use rusqlite::Connection;
 
-use super::{HistoryError, HistoryErrorCode, store::SCHEMA_V1};
+use super::{HistoryError, HistoryErrorCode};
 
-#[derive(Debug, PartialEq, Eq)]
-struct CatalogEntry {
-    kind: String,
-    name: String,
-    table: String,
-    sql: Option<Vec<SqlToken>>,
-}
+mod catalog;
 
-#[derive(Debug, PartialEq, Eq)]
-enum SqlToken {
-    Keyword(String),
-    Identifier(String),
-    StringLiteral(String),
-    Symbol(char),
-}
+use catalog::canonical_catalog_exact;
 
 /// One expected column of a v1 base table: its case-sensitive name, its
 /// exact declared type, its `NOT NULL` flag, and its
 /// default expression exactly as `sqlite_master` records it (`None` for no
-/// default), and its `PRAGMA table_xinfo` hidden flag. The v1 base tables
-/// declare no defaults or hidden/generated columns.
+/// default), and its `PRAGMA table_xinfo` hidden flag.
 struct ColumnSpec {
     name: &'static str,
     declared_type: &'static str,
@@ -52,6 +39,21 @@ const fn column(name: &'static str, declared_type: &'static str, not_null: bool)
         declared_type,
         not_null,
         default: None,
+        hidden: 0,
+    }
+}
+
+const fn column_default(
+    name: &'static str,
+    declared_type: &'static str,
+    not_null: bool,
+    default: &'static str,
+) -> ColumnSpec {
+    ColumnSpec {
+        name,
+        declared_type,
+        not_null,
+        default: Some(default),
         hidden: 0,
     }
 }
@@ -94,11 +96,13 @@ const ANALYSES_COLUMNS: &[ColumnSpec] = &[
     column("input_sha256", "TEXT", true),
     column("display_name", "TEXT", false),
     column("input_json", "TEXT", true),
+    column_default("check_count", "INTEGER", true, "1"),
     column("result_json", "TEXT", false),
     column("error_json", "TEXT", false),
     column("upstream_version", "TEXT", false),
     column("retry_of", "TEXT", false),
     column("rerun_of", "TEXT", false),
+    column("submitted_at", "TEXT", false),
     column("created_at", "TEXT", true),
     column("updated_at", "TEXT", true),
     column("completed_at", "TEXT", false),
@@ -110,6 +114,15 @@ const UPSTREAM_TASKS_COLUMNS: &[ColumnSpec] = &[
     column("upstream_task_id", "TEXT", true),
     column("last_stage", "TEXT", false),
     column("observed_at", "TEXT", true),
+];
+
+const ANALYSIS_CHECKS_COLUMNS: &[ColumnSpec] = &[
+    column("analysis_id", "TEXT", true),
+    column("check_index", "INTEGER", true),
+    column("check_kind", "TEXT", true),
+    column("status", "TEXT", true),
+    column("result_json", "TEXT", false),
+    column("error_json", "TEXT", false),
 ];
 
 fn probe_error() -> HistoryError {
@@ -135,6 +148,7 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
         ("bulk_collections", "table"),
         ("analyses", "table"),
         ("upstream_tasks", "table"),
+        ("analysis_checks", "table"),
         ("analysis_search", "table"),
         ("analyses_status_created", "index"),
         ("analyses_bulk_index", "index"),
@@ -165,8 +179,9 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
         .map_err(|_| probe_error())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| probe_error())?;
-    const EXPECTED_TABLES: [&str; 9] = [
+    const EXPECTED_TABLES: [&str; 10] = [
         "analyses",
+        "analysis_checks",
         "analysis_search",
         "analysis_search_config",
         "analysis_search_content",
@@ -186,6 +201,7 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
     if !columns_exact(connection, "bulk_collections", BULK_COLLECTIONS_COLUMNS)?
         || !columns_exact(connection, "analyses", ANALYSES_COLUMNS)?
         || !columns_exact(connection, "upstream_tasks", UPSTREAM_TASKS_COLUMNS)?
+        || !columns_exact(connection, "analysis_checks", ANALYSIS_CHECKS_COLUMNS)?
     {
         return Ok(false);
     }
@@ -197,6 +213,11 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
             connection,
             "upstream_tasks",
             &[("analysis_id", false), ("check_kind", false)],
+        )?
+        || !primary_key_exact(
+            connection,
+            "analysis_checks",
+            &[("analysis_id", false), ("check_index", false)],
         )?
     {
         return Ok(false);
@@ -215,6 +236,11 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
             connection,
             "upstream_tasks",
             &[&["check_kind", "upstream_task_id"][..]],
+        )?
+        || !unique_indexes_exact(
+            connection,
+            "analysis_checks",
+            &[&["analysis_id", "check_kind"][..]],
         )?
     {
         return Ok(false);
@@ -274,7 +300,7 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
                     "analyses",
                     "id",
                     "NO ACTION",
-                    "NO ACTION",
+                    "SET NULL",
                     "NONE",
                 ),
                 (
@@ -282,7 +308,7 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
                     "analyses",
                     "id",
                     "NO ACTION",
-                    "NO ACTION",
+                    "SET NULL",
                     "NONE",
                 ),
             ],
@@ -290,6 +316,18 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
         || !foreign_keys_exact(
             connection,
             "upstream_tasks",
+            &[(
+                "analysis_id",
+                "analyses",
+                "id",
+                "NO ACTION",
+                "CASCADE",
+                "NONE",
+            )],
+        )?
+        || !foreign_keys_exact(
+            connection,
+            "analysis_checks",
             &[(
                 "analysis_id",
                 "analyses",
@@ -307,199 +345,6 @@ pub(super) fn schema_structure_ok(connection: &Connection) -> Result<bool, Histo
     // `USING fts5` with the `unicode61` tokenizer, with its catalog
     // columns in the exact contracted order.
     fts5_exact(connection)
-}
-
-/// Compares the complete real catalog with a reference catalog generated by
-/// executing the compiled schema-v1 body through the same bundled SQLite
-/// engine. This catches declaration semantics SQLite's PRAGMAs intentionally
-/// omit (for example `MATCH`, deferral, constraint conflict policies, and
-/// FTS5 options) without maintaining a second handwritten schema model.
-fn canonical_catalog_exact(connection: &Connection) -> Result<bool, HistoryError> {
-    let expected = Connection::open_in_memory().map_err(|_| probe_error())?;
-    expected
-        .execute_batch(SCHEMA_V1)
-        .map_err(|_| probe_error())?;
-    Ok(read_catalog(connection)? == read_catalog(&expected)?)
-}
-
-fn read_catalog(connection: &Connection) -> Result<Vec<CatalogEntry>, HistoryError> {
-    let mut statement = connection
-        .prepare(
-            "SELECT type, name, tbl_name, sql FROM sqlite_master \
-             ORDER BY type, name, tbl_name",
-        )
-        .map_err(|_| probe_error())?;
-    statement
-        .query_map([], |row| {
-            let sql = row
-                .get::<_, Option<String>>(3)?
-                .map(|ddl| normalize_sql(&ddl))
-                .transpose()
-                .map_err(|message| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        ddl_column_index(),
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            message,
-                        )),
-                    )
-                })?;
-            Ok(CatalogEntry {
-                kind: row.get(0)?,
-                name: row.get(1)?,
-                table: row.get(2)?,
-                sql,
-            })
-        })
-        .map_err(|_| probe_error())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| probe_error())
-}
-
-const fn ddl_column_index() -> usize {
-    3
-}
-
-/// Tokenizes catalog DDL while erasing only spellings the contract declares
-/// harmless: keyword case, whitespace/comments, optional trailing semicolons,
-/// and identifier quoting. Every semantic token remains in the comparison.
-fn normalize_sql(sql: &str) -> Result<Vec<SqlToken>, &'static str> {
-    let chars = sql.chars().collect::<Vec<_>>();
-    let mut tokens = Vec::new();
-    let mut index = 0;
-    while index < chars.len() {
-        match chars[index] {
-            character if character.is_whitespace() => index += 1,
-            '-' if chars.get(index + 1) == Some(&'-') => {
-                index += 2;
-                while index < chars.len() && chars[index] != '\n' {
-                    index += 1;
-                }
-            }
-            '/' if chars.get(index + 1) == Some(&'*') => {
-                index += 2;
-                loop {
-                    if index + 1 >= chars.len() {
-                        return Err("unterminated SQL comment");
-                    }
-                    if chars[index] == '*' && chars[index + 1] == '/' {
-                        index += 2;
-                        break;
-                    }
-                    index += 1;
-                }
-            }
-            '\'' => {
-                let (literal, next) = quoted_token(&chars, index, '\'', '\'')?;
-                tokens.push(SqlToken::StringLiteral(literal));
-                index = next;
-            }
-            '"' => {
-                let (identifier, next) = quoted_token(&chars, index, '"', '"')?;
-                tokens.push(SqlToken::Identifier(identifier));
-                index = next;
-            }
-            '`' => {
-                let (identifier, next) = quoted_token(&chars, index, '`', '`')?;
-                tokens.push(SqlToken::Identifier(identifier));
-                index = next;
-            }
-            '[' => {
-                let (identifier, next) = quoted_token(&chars, index, '[', ']')?;
-                tokens.push(SqlToken::Identifier(identifier));
-                index = next;
-            }
-            character if is_word_character(character) => {
-                let start = index;
-                index += 1;
-                while index < chars.len() && is_word_character(chars[index]) {
-                    index += 1;
-                }
-                let word = chars[start..index].iter().collect::<String>();
-                let lower = word.to_ascii_lowercase();
-                if is_sql_keyword(&lower) {
-                    tokens.push(SqlToken::Keyword(lower));
-                } else {
-                    tokens.push(SqlToken::Identifier(word));
-                }
-            }
-            ';' => {
-                tokens.push(SqlToken::Symbol(';'));
-                index += 1;
-            }
-            symbol => {
-                tokens.push(SqlToken::Symbol(symbol));
-                index += 1;
-            }
-        }
-    }
-    if matches!(tokens.last(), Some(SqlToken::Symbol(';'))) {
-        tokens.pop();
-    }
-    Ok(tokens)
-}
-
-fn quoted_token(
-    chars: &[char],
-    start: usize,
-    opening: char,
-    closing: char,
-) -> Result<(String, usize), &'static str> {
-    debug_assert_eq!(chars[start], opening);
-    let mut value = String::new();
-    let mut index = start + 1;
-    while index < chars.len() {
-        if chars[index] == closing {
-            if opening != '[' && chars.get(index + 1) == Some(&closing) {
-                value.push(closing);
-                index += 2;
-                continue;
-            }
-            return Ok((value, index + 1));
-        }
-        value.push(chars[index]);
-        index += 1;
-    }
-    Err("unterminated SQL quote")
-}
-
-fn is_word_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '_' | '$')
-}
-
-fn is_sql_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "as" | "asc"
-            | "cascade"
-            | "collate"
-            | "constraint"
-            | "create"
-            | "default"
-            | "deferrable"
-            | "delete"
-            | "desc"
-            | "foreign"
-            | "index"
-            | "initially"
-            | "integer"
-            | "key"
-            | "match"
-            | "no"
-            | "not"
-            | "null"
-            | "on"
-            | "primary"
-            | "references"
-            | "table"
-            | "text"
-            | "unique"
-            | "unindexed"
-            | "update"
-            | "using"
-            | "virtual"
-    )
 }
 
 /// Whether `table`'s `PRAGMA table_xinfo` rows equal `expected` exactly:

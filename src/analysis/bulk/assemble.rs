@@ -376,7 +376,7 @@ fn build_observed_success_analysis(
     let version = task.version.clone();
     let input = task.normalized_text.as_deref().map(|text| {
         let byte_count = u64::try_from(text.len()).unwrap_or(u64::MAX);
-        let word_count = u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX);
+        let word_count = super::super::canonical_text_word_count(text);
         AnalysisInput::Text(
             TextInput::new(
                 TextOrigin::Unknown,

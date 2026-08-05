@@ -29,6 +29,18 @@ use harness::{database_mode, parent_dir_mode};
 
 use serde_json::Value;
 
+#[cfg(unix)]
+fn interrupt(child: &mut std::process::Child) {
+    let pid = i32::try_from(child.id()).expect("child PID fits i32");
+    // SAFETY: `pid` is a live child process and SIGINT is a valid signal.
+    assert_eq!(unsafe { kill(pid, 2) }, 0);
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
 /// Explicit `--save` on a completed detection persists the analysis, reports
 /// `saved_manual` in the canonical JSON, and leaves the process at exit 0
 /// with no WAL/SHM sidecar and owner-only artifacts.
@@ -71,10 +83,12 @@ async fn save_persists_completed_detection_and_reports_saved_manual() {
     assert_eq!(outcome, "terminal");
     assert_eq!(save_state, "saved_manual");
     assert_eq!(input_kind, "text");
+    let mut retained_input = envelope["data"]["input"].clone();
+    retained_input["text"] = Value::String(text.to_owned());
     assert_eq!(
         serde_json::from_str::<Value>(input_json).unwrap(),
-        envelope["data"]["input"],
-        "the stored input is exactly the canonical input record"
+        retained_input,
+        "history retains plaintext after the explicit save even when primary output redacts it"
     );
     assert_eq!(
         serde_json::from_str::<Value>(result_json.as_ref().unwrap()).unwrap(),
@@ -91,12 +105,12 @@ async fn save_persists_completed_detection_and_reports_saved_manual() {
     assert_eq!(tasks[0].1, "ai_detection");
     assert_eq!(tasks[0].2, TASK_ID);
 
-    // The search payload carries the contracted columns: no result text
-    // bubbles into input_text for a non-include-input run, and the result
-    // headline is indexed.
+    // Explicit retention indexes the caller-owned plaintext even though the
+    // primary output omitted it; the result headline is indexed separately.
     let rows = search_payload(&connection);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, *id);
+    assert_eq!(rows[0].1.as_deref(), Some(text));
     assert_eq!(rows[0].2.as_deref(), Some("Human-written"));
     drop(connection);
 
@@ -141,7 +155,182 @@ async fn automatic_history_persists_completed_detection_as_saved_history() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].3, "saved_history");
     assert_eq!(rows[0].1, "succeeded");
+    assert_eq!(
+        serde_json::from_str::<Value>(&rows[0].5).unwrap()["text"],
+        text,
+        "automatic retention keeps plaintext after the first-enable warning"
+    );
+    assert_eq!(search_payload(&connection)[0].1.as_deref(), Some(text));
     drop(connection);
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_rerun_submits_once_with_fresh_identity_and_lineage() {
+    let text = "Retained text reruns exactly once";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-rerun"})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    let isolated = Isolated::new();
+    isolated.enable_history();
+
+    let saved = isolated
+        .command(fixture.base_url())
+        .args(["detect", "--save", text])
+        .output()
+        .expect("save original analysis");
+    assert_eq!(saved.status.code(), Some(0));
+    let original = stdout_envelope(&saved)["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let rerun = isolated
+        .command(fixture.base_url())
+        .args(["history", "rerun", &original, "--progress", "never"])
+        .output()
+        .expect("rerun retained analysis");
+    assert_eq!(rerun.status.code(), Some(0));
+    let envelope = stdout_envelope(&rerun);
+    assert_eq!(envelope["command"], "history_rerun");
+    assert_eq!(envelope["data"]["rerun_of"], original);
+    assert_ne!(envelope["data"]["id"], envelope["data"]["rerun_of"]);
+    assert!(envelope["data"].get("retry_of").is_none());
+    assert_eq!(envelope["data"]["save_state"], "saved_history");
+    assert_eq!(
+        fixture.post_count(),
+        2,
+        "one POST per invocation, no replay"
+    );
+    let posts = fixture
+        .requests()
+        .into_iter()
+        .filter(|request| request.method == "POST")
+        .collect::<Vec<_>>();
+    assert_eq!(posts[1].body_json()["text"], text);
+    assert_eq!(posts[1].body_json()["public_dashboard_link"], false);
+    let connection = isolated.open_database();
+    let (saved_state, retry_of, rerun_of): (String, Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT save_state, retry_of, rerun_of
+             FROM analyses
+             WHERE rerun_of = ?1",
+            [&original],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("saved rerun row");
+    assert_eq!(saved_state, "saved_history");
+    assert_eq!(retry_of, None);
+    assert_eq!(rerun_of.as_deref(), Some(original.as_str()));
+    assert_eq!(
+        analyses_rows(&connection).len(),
+        2,
+        "automatic history stores the original and its fresh rerun"
+    );
+    drop(connection);
+    fixture.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn history_rerun_sigint_during_issued_post_is_ambiguous_and_never_replayed() {
+    use std::process::Stdio;
+
+    let text = "Retained text for an interrupted rerun submission";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    fixture.on_submit(Step::Hang);
+    let isolated = Isolated::new();
+    let saved = isolated
+        .command(fixture.base_url())
+        .args(["detect", "--save", text])
+        .output()
+        .expect("save original analysis");
+    let original = stdout_envelope(&saved)["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args(["history", "rerun", &original, "--progress", "never"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn history rerun");
+    fixture.wait_for_posts(2).await;
+    interrupt(&mut child);
+    let output = child
+        .wait_with_output()
+        .expect("wait for interrupted rerun");
+
+    assert_eq!(output.status.code(), Some(130));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], "history_rerun");
+    assert_eq!(envelope["error"]["code"], "submission_outcome_unknown");
+    assert!(envelope["error"]["details"]["analysis_id"].is_string());
+    assert!(envelope["error"]["details"]["request_sha256"].is_string());
+    assert_eq!(
+        fixture.post_count(),
+        2,
+        "one original POST plus exactly one rerun POST"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn history_rerun_sigint_during_wait_reports_reconciliation_identity() {
+    use std::process::Stdio;
+
+    let text = "Retained text for an interrupted rerun observation";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    fixture.on_submit(Step::Json(
+        serde_json::json!({"task_id": "task-rerun-stop"}),
+    ));
+    fixture.on_poll(Step::Json(serde_json::json!({"stage": "STAGE_INFERENCE"})));
+    fixture.on_poll(Step::Hang);
+    let isolated = Isolated::new();
+    let saved = isolated
+        .command(fixture.base_url())
+        .args(["detect", "--save", text])
+        .output()
+        .expect("save original analysis");
+    let original = stdout_envelope(&saved)["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args(["history", "rerun", &original, "--progress", "never"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn history rerun");
+    fixture.wait_for_posts(2).await;
+    fixture.wait_for_gets(2).await;
+    interrupt(&mut child);
+    let output = child
+        .wait_with_output()
+        .expect("wait for interrupted rerun");
+
+    assert_eq!(output.status.code(), Some(130));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], "history_rerun");
+    assert_eq!(envelope["error"]["code"], "network_unavailable");
+    let stderr = stderr_text(&output);
+    assert!(stderr.contains("task-rerun-stop") || stderr.contains("local analysis id"));
+    assert_eq!(fixture.post_count(), 2, "rerun POST is never replayed");
+    assert_no_leak(&output);
     fixture.shutdown().await;
 }
 
@@ -374,6 +563,59 @@ async fn automatic_detach_is_ephemeral_until_terminal_task_read_saves_it() {
     let tasks = task_rows(&connection);
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].2, TASK_ID);
+    drop(connection);
+    fixture.shutdown().await;
+}
+
+/// A resumed `task status` poll that is still running is just as ephemeral as
+/// the queued detach snapshot. It must not open SQLite or emit an automatic
+/// history warning. A subsequent `task wait` persists only its terminal
+/// observation.
+#[tokio::test(flavor = "multi_thread")]
+async fn running_task_status_is_ephemeral_and_terminal_wait_persists() {
+    let text = "A terminal wait follows one ephemeral running status";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_poll(Step::Json(serde_json::json!({"stage": "STAGE_INFERENCE"})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    let isolated = Isolated::new();
+    isolated.enable_history();
+
+    let running = isolated
+        .command(fixture.base_url())
+        .args(["task", "status", TASK_ID])
+        .output()
+        .expect("read running task status");
+    assert_eq!(running.status.code(), Some(0));
+    let running_envelope = stdout_envelope(&running);
+    assert_eq!(running_envelope["data"]["status"], "running");
+    assert_eq!(running_envelope["data"]["save_state"], "ephemeral");
+    assert!(
+        !stderr_text(&running).contains("warning:"),
+        "skipping nonterminal persistence is not a history failure"
+    );
+    assert!(
+        !isolated.history_directory().exists(),
+        "running task status must not open history"
+    );
+
+    let terminal = isolated
+        .command(fixture.base_url())
+        .args(["task", "wait", TASK_ID])
+        .output()
+        .expect("wait for terminal task");
+    assert_eq!(terminal.status.code(), Some(0));
+    let terminal_envelope = stdout_envelope(&terminal);
+    assert_eq!(terminal_envelope["data"]["status"], "succeeded");
+    assert_eq!(terminal_envelope["data"]["save_state"], "saved_history");
+    assert!(
+        !stderr_text(&terminal).contains("warning:"),
+        "successful terminal persistence does not warn"
+    );
+
+    let connection = isolated.open_database();
+    let rows = analyses_rows(&connection);
+    assert_eq!(rows.len(), 1, "only the terminal wait is durable");
+    assert_eq!(rows[0].1, "succeeded");
     drop(connection);
     fixture.shutdown().await;
 }

@@ -19,12 +19,12 @@
 use std::str::FromStr;
 
 use microck_pangram_cli::domain::{
-    AnalysisId, AnalysisStatus, BulkCounters, BulkId, CheckKind, SaveState, Sha256Hash,
-    SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisStatus, BulkCounters, BulkId, CheckKind, CheckStatus, SaveState,
+    Sha256Hash, SubmissionOutcome, UtcTimestamp,
 };
 use microck_pangram_cli::history::{
     HistoryError, HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis,
-    StoredBulkCollection, StoredUpstreamTask,
+    StoredBulkCollection, StoredCheck, StoredUpstreamTask,
 };
 
 fn timestamp(value: &str) -> UtcTimestamp {
@@ -32,6 +32,7 @@ fn timestamp(value: &str) -> UtcTimestamp {
 }
 
 fn analysis(id: &str, input: &str) -> StoredAnalysis {
+    let input_sha256 = Sha256Hash::digest(input);
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: None,
@@ -40,14 +41,23 @@ fn analysis(id: &str, input: &str) -> StoredAnalysis {
         submission_outcome: SubmissionOutcome::Terminal,
         save_state: SaveState::SavedHistory,
         input_kind: InputKind::Text,
-        input_sha256: Sha256Hash::from_bytes([4; 32]),
+        input_sha256,
         display_name: None,
-        input_json: format!("{{\"type\":\"text\",\"text\":{input:?}}}"),
-        result_json: Some("{\"headline\":\"Human-written\"}".to_owned()),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "literal",
+            "sha256": input_sha256,
+            "byte_count": input.len(),
+            "word_count": input.split_whitespace().count(),
+            "text": input
+        })
+        .to_string(),
+        result_json: Some(ai_result("Human-written")),
         error_json: None,
         upstream_version: None,
         retry_of: None,
         rerun_of: None,
+        submitted_at: Some(timestamp("2026-08-01T09:59:00Z")),
         created_at: timestamp("2026-08-01T10:00:00Z"),
         updated_at: timestamp("2026-08-01T10:05:00Z"),
         completed_at: Some(timestamp("2026-08-01T10:05:00Z")),
@@ -56,6 +66,22 @@ fn analysis(id: &str, input: &str) -> StoredAnalysis {
         search_headline: Some("Human-written".to_owned()),
         search_source_urls: None,
     }
+}
+
+fn ai_result(headline: &str) -> String {
+    serde_json::json!({
+        "classification": "human",
+        "headline": headline,
+        "prediction": "Human",
+        "fraction_ai": 0.0,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0,
+        "num_ai_segments": 0,
+        "num_ai_assisted_segments": 0,
+        "num_human_segments": 1,
+        "segments": []
+    })
+    .to_string()
 }
 
 fn observation(analysis_id: &str, task: &str) -> StoredUpstreamTask {
@@ -195,6 +221,193 @@ fn two_threads_reconciling_one_task_yield_exactly_one_stored_analysis() {
         .expect("task row");
     assert_eq!(task_id, "task-contended");
     assert_eq!(analysis_id, outcome_a.stored_id.to_string());
+}
+
+/// Two independent observers of one check on an already-saved combined
+/// analysis serialize without regressing terminal evidence. Whichever
+/// process acquires the write lock first, the succeeded AI observation wins,
+/// while the omitted plagiarism check/body/task and FTS input remain intact.
+#[test]
+fn concurrent_one_check_refreshes_preserve_the_combined_analysis() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().to_path_buf();
+    let id = "anl_01983c20-0180-7a80-a001-00000000c003";
+    let analysis_id = AnalysisId::from_str(id).unwrap();
+    let mut seed = analysis(id, "combined concurrent text");
+    let plagiarism_result = serde_json::json!({
+        "plagiarism_detected": false,
+        "total_sentences": 1,
+        "plagiarized_sentence_count": 0,
+        "percent_plagiarized": 0.0,
+        "matches": []
+    })
+    .to_string();
+    seed.status = AnalysisStatus::Running;
+    seed.submission_outcome = SubmissionOutcome::Accepted;
+    seed.result_json = Some(plagiarism_result.clone());
+    seed.completed_at = None;
+    seed.search_source_urls = Some("https://example.invalid/retained".to_owned());
+    let checks = vec![
+        StoredCheck {
+            analysis_id,
+            check_index: 0,
+            check_kind: CheckKind::AiDetection,
+            status: CheckStatus::Running,
+            result_json: None,
+            error_json: None,
+        },
+        StoredCheck {
+            analysis_id,
+            check_index: 1,
+            check_kind: CheckKind::Plagiarism,
+            status: CheckStatus::Succeeded,
+            result_json: Some(plagiarism_result.clone()),
+            error_json: None,
+        },
+    ];
+    let observations = vec![
+        observation(id, "task-combined-race"),
+        StoredUpstreamTask {
+            analysis_id,
+            check_kind: CheckKind::Plagiarism,
+            upstream_task_id: "task-combined-plagiarism".to_owned(),
+            last_stage: Some("STAGE_SUCCESS".to_owned()),
+            observed_at: timestamp("2026-08-01T10:05:00Z"),
+        },
+    ];
+    let mut initializer = HistoryStore::open(&path).expect("open seed store");
+    initializer
+        .save_analysis_complete(&seed, &checks, &observations)
+        .expect("seed combined analysis");
+    drop(initializer);
+
+    let store_a = HistoryStore::open(&path).expect("open first store");
+    let store_b = HistoryStore::open(&path).expect("open second store");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let run = |mut store: HistoryStore, terminal: bool| {
+        let barrier = barrier.clone();
+        let seed = seed.clone();
+        std::thread::spawn(move || {
+            let observed_at = timestamp(if terminal {
+                "2026-08-01T10:07:00Z"
+            } else {
+                "2026-08-01T10:06:00Z"
+            });
+            let result = terminal.then(|| ai_result("Concurrent terminal"));
+            let status = if terminal {
+                CheckStatus::Succeeded
+            } else {
+                CheckStatus::Running
+            };
+            let record = StoredAnalysis {
+                id: AnalysisId::new(),
+                status: if terminal {
+                    AnalysisStatus::Succeeded
+                } else {
+                    AnalysisStatus::Running
+                },
+                result_json: result.clone(),
+                updated_at: observed_at,
+                completed_at: terminal.then_some(observed_at),
+                search_headline: terminal.then(|| "Concurrent terminal".to_owned()),
+                ..seed
+            };
+            let incoming_check = StoredCheck {
+                analysis_id: record.id,
+                check_index: 0,
+                check_kind: CheckKind::AiDetection,
+                status,
+                result_json: result,
+                error_json: None,
+            };
+            let incoming_task = StoredUpstreamTask {
+                analysis_id: record.id,
+                check_kind: CheckKind::AiDetection,
+                upstream_task_id: "task-combined-race".to_owned(),
+                last_stage: Some(
+                    if terminal {
+                        "STAGE_SUCCESS"
+                    } else {
+                        "STAGE_INFERENCE"
+                    }
+                    .to_owned(),
+                ),
+                observed_at,
+            };
+            barrier.wait();
+            store
+                .reconcile_observed_analysis_complete(
+                    &record,
+                    &[incoming_check],
+                    &[incoming_task],
+                    observed_at,
+                    |prior| {
+                        Ok(ObservationSnapshot {
+                            status: record.status,
+                            submission_outcome: prior.submission_outcome,
+                            result_json: record.result_json.clone(),
+                            error_json: None,
+                            upstream_version: prior.upstream_version.clone(),
+                            completed_at: record.completed_at,
+                            search_input_text: prior.search_input_text.clone(),
+                            search_filename: prior.search_filename.clone(),
+                            search_headline: record
+                                .search_headline
+                                .clone()
+                                .or_else(|| prior.search_headline.clone()),
+                            search_source_urls: prior.search_source_urls.clone(),
+                        })
+                    },
+                )
+                .expect("concurrent refresh commits")
+        })
+    };
+    let running = run(store_a, false);
+    let terminal = run(store_b, true);
+    running.join().expect("running refresh joins");
+    terminal.join().expect("terminal refresh joins");
+
+    let store = HistoryStore::open(&path).expect("reopen store");
+    let canonical = store
+        .canonical_analysis(&analysis_id, true)
+        .expect("combined analysis remains canonical");
+    assert_eq!(canonical.status(), AnalysisStatus::Succeeded);
+    assert_eq!(canonical.checks().len(), 2);
+    let value = serde_json::to_value(canonical).unwrap();
+    assert_eq!(
+        value["checks"][1]["result"],
+        serde_json::from_str::<serde_json::Value>(&plagiarism_result).unwrap()
+    );
+    let connection =
+        rusqlite::Connection::open(path.join("history").join("pangram-history.db")).unwrap();
+    assert_eq!(
+        count_rows(&connection, "SELECT COUNT(*) FROM upstream_tasks"),
+        2
+    );
+    assert_eq!(
+        count_rows(&connection, "SELECT COUNT(*) FROM analysis_search"),
+        1
+    );
+    let retained: (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT input_text, source_urls FROM analysis_search",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        retained,
+        (
+            Some("combined concurrent text".to_owned()),
+            Some("https://example.invalid/retained".to_owned())
+        )
+    );
+}
+
+fn count_rows(connection: &rusqlite::Connection, sql: &str) -> i64 {
+    connection
+        .query_row(sql, [], |row| row.get(0))
+        .expect("count rows")
 }
 
 /// Two independent store handles reconcile one upstream bulk job with its

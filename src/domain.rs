@@ -17,10 +17,12 @@ use uuid::{Uuid, Version};
 
 mod bulk;
 mod collection;
+mod history;
 mod model;
 
 pub use bulk::*;
 pub use collection::*;
+pub use history::*;
 pub use model::*;
 
 const ANALYSIS_ID_PATTERN: &str =

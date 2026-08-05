@@ -44,11 +44,13 @@ CREATE TABLE analyses (
   input_sha256 TEXT NOT NULL,
   display_name TEXT,
   input_json TEXT NOT NULL,
+  check_count INTEGER NOT NULL DEFAULT 1 CHECK (check_count BETWEEN 1 AND 2),
   result_json TEXT,
   error_json TEXT,
   upstream_version TEXT,
-  retry_of TEXT REFERENCES analyses(id),
-  rerun_of TEXT REFERENCES analyses(id),
+  retry_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  rerun_of TEXT REFERENCES analyses(id) ON DELETE SET NULL,
+  submitted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,
@@ -63,6 +65,17 @@ CREATE TABLE upstream_tasks (
   observed_at TEXT NOT NULL,
   PRIMARY KEY (analysis_id, check_kind),
   UNIQUE (check_kind, upstream_task_id)
+);
+
+CREATE TABLE analysis_checks (
+  analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+  check_index INTEGER NOT NULL,
+  check_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result_json TEXT,
+  error_json TEXT,
+  PRIMARY KEY (analysis_id, check_index),
+  UNIQUE (analysis_id, check_kind)
 );
 
 CREATE VIRTUAL TABLE analysis_search USING fts5(
@@ -89,6 +102,25 @@ pub struct HistoryStore {
 }
 
 impl HistoryStore {
+    /// Opens an existing history database without creating missing storage.
+    ///
+    /// History list/search/show adapters use this probe so a read against a
+    /// fresh data directory remains side-effect free. A present filesystem
+    /// object still flows through the full protection and schema checks.
+    pub fn open_existing(data_dir: &Path) -> Result<Option<Self>, HistoryError> {
+        let database = data_dir
+            .join(DATABASE_DIRECTORY_NAME)
+            .join(DATABASE_FILE_NAME);
+        match std::fs::symlink_metadata(&database) {
+            Ok(_) => Self::open(data_dir).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(HistoryError::new(
+                HistoryErrorCode::HistoryUnavailable,
+                "the history database path could not be inspected",
+            )),
+        }
+    }
+
     /// Opens (creating if necessary) the history database under the
     /// platform data directory in effect. Fails closed: protection is
     /// established or verified before any SQLite handle exists.
@@ -106,12 +138,8 @@ impl HistoryStore {
         directory: PathBuf,
         after_sidecar_checks: impl FnOnce(),
     ) -> Result<Self, HistoryError> {
-        // SQLite is compiled with URI support, so a relative filename that
-        // begins with `file:` could still acquire URI semantics even when
-        // SQLITE_OPEN_URI is absent. Make the user-selected directory
-        // absolute lexically before protection and opening: the resulting
-        // database filename cannot begin with the URI scheme, while every
-        // literal component (including `?` and `#`) remains unchanged.
+        // Absolute lexical resolution prevents a relative `file:` component
+        // from acquiring SQLite URI semantics.
         let directory = if directory.is_absolute() {
             directory
         } else {
@@ -132,10 +160,7 @@ impl HistoryStore {
             database.with_extension("db-wal"),
             database.with_extension("db-shm"),
         ];
-        // Existing sidecars can be consulted by SQLite while opening or on
-        // the first read. Validate them before constructing any SQLite handle
-        // so a hostile alias cannot redirect recovery I/O or mutate either
-        // the database or its target.
+        // Validate existing sidecars before SQLite can consult them.
         for sidecar in &sidecars {
             protection::verify_file_if_present(sidecar)?;
         }
@@ -159,11 +184,7 @@ impl HistoryStore {
                 })
             },
             |_| {
-                // WAL and SHM sidecars created by a prior run must carry the
-                // same owner-only protection as the database itself; an
-                // insecure sidecar fails closed the same way the database
-                // would. The connection is already inside its lifetime guard,
-                // so this fallible check preserves close ordering on failure.
+                // Existing sidecars require the database's owner-only policy.
                 for sidecar in &sidecars {
                     protection::verify_file_if_present(sidecar)?;
                 }
@@ -172,9 +193,7 @@ impl HistoryStore {
         )?;
 
         let mut store = Self { connection };
-        // Busy waiting is connection-local and does not mutate the database.
-        // It must precede the schema lock so concurrent first-use processes
-        // wait for the initializer instead of surfacing a transient failure.
+        // Busy waiting precedes the schema lock for concurrent first use.
         store.set_busy_timeout()?;
 
         // Corruption surfaces before the schema transaction or any write
@@ -183,18 +202,11 @@ impl HistoryStore {
         store.integrity_probe()?;
 
         // Classification and creation share one SQLite-owned write lock.
-        // The winner creates the complete schema and version atomically;
-        // every loser waits, then observes and validates that committed v1.
-        // BEGIN IMMEDIATE itself changes no database bytes, so incompatible
-        // existing files still fail closed without mutation.
         store.initialize_or_validate_schema()?;
 
         store.prepare_connection()?;
 
-        // WAL/SHM sidecars are created by SQLite lazily, after the WAL
-        // pragma. Restrict them now so they always carry the same exact
-        // owner-only mode as the database itself; verification already ran
-        // for pre-existing sidecars above.
+        // Newly created WAL/SHM sidecars receive owner-only protection.
         for sidecar in &sidecars {
             if protection::verify_file_if_present(sidecar)? {
                 protection::restrict_file(sidecar)?;
@@ -231,10 +243,7 @@ impl HistoryStore {
             })
     }
 
-    /// Runs `operation` against the store's connection. The closure receives
-    /// a `&Connection` so tests can assert raw SQLite state (pragma values,
-    /// `sqlite_master` rows) without the store handing out ownership of its
-    /// handle.
+    /// Runs `operation` against the borrowed store connection.
     pub fn with_connection<T>(
         &self,
         operation: impl FnOnce(&Connection) -> T,
@@ -319,10 +328,7 @@ impl HistoryStore {
         Ok(outcome)
     }
 
-    /// Checkpoint the WAL, truncating it. A failure is reported to the
-    /// caller but must remain distinguishable from a committed logical
-    /// delete; callers decide whether the operation reports success with a
-    /// warning or the error itself.
+    /// Checkpoints and truncates the WAL after a committed logical deletion.
     pub(crate) fn checkpoint_truncate(&self) -> Result<(), HistoryError> {
         self.connection
             .pragma_update(None, "wal_checkpoint", "TRUNCATE")

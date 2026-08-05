@@ -22,6 +22,14 @@ use harness::{
     Isolated, analyses_rows, assert_no_leak, bulk_collection_rows, search_payload, stderr_text,
     stdout_envelope, task_rows,
 };
+use microck_pangram_cli::domain::{
+    AnalysisId, AnalysisStatus, CheckKind, CheckStatus, SaveState, Sha256Hash, SubmissionOutcome,
+    UtcTimestamp,
+};
+use microck_pangram_cli::history::{
+    HistoryStore, InputKind, StoredAnalysis, StoredCheck, StoredUpstreamTask,
+};
+use std::str::FromStr;
 
 // ------------------------------------- task-first / bulk-second ordering --
 
@@ -126,6 +134,191 @@ async fn standalone_task_then_bulk_status_adopts_one_row_without_collision() {
     drop(connection);
     fixture.shutdown().await;
 }
+
+/// A one-check `task status` followed by `task wait` refreshes only the AI
+/// slot of an already-saved combined analysis. The omitted plagiarism check,
+/// its result body and task evidence, ordered check set, local input/FTS
+/// payload, save authorship, and submitted provenance all remain durable.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn task_status_then_wait_merge_one_check_into_a_saved_combined_analysis() {
+    let isolated = Isolated::new();
+    isolated.enable_history();
+    let id = AnalysisId::from_str("anl_01983c20-0180-7a80-a001-00000000e001").unwrap();
+    let created_at = UtcTimestamp::from_str("2026-08-05T10:00:00Z").unwrap();
+    let text = "compiled combined history input";
+    let input_sha256 = Sha256Hash::digest(text);
+    let plagiarism_result = serde_json::json!({
+        "plagiarism_detected": false,
+        "total_sentences": 1,
+        "plagiarized_sentence_count": 0,
+        "percent_plagiarized": 0.0,
+        "matches": []
+    })
+    .to_string();
+    let record = StoredAnalysis {
+        id,
+        bulk: None,
+        caller_id: Some("retained-caller".to_owned()),
+        status: AnalysisStatus::Running,
+        submission_outcome: SubmissionOutcome::Accepted,
+        save_state: SaveState::SavedManual,
+        input_kind: InputKind::Text,
+        input_sha256,
+        display_name: Some("combined.txt".to_owned()),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "file",
+            "name": "combined.txt",
+            "sha256": input_sha256,
+            "byte_count": text.len(),
+            "word_count": 4,
+            "text": text
+        })
+        .to_string(),
+        result_json: Some(plagiarism_result.clone()),
+        error_json: None,
+        upstream_version: Some("4.0".to_owned()),
+        retry_of: None,
+        rerun_of: None,
+        submitted_at: Some(created_at),
+        created_at,
+        updated_at: created_at,
+        completed_at: None,
+        search_input_text: Some(text.to_owned()),
+        search_filename: Some("combined.txt".to_owned()),
+        search_headline: None,
+        search_source_urls: Some("https://example.invalid/retained".to_owned()),
+    };
+    let checks = vec![
+        StoredCheck {
+            analysis_id: id,
+            check_index: 0,
+            check_kind: CheckKind::AiDetection,
+            status: CheckStatus::Running,
+            result_json: None,
+            error_json: None,
+        },
+        StoredCheck {
+            analysis_id: id,
+            check_index: 1,
+            check_kind: CheckKind::Plagiarism,
+            status: CheckStatus::Succeeded,
+            result_json: Some(plagiarism_result.clone()),
+            error_json: None,
+        },
+    ];
+    let observations = vec![
+        StoredUpstreamTask {
+            analysis_id: id,
+            check_kind: CheckKind::AiDetection,
+            upstream_task_id: TASK_ID.to_owned(),
+            last_stage: Some("STAGE_INFERENCE".to_owned()),
+            observed_at: created_at,
+        },
+        StoredUpstreamTask {
+            analysis_id: id,
+            check_kind: CheckKind::Plagiarism,
+            upstream_task_id: "task-combined-plagiarism".to_owned(),
+            last_stage: Some("STAGE_SUCCESS".to_owned()),
+            observed_at: created_at,
+        },
+    ];
+    HistoryStore::open(&isolated.data)
+        .expect("open real history")
+        .save_analysis_complete(&record, &checks, &observations)
+        .expect("seed combined analysis");
+
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_poll(Step::Json(serde_json::json!({"stage": "STAGE_INFERENCE"})));
+    fixture.on_poll(Step::Json(pangram4_success(
+        "compiled combined terminal input",
+    )));
+
+    let status = isolated
+        .command(fixture.base_url())
+        .args(["task", "status", TASK_ID])
+        .output()
+        .expect("run task status");
+    assert_eq!(status.status.code(), Some(0));
+    assert_eq!(
+        stdout_envelope(&status)["data"]["save_state"],
+        "saved_history"
+    );
+    assert!(!stderr_text(&status).contains("warning:"));
+    assert_no_leak(&status);
+    let connection = isolated.open_database();
+    assert_eq!(analyses_rows(&connection).len(), 1);
+    assert_eq!(task_rows(&connection).len(), 2);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM analysis_checks WHERE analysis_id = ?1",
+                [id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        2
+    );
+    drop(connection);
+
+    let wait = isolated
+        .command(fixture.base_url())
+        .args(["task", "wait", TASK_ID])
+        .output()
+        .expect("run task wait");
+    assert_eq!(wait.status.code(), Some(0));
+    assert_eq!(
+        stdout_envelope(&wait)["data"]["save_state"],
+        "saved_history"
+    );
+    assert!(!stderr_text(&wait).contains("warning:"));
+    assert_no_leak(&wait);
+
+    let store = HistoryStore::open(&isolated.data).expect("reopen history");
+    let canonical = store
+        .canonical_analysis(&id, true)
+        .expect("reconstruct combined analysis");
+    assert_eq!(canonical.status(), AnalysisStatus::Succeeded);
+    let value = serde_json::to_value(canonical).unwrap();
+    assert_eq!(value["checks"][0]["kind"], "ai_detection");
+    assert_eq!(value["checks"][1]["kind"], "plagiarism");
+    assert_eq!(
+        value["checks"][1]["result"],
+        serde_json::from_str::<serde_json::Value>(&plagiarism_result).unwrap()
+    );
+    assert_eq!(value["input"]["text"], text);
+    let after = store.get_analysis(&id).expect("stored parent");
+    assert_eq!(after.save_state, SaveState::SavedManual);
+    assert_eq!(after.caller_id.as_deref(), Some("retained-caller"));
+    assert_eq!(after.submitted_at, Some(created_at));
+    drop(store);
+    let connection = isolated.open_database();
+    let tasks = task_rows(&connection);
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().any(|row| row.2 == "task-combined-plagiarism"));
+    assert_eq!(
+        search_payload(&connection),
+        vec![(
+            id.to_string(),
+            Some(text.to_owned()),
+            Some("Human-written".to_owned())
+        )]
+    );
+    let source_urls: Option<String> = connection
+        .query_row(
+            "SELECT source_urls FROM analysis_search WHERE analysis_id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        source_urls.as_deref(),
+        Some("https://example.invalid/retained")
+    );
+    fixture.shutdown().await;
+}
+
 /// The bulk-first direction stays contract-true through the compiled
 /// binary across BOTH attestation paths: a `bulk submit` acceptance
 /// attesting the task identity up front persists the child with its
@@ -357,6 +550,11 @@ async fn accepted_child_then_bulk_wait_merges_remote_evidence_without_losing_loc
         .output()
         .expect("wait accepted child");
     assert_eq!(wait.status.code(), Some(0));
+    assert!(
+        !stderr_text(&wait).contains("warning:"),
+        "{}",
+        stderr_text(&wait)
+    );
     assert_no_leak(&wait);
 
     let connection = isolated.open_database();

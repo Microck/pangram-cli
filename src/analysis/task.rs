@@ -10,6 +10,12 @@ use crate::domain::{
 };
 use crate::output::CanonicalError;
 
+/// Canonical billing/input word count for submitted UTF-8 text.
+#[must_use]
+pub(crate) fn canonical_text_word_count(text: &str) -> u64 {
+    u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX)
+}
+
 /// One validated text-analysis request. Construction time belongs to the
 /// adapter; identity is generated here so it exists before any network call
 /// and can be reported on every ambiguous or interrupted outcome.
@@ -23,6 +29,7 @@ pub struct AnalysisRequest {
     word_count: u64,
     include_input: bool,
     public_dashboard_link: bool,
+    rerun_of: Option<AnalysisId>,
 }
 
 impl AnalysisRequest {
@@ -49,7 +56,20 @@ impl AnalysisRequest {
             word_count,
             include_input,
             public_dashboard_link,
+            rerun_of: None,
         }
+    }
+
+    /// Marks a fresh request as a rerun of one durable local analysis.
+    #[must_use]
+    pub fn with_rerun_of(mut self, original: AnalysisId) -> Self {
+        self.rerun_of = Some(original);
+        self
+    }
+
+    #[must_use]
+    pub const fn rerun_of(&self) -> Option<AnalysisId> {
+        self.rerun_of
     }
 
     #[must_use]

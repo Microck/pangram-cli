@@ -7,7 +7,7 @@
 
 use rusqlite::Connection;
 
-use crate::domain::{AnalysisStatus, CheckKind, SaveState, SubmissionOutcome};
+use crate::domain::{AnalysisStatus, CheckKind, CheckStatus, SaveState, SubmissionOutcome};
 
 use super::records::{InputKind, StoredAnalysis, StoredBulkCollection, StoredSearchHit};
 use super::{HistoryError, HistoryErrorCode};
@@ -46,7 +46,29 @@ pub(super) const fn wire_check_kind(kind: CheckKind) -> &'static str {
     }
 }
 
-fn unwire_status(value: &str) -> Result<AnalysisStatus, HistoryError> {
+pub(super) const fn wire_check_status(status: CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Queued => "queued",
+        CheckStatus::Running => "running",
+        CheckStatus::Succeeded => "succeeded",
+        CheckStatus::Failed => "failed",
+    }
+}
+
+pub(super) fn unwire_check_status(value: &str) -> Result<CheckStatus, HistoryError> {
+    match value {
+        "queued" => Ok(CheckStatus::Queued),
+        "running" => Ok(CheckStatus::Running),
+        "succeeded" => Ok(CheckStatus::Succeeded),
+        "failed" => Ok(CheckStatus::Failed),
+        _ => Err(HistoryError::from_sqlite(
+            HistoryErrorCode::HistoryCorrupt,
+            "read check status",
+        )),
+    }
+}
+
+pub(super) fn unwire_status(value: &str) -> Result<AnalysisStatus, HistoryError> {
     match value {
         "queued" => Ok(AnalysisStatus::Queued),
         "running" => Ok(AnalysisStatus::Running),
@@ -60,7 +82,7 @@ fn unwire_status(value: &str) -> Result<AnalysisStatus, HistoryError> {
     }
 }
 
-fn unwire_outcome(value: &str) -> Result<SubmissionOutcome, HistoryError> {
+pub(super) fn unwire_outcome(value: &str) -> Result<SubmissionOutcome, HistoryError> {
     match value {
         "not_submitted" => Ok(SubmissionOutcome::NotSubmitted),
         "accepted" => Ok(SubmissionOutcome::Accepted),
@@ -81,6 +103,17 @@ fn unwire_save_state(value: &str) -> Result<SaveState, HistoryError> {
         _ => Err(HistoryError::from_sqlite(
             HistoryErrorCode::HistoryCorrupt,
             "read row",
+        )),
+    }
+}
+
+pub(super) fn unwire_check_kind(value: &str) -> Result<CheckKind, HistoryError> {
+    match value {
+        "ai_detection" => Ok(CheckKind::AiDetection),
+        "plagiarism" => Ok(CheckKind::Plagiarism),
+        _ => Err(HistoryError::from_sqlite(
+            HistoryErrorCode::HistoryCorrupt,
+            "read check kind",
         )),
     }
 }
@@ -107,6 +140,7 @@ pub(super) struct AnalysisRow {
     pub upstream_version: Option<String>,
     pub retry_of: Option<String>,
     pub rerun_of: Option<String>,
+    pub submitted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,
@@ -131,6 +165,7 @@ impl AnalysisRow {
             upstream_version: record.upstream_version.clone(),
             retry_of: record.retry_of.map(|id| id.to_string()),
             rerun_of: record.rerun_of.map(|id| id.to_string()),
+            submitted_at: record.submitted_at.map(|instant| instant.to_string()),
             created_at: record.created_at.to_string(),
             updated_at: record.updated_at.to_string(),
             completed_at: record.completed_at.map(|instant| instant.to_string()),
@@ -138,7 +173,7 @@ impl AnalysisRow {
     }
 
     /// The params slice, borrowing this struct's owned fields.
-    pub fn as_params(&self) -> [&dyn rusqlite::ToSql; 19] {
+    pub fn as_params(&self) -> [&dyn rusqlite::ToSql; 20] {
         [
             &self.id,
             &self.bulk_id,
@@ -156,6 +191,7 @@ impl AnalysisRow {
             &self.upstream_version,
             &self.retry_of,
             &self.rerun_of,
+            &self.submitted_at,
             &self.created_at,
             &self.updated_at,
             &self.completed_at,
@@ -235,33 +271,38 @@ pub(super) fn row_to_analysis(
     let upstream_version: Option<String> = row.get(13)?;
     let retry_of: Option<String> = row.get(14)?;
     let rerun_of: Option<String> = row.get(15)?;
-    let created_at: String = row.get(16)?;
-    let updated_at: String = row.get(17)?;
-    let completed_at: Option<String> = row.get(18)?;
+    let submitted_at: Option<String> = row.get(16)?;
+    let created_at: String = row.get(17)?;
+    let updated_at: String = row.get(18)?;
+    let completed_at: Option<String> = row.get(19)?;
 
     // The FTS payload lives beside the typed row. A missing row is a
     // structural inconsistency: the store always writes them together, so
     // absence means the database is corrupt, never a silent `None` mapping.
-    let fts: (Option<String>, Option<String>, Option<String>, Option<String>) = connection
-        .query_row(
-            "SELECT input_text, filename, headline, source_urls FROM analysis_search WHERE analysis_id = ?1",
-            [id.clone()],
-            |search| Ok((search.get(0)?, search.get(1)?, search.get(2)?, search.get(3)?)),
-        )
-        .map_err(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::InvalidQuery,
-            other => other,
-        })?;
+    let mut statement = connection.prepare(
+        "SELECT input_text, filename, headline, source_urls
+         FROM analysis_search WHERE analysis_id = ?1",
+    )?;
+    let mut rows = statement.query([id.clone()])?;
+    let search = rows.next()?.ok_or(rusqlite::Error::InvalidQuery)?;
+    let fts: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = (
+        search.get(0)?,
+        search.get(1)?,
+        search.get(2)?,
+        search.get(3)?,
+    );
+    if rows.next()?.is_some() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
 
     Ok(StoredAnalysis {
         id: id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
-        bulk: match (bulk_id, bulk_index) {
-            (Some(bulk), Some(index)) => Some((
-                bulk.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
-                index,
-            )),
-            _ => None,
-        },
+        bulk: super::read_validation::decode_analysis_membership(connection, bulk_id, bulk_index)?,
         caller_id,
         status: unwire_status(&status).map_err(|_| rusqlite::Error::InvalidQuery)?,
         submission_outcome: unwire_outcome(&outcome).map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -280,6 +321,10 @@ pub(super) fn row_to_analysis(
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         rerun_of: rerun_of
+            .map(|value| value.parse())
+            .transpose()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        submitted_at: submitted_at
             .map(|value| value.parse())
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -349,13 +394,25 @@ pub(super) fn row_to_bulk(
 pub(super) fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<StoredSearchHit, rusqlite::Error> {
     let id: String = row.get(0)?;
     let status: String = row.get(1)?;
-    let save_state: String = row.get(2)?;
-    let input_type: String = row.get(3)?;
-    let display_name: Option<String> = row.get(4)?;
-    let created_at: String = row.get(5)?;
+    let checks: String = row.get(2)?;
+    let check_count: i64 = row.get(3)?;
+    let save_state: String = row.get(4)?;
+    let input_type: String = row.get(5)?;
+    let display_name: Option<String> = row.get(6)?;
+    let created_at: String = row.get(7)?;
+    let checks = checks
+        .split(',')
+        .map(|kind| unwire_check_kind(kind).map_err(|_| rusqlite::Error::InvalidQuery))
+        .collect::<Result<Vec<_>, _>>()?;
+    if check_count != i64::try_from(checks.len()).unwrap_or(-1)
+        || crate::domain::OrderedChecks::new(checks.clone()).is_err()
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     Ok(StoredSearchHit {
         analysis_id: id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
         status: unwire_status(&status).map_err(|_| rusqlite::Error::InvalidQuery)?,
+        checks,
         save_state: unwire_save_state(&save_state).map_err(|_| rusqlite::Error::InvalidQuery)?,
         input_kind: InputKind::parse(&input_type).map_err(|_| rusqlite::Error::InvalidQuery)?,
         display_name,

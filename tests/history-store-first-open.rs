@@ -54,6 +54,7 @@ fn assert_exact_initialized_store(root: &Path) {
         tables,
         [
             "analyses",
+            "analysis_checks",
             "analysis_search",
             "analysis_search_config",
             "analysis_search_content",

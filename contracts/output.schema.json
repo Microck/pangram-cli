@@ -2074,6 +2074,82 @@
         "items"
       ]
     },
+    "AnalysisSummaryPage": {
+      "description": "Ordered page returned by `history list` and `history search`.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnalysisSummary"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "AnalysisSummary": {
+      "description": "Privacy-bounded history list/search item.\n\nThis is intentionally not an `Analysis`: summary reads never fabricate\ninput descriptors, results, errors, or provenance that were not selected\nfrom the durable record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AnalysisId"
+        },
+        "status": {
+          "$ref": "#/$defs/AnalysisStatus"
+        },
+        "checks": {
+          "$ref": "#/$defs/OrderedChecks2"
+        },
+        "save_state": {
+          "$ref": "#/$defs/SaveState"
+        },
+        "input_kind": {
+          "$ref": "#/$defs/AnalysisInputKind"
+        },
+        "display_name": {
+          "type": [
+            "string"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "checks",
+        "save_state",
+        "input_kind",
+        "created_at"
+      ]
+    },
+    "OrderedChecks2": {
+      "description": "One or two unique checks in canonical display and serialization order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CheckKind"
+      },
+      "minItems": 1,
+      "maxItems": 2
+    },
+    "CheckKind": {
+      "type": "string",
+      "enum": [
+        "ai_detection",
+        "plagiarism"
+      ]
+    },
+    "AnalysisInputKind": {
+      "description": "Closed input discriminator used by history summaries.",
+      "type": "string",
+      "enum": [
+        "text",
+        "file"
+      ]
+    },
     "MutationAcknowledgement": {
       "description": "A successful command which mutates local state.",
       "type": "object",
@@ -2567,7 +2643,7 @@
           "then": {
             "properties": {
               "data": {
-                "$ref": "#/$defs/AnalysisPage"
+                "$ref": "#/$defs/AnalysisSummaryPage"
               }
             }
           }

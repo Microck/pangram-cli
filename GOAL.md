@@ -982,7 +982,7 @@ local Docker, push, or PR were used; `AGENTS.md` stayed excluded and byte-exact.
   memory before mutation, with PRAGMAs retained as a second probe. Real SQLite
   tests reject hidden foreign-key, conflict-policy, and FTS5-option clauses
   byte-preservingly while harmless SQL spelling and first open stay green.
-- 2026-08-05: Packet C final certification remediation disables URI parsing for literal filesystem history paths, rejects `detect --save --detach` before work, and keeps automatic detached snapshots ephemeral until terminal task evidence is observed; real Unix path and compiled CLI/loopback/SQLite regressions cover both findings.
+- 2026-08-05: Packet D completes optional local history: exact ordered per-check persistence, typed list/show/literal-search/delete/clear, consistent JSONL/Markdown export with content redaction, and text AI-detection reruns with fresh identities and durable `rerun_of` lineage.
 
 ## Out of scope
 

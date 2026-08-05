@@ -83,6 +83,44 @@ pub(super) fn prepare(
         .map(|prepared| (prepared.analyzer, prepared.service))
 }
 
+/// Resolves configuration paths without credentials for a saved local task
+/// identity. History lookup must complete before credential/network setup.
+pub(super) fn prepare_service(
+    resolved: ResolvedCommand,
+    root_matches: &ArgMatches,
+    output: detect::ResolvedOutput,
+    started: UtcTimestamp,
+) -> Result<crate::config::ConfigService, DetectOutcome> {
+    let mut flags = crate::config::ConfigOverrides::default();
+    if let Some(config) = root_matches.get_one::<String>("config") {
+        flags = flags.with_config_file(config.clone());
+    }
+    if let Some(data_dir) = root_matches.get_one::<String>("data-dir") {
+        flags = flags.with_data_dir(data_dir.clone());
+    }
+    let overrides = crate::config::ConfigOverrides::merge(
+        flags,
+        crate::config::ConfigOverrides::from_environment(),
+    );
+    crate::config::ConfigService::new(&overrides).map_err(|error| {
+        detect::failure_outcome(resolved, output, started, detect::credential_error(error))
+    })
+}
+
+/// Resolves credentials and the analyzer after local task-ID resolution.
+pub(super) fn prepare_from_service(
+    resolved: ResolvedCommand,
+    service: crate::config::ConfigService,
+    output: detect::ResolvedOutput,
+    started: UtcTimestamp,
+) -> Result<(Analyzer, crate::config::ConfigService), DetectOutcome> {
+    let api_key = detect::resolve_api_key(&service)
+        .map_err(|error| detect::failure_outcome(resolved, output, started, error))?;
+    let analyzer = detect::build_analyzer(&service, api_key)
+        .map_err(|error| detect::failure_outcome(resolved, output, started, error))?;
+    Ok((analyzer, service))
+}
+
 /// A success outcome for one canonical data payload, through the one
 /// projection handoff. The exit code derives from the canonical content
 /// before rendering ever runs.

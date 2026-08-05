@@ -16,11 +16,15 @@
 
 #![forbid(unsafe_code)]
 
+#[path = "support/history_store.rs"]
+mod history_store_support;
+
 use std::fs;
 use std::str::FromStr;
 
+use history_store_support::{ai_result, save_complete};
 use microck_pangram_cli::domain::{
-    AnalysisId, AnalysisStatus, SaveState, Sha256Hash, SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisStatus, SaveState, SubmissionOutcome, UtcTimestamp,
 };
 use microck_pangram_cli::history::{
     HistoryErrorCode, HistoryStore, InputKind, StoredAnalysis, TerminalResult,
@@ -30,11 +34,8 @@ fn timestamp(value: &str) -> UtcTimestamp {
     UtcTimestamp::from_str(value).expect("test timestamp")
 }
 
-fn sha(tag: u8) -> Sha256Hash {
-    Sha256Hash::from_bytes([tag; 32])
-}
-
 fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
+    let input_sha256 = microck_pangram_cli::domain::Sha256Hash::digest(input_text);
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: None,
@@ -43,14 +44,23 @@ fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
         submission_outcome: SubmissionOutcome::Terminal,
         save_state: SaveState::SavedManual,
         input_kind: InputKind::Text,
-        input_sha256: sha(7),
+        input_sha256,
         display_name: None,
-        input_json: format!("{{\"type\":\"text\",\"text\":{input_text:?},\"word_count\":4}}"),
-        result_json: Some("{\"checks\":[]}".to_owned()),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "literal",
+            "sha256": input_sha256,
+            "byte_count": input_text.len(),
+            "word_count": input_text.split_whitespace().count(),
+            "text": input_text
+        })
+        .to_string(),
+        result_json: Some(ai_result("Human-written")),
         error_json: None,
         upstream_version: None,
         retry_of: None,
         rerun_of: None,
+        submitted_at: Some(timestamp("2026-08-01T09:59:00Z")),
         created_at: timestamp("2026-08-01T10:00:00Z"),
         updated_at: timestamp("2026-08-01T10:05:00Z"),
         completed_at: Some(timestamp("2026-08-01T10:05:00Z")),
@@ -72,12 +82,13 @@ fn terminal_update_replaces_search_payload_in_the_same_transaction() {
     let root = tempfile::tempdir().unwrap();
     let mut store = open_store(&root);
     let id = AnalysisId::from_str("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a20").unwrap();
-    store
-        .save_analysis(&analysis(
+    save_complete(
+        &mut store,
+        &analysis(
             "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a20",
             "initial observation text only",
-        ))
-        .unwrap();
+        ),
+    );
     assert_eq!(store.search("observation", 10).unwrap().len(), 1);
     assert_eq!(store.search("mostly", 10).unwrap().len(), 0);
 
@@ -87,10 +98,7 @@ fn terminal_update_replaces_search_payload_in_the_same_transaction() {
             &TerminalResult {
                 status: AnalysisStatus::Succeeded,
                 submission_outcome: SubmissionOutcome::Terminal,
-                result_json: Some(
-                    "{\"checks\":[{\"kind\":\"ai_detection\",\"headline\":\"mostly AI\"}]}"
-                        .to_owned(),
-                ),
+                result_json: Some(ai_result("mostly AI")),
                 error_json: None,
                 upstream_version: None,
                 completed_at: timestamp("2026-08-01T12:00:00Z"),

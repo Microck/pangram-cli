@@ -6,8 +6,12 @@
 
 #![forbid(unsafe_code)]
 
+#[path = "support/history_store.rs"]
+mod history_store_support;
+
 use std::str::FromStr;
 
+use history_store_support::{ai_result, canonical_error};
 use microck_pangram_cli::domain::{
     AnalysisId, AnalysisStatus, BulkCounters, BulkId, CheckKind, SaveState, Sha256Hash,
     SubmissionOutcome, UtcTimestamp,
@@ -16,28 +20,43 @@ use microck_pangram_cli::history::{
     HistoryError, HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis,
     StoredBulkCollection, StoredUpstreamTask,
 };
+use microck_pangram_cli::output::ErrorCode;
 
 fn stamp(value: &str) -> UtcTimestamp {
     UtcTimestamp::from_str(value).expect("test timestamp")
 }
 
 fn analysis(id: &str, result: Option<&str>, error: Option<&str>) -> StoredAnalysis {
+    let input_sha256 = Sha256Hash::digest("durable");
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: None,
         caller_id: None,
-        status: AnalysisStatus::Succeeded,
+        status: if error.is_some() {
+            AnalysisStatus::Failed
+        } else {
+            AnalysisStatus::Succeeded
+        },
         submission_outcome: SubmissionOutcome::Terminal,
         save_state: SaveState::SavedHistory,
         input_kind: InputKind::Text,
-        input_sha256: Sha256Hash::from_bytes([9; 32]),
+        input_sha256,
         display_name: None,
-        input_json: "{\"type\":\"text\",\"text\":\"durable\"}".to_owned(),
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "literal",
+            "sha256": input_sha256,
+            "byte_count": 7,
+            "word_count": 1,
+            "text": "durable"
+        })
+        .to_string(),
         result_json: result.map(str::to_owned),
         error_json: error.map(str::to_owned),
         upstream_version: None,
         retry_of: None,
         rerun_of: None,
+        submitted_at: Some(stamp("2026-08-01T09:59:00Z")),
         created_at: stamp("2026-08-01T10:00:00Z"),
         updated_at: stamp("2026-08-01T10:05:00Z"),
         completed_at: Some(stamp("2026-08-01T10:05:00Z")),
@@ -187,9 +206,17 @@ fn bulk_membership_refresh_rejects_a_missing_search_row_without_mutation() {
         let mut refreshed = child("anl_01983c20-0180-7a80-a001-00000000e093", &bulk_id, 0);
         refreshed.status = AnalysisStatus::Succeeded;
         refreshed.updated_at = stamp("2026-08-02T12:00:00Z");
+        let refreshed_observations = if with_task {
+            vec![task(
+                "anl_01983c20-0180-7a80-a001-00000000e093",
+                &format!("task-fts-{suffix}"),
+            )]
+        } else {
+            Vec::new()
+        };
 
         let error = store
-            .reconcile_bulk_collection_atomic(&collection, &[(refreshed, observations)])
+            .reconcile_bulk_collection_atomic(&collection, &[(refreshed, refreshed_observations)])
             .expect_err("missing synchronized search row must fail closed");
         assert_eq!(
             error.code(),
@@ -354,7 +381,7 @@ fn task_key_adoption_rejects_a_partially_populated_membership() {
     let holder_id = "anl_01983c20-0180-7a80-a001-00000000e032";
     store
         .save_analysis_atomic(
-            &analysis(holder_id, Some("{\"stored\":true}"), None),
+            &analysis(holder_id, Some(&ai_result("Stored")), None),
             &[task(holder_id, "task-partial")],
         )
         .expect("standalone");
@@ -378,7 +405,7 @@ fn task_key_adoption_rejects_a_partially_populated_membership() {
             )],
         )
         .expect_err("partial membership must fail closed");
-    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+    assert_eq!(error.code(), HistoryErrorCode::HistoryCorrupt);
     let connection = database(&root);
     let membership: (Option<String>, Option<i64>) = connection
         .query_row(
@@ -404,7 +431,7 @@ fn direct_task_read_does_not_fabricate_adoption_of_a_taskless_child() {
     let direct_id = "anl_01983c20-0180-7a80-a001-00000000e043";
     let outcome = store
         .reconcile_observed_analysis_atomic(
-            &analysis(direct_id, Some("{\"direct\":true}"), None),
+            &analysis(direct_id, Some(&ai_result("Direct")), None),
             &[task(direct_id, "task-later")],
             stamp("2026-08-01T11:00:00Z"),
             bodyless_terminal,
@@ -451,7 +478,7 @@ fn bulk_refresh_rejects_distinct_taskless_membership_and_task_row_without_mutati
     let first_direct_id = "anl_01983c20-0180-7a80-a001-00000000e053";
     store
         .reconcile_observed_analysis_atomic(
-            &analysis(first_direct_id, None, None),
+            &analysis(first_direct_id, Some(&ai_result("Direct")), None),
             &[task(first_direct_id, "task-attached")],
             stamp("2026-08-01T11:00:00Z"),
             bodyless_terminal,
@@ -511,7 +538,7 @@ fn taskless_membership_transfer_rejects_invalid_search_rows_with_full_rollback()
             let task_id = format!("task-transfer-fts-{suffix}");
             store
                 .save_analysis_atomic(
-                    &analysis(&source_id, Some("{\"direct\":true}"), None),
+                    &analysis(&source_id, Some(&ai_result("Direct")), None),
                     &[task(&source_id, &task_id)],
                 )
                 .expect("standalone task source");
@@ -593,9 +620,22 @@ fn body_empty_terminal_refresh_preserves_standalone_body() {
     let root = tempfile::tempdir().unwrap();
     let mut store = HistoryStore::open(root.path()).expect("store");
     let id = "anl_01983c20-0180-7a80-a001-00000000e061";
+    let result = serde_json::json!({
+        "classification": "human",
+        "headline": "Stored result",
+        "prediction": "Human",
+        "fraction_ai": 0.0,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0,
+        "num_ai_segments": 0,
+        "num_ai_assisted_segments": 0,
+        "num_human_segments": 1,
+        "segments": []
+    })
+    .to_string();
     store
         .save_analysis_atomic(
-            &analysis(id, Some("{\"stored\":\"result\"}"), None),
+            &analysis(id, Some(&result), None),
             &[task(id, "task-body-standalone")],
         )
         .expect("stored result");
@@ -613,12 +653,10 @@ fn body_empty_terminal_refresh_preserves_standalone_body() {
     let stored = store
         .get_analysis(&AnalysisId::from_str(id).unwrap())
         .expect("stored");
-    assert_eq!(
-        stored.result_json.as_deref(),
-        Some("{\"stored\":\"result\"}")
-    );
+    assert_eq!(stored.result_json.as_deref(), Some(result.as_str()));
     assert_eq!(stored.error_json, None);
-    assert_eq!(stored.completed_at, Some(stamp("2026-08-02T10:00:00Z")));
+    assert_eq!(stored.status, AnalysisStatus::Succeeded);
+    assert_eq!(stored.completed_at, Some(stamp("2026-08-01T10:05:00Z")));
 }
 
 #[test]
@@ -629,8 +667,9 @@ fn body_empty_terminal_refresh_preserves_membership_and_adoption_bodies() {
     let collection = bulk(bulk_id, "upstream-bodies");
     let member_id = "anl_01983c20-0180-7a80-a001-00000000e072";
     let mut member = child(member_id, bulk_id, 0);
+    let member_error = canonical_error(ErrorCode::UpstreamError, "stored error");
     member.status = AnalysisStatus::Failed;
-    member.error_json = Some("{\"stored\":\"error\"}".to_owned());
+    member.error_json = Some(member_error.clone());
     member.completed_at = Some(stamp("2026-08-01T10:05:00Z"));
     store
         .reconcile_bulk_collection_atomic(&collection, &[(member, Vec::new())])
@@ -645,7 +684,7 @@ fn body_empty_terminal_refresh_preserves_membership_and_adoption_bodies() {
     let standalone_id = "anl_01983c20-0180-7a80-a001-00000000e074";
     store
         .save_analysis_atomic(
-            &analysis(standalone_id, Some("{\"adopted\":\"result\"}"), None),
+            &analysis(standalone_id, Some(&ai_result("Adopted")), None),
             &[task(standalone_id, "task-body-adopt")],
         )
         .expect("standalone result");
@@ -662,14 +701,16 @@ fn body_empty_terminal_refresh_preserves_membership_and_adoption_bodies() {
     let member = store
         .get_analysis(&AnalysisId::from_str(member_id).unwrap())
         .expect("member");
+    assert_eq!(member.status, AnalysisStatus::Failed);
     assert_eq!(member.result_json, None);
-    assert_eq!(member.error_json.as_deref(), Some("{\"stored\":\"error\"}"));
+    assert_eq!(member.error_json.as_deref(), Some(member_error.as_str()));
     let adopted = store
         .get_analysis(&AnalysisId::from_str(standalone_id).unwrap())
         .expect("adopted");
+    assert_eq!(adopted.status, AnalysisStatus::Succeeded);
     assert_eq!(
         adopted.result_json.as_deref(),
-        Some("{\"adopted\":\"result\"}")
+        Some(ai_result("Adopted").as_str())
     );
     assert_eq!(adopted.error_json, None);
 }
@@ -681,12 +722,20 @@ fn terminal_body_branches_replace_opposites_and_both_present_fails_closed() {
     let id = AnalysisId::from_str("anl_01983c20-0180-7a80-a001-00000000e081").unwrap();
     store
         .save_analysis_atomic(
-            &analysis(id.to_string().as_str(), None, Some("{\"old\":\"error\"}")),
+            &analysis(
+                id.to_string().as_str(),
+                None,
+                Some(&canonical_error(ErrorCode::UpstreamError, "old error")),
+            ),
             &[],
         )
         .expect("stored error");
     let snapshot = |result: Option<&str>, error: Option<&str>| ObservationSnapshot {
-        status: AnalysisStatus::Succeeded,
+        status: if error.is_some() {
+            AnalysisStatus::Failed
+        } else {
+            AnalysisStatus::Succeeded
+        },
         submission_outcome: SubmissionOutcome::Terminal,
         result_json: result.map(str::to_owned),
         error_json: error.map(str::to_owned),
@@ -697,28 +746,30 @@ fn terminal_body_branches_replace_opposites_and_both_present_fails_closed() {
         search_headline: None,
         search_source_urls: None,
     };
+    let new_result = ai_result("New result");
+    let new_error = canonical_error(ErrorCode::UpstreamError, "new error");
 
     store
         .update_observation_snapshot(
             &id,
             stamp("2026-08-02T10:00:00Z"),
-            &snapshot(Some("{\"new\":\"result\"}"), None),
+            &snapshot(Some(&new_result), None),
         )
         .expect("result replaces error");
     let stored = store.get_analysis(&id).expect("result");
-    assert_eq!(stored.result_json.as_deref(), Some("{\"new\":\"result\"}"));
+    assert_eq!(stored.result_json.as_deref(), Some(new_result.as_str()));
     assert_eq!(stored.error_json, None);
 
     store
         .update_observation_snapshot(
             &id,
             stamp("2026-08-02T11:00:00Z"),
-            &snapshot(None, Some("{\"new\":\"error\"}")),
+            &snapshot(None, Some(&new_error)),
         )
         .expect("error replaces result");
     let stored = store.get_analysis(&id).expect("error");
     assert_eq!(stored.result_json, None);
-    assert_eq!(stored.error_json.as_deref(), Some("{\"new\":\"error\"}"));
+    assert_eq!(stored.error_json.as_deref(), Some(new_error.as_str()));
 
     let error = store
         .update_observation_snapshot(
@@ -730,5 +781,5 @@ fn terminal_body_branches_replace_opposites_and_both_present_fails_closed() {
     assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
     let stored = store.get_analysis(&id).expect("rollback");
     assert_eq!(stored.result_json, None);
-    assert_eq!(stored.error_json.as_deref(), Some("{\"new\":\"error\"}"));
+    assert_eq!(stored.error_json.as_deref(), Some(new_error.as_str()));
 }
