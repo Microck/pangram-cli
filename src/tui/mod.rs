@@ -35,8 +35,16 @@ use model::{
 use terminal::{ProcessSignal, TerminalSession};
 
 const EVENT_POLL: Duration = Duration::from_millis(25);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveAnalysisIdentity {
+    Analysis(crate::domain::AnalysisId),
+    PreparingRerun(crate::domain::AnalysisId),
+}
+
 struct ActiveAnalysis {
     stop: StopObserving,
+    identity: ActiveAnalysisIdentity,
 }
 
 enum LoopExit {
@@ -45,8 +53,18 @@ enum LoopExit {
 }
 
 impl ActiveAnalysis {
-    fn new(stop: StopObserving) -> Self {
-        Self { stop }
+    fn fresh(stop: StopObserving, analysis_id: crate::domain::AnalysisId) -> Self {
+        Self {
+            stop,
+            identity: ActiveAnalysisIdentity::Analysis(analysis_id),
+        }
+    }
+
+    fn preparing_rerun(stop: StopObserving, original_id: crate::domain::AnalysisId) -> Self {
+        Self {
+            stop,
+            identity: ActiveAnalysisIdentity::PreparingRerun(original_id),
+        }
     }
 
     fn stop(&self) {
@@ -119,9 +137,7 @@ fn run_inner() -> Result<u8, TuiError> {
     let loop_exit = 'main: loop {
         let mut redraw = false;
         while let Ok(event) = worker_rx.try_recv() {
-            if analysis_worker_finished(&event) {
-                active_stop = None;
-            }
+            update_active_analysis(&event, &mut active_stop);
             if let Some(loop_exit) =
                 apply_event(event, &mut state, &service, &worker_tx, &mut active_stop)
             {
@@ -166,11 +182,39 @@ fn run_inner() -> Result<u8, TuiError> {
     })
 }
 
-fn analysis_worker_finished(event: &AppEvent) -> bool {
-    matches!(
-        event,
-        AppEvent::AnalysisFinished(_) | AppEvent::AnalysisFailed(_)
-    ) || matches!(event, AppEvent::HistoryRerunPrepared { result: Err(_), .. })
+fn update_active_analysis(event: &AppEvent, active: &mut Option<ActiveAnalysis>) {
+    let Some(owned) = active.as_mut() else {
+        return;
+    };
+    let finished = match (owned.identity, event) {
+        (
+            ActiveAnalysisIdentity::PreparingRerun(expected),
+            AppEvent::HistoryRerunPrepared {
+                analysis_id,
+                result: Ok(rerun_id),
+            },
+        ) if expected == *analysis_id => {
+            owned.identity = ActiveAnalysisIdentity::Analysis(*rerun_id);
+            false
+        }
+        (
+            ActiveAnalysisIdentity::PreparingRerun(expected),
+            AppEvent::HistoryRerunPrepared {
+                analysis_id,
+                result: Err(_),
+            },
+        ) => expected == *analysis_id,
+        (ActiveAnalysisIdentity::Analysis(expected), AppEvent::AnalysisFinished(analysis)) => {
+            expected == analysis.id
+        }
+        (ActiveAnalysisIdentity::Analysis(expected), AppEvent::AnalysisFailed(failure)) => {
+            expected == failure.analysis_id
+        }
+        _ => false,
+    };
+    if finished {
+        *active = None;
+    }
 }
 
 #[cfg(feature = "dev-tools")]
@@ -314,7 +358,7 @@ fn apply_event(
                 automatic_save,
             } => {
                 let stop = StopObserving::new();
-                history_runtime::spawn_fresh_analysis(
+                let analysis_id = history_runtime::spawn_fresh_analysis(
                     service.clone(),
                     text,
                     public_link,
@@ -323,7 +367,7 @@ fn apply_event(
                     stop.clone(),
                     worker_tx.clone(),
                 );
-                *active_stop = Some(ActiveAnalysis::new(stop));
+                *active_stop = Some(ActiveAnalysis::fresh(stop, analysis_id));
             }
             Effect::StoreCredential { credential } => {
                 let result = service
@@ -448,7 +492,7 @@ fn apply_event(
                     stop.clone(),
                     worker_tx.clone(),
                 );
-                *active_stop = Some(ActiveAnalysis::new(stop));
+                *active_stop = Some(ActiveAnalysis::preparing_rerun(stop, analysis_id));
             }
             Effect::ExportHistory(request) => return Some(LoopExit::Export(request)),
             Effect::Exit(exit_code) => return Some(LoopExit::Process(exit_code)),
@@ -460,6 +504,17 @@ fn apply_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failed_event(analysis_id: crate::domain::AnalysisId) -> AppEvent {
+        AppEvent::AnalysisFailed(model::AnalysisFailure {
+            analysis_id,
+            error: crate::output::CanonicalError::new(
+                crate::output::ErrorCode::NetworkUnavailable,
+                "offline",
+            )
+            .expect("valid canonical error"),
+        })
+    }
 
     #[test]
     fn control_keys_do_not_become_printable_text() {
@@ -477,5 +532,59 @@ mod tests {
             key_input(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT)),
             Some(KeyInput::Character('H'))
         );
+    }
+
+    #[test]
+    fn stop_token_owner_ignores_unrelated_analysis_completions() {
+        let expected = crate::domain::AnalysisId::new();
+        let unrelated = crate::domain::AnalysisId::new();
+        let stop = StopObserving::new();
+        let observer = stop.clone();
+        let mut active = Some(ActiveAnalysis::fresh(stop, expected));
+
+        update_active_analysis(&failed_event(unrelated), &mut active);
+        assert!(active.is_some());
+        assert!(!observer.token().is_cancelled());
+
+        update_active_analysis(&failed_event(expected), &mut active);
+        assert!(active.is_none());
+        assert!(observer.token().is_cancelled());
+    }
+
+    #[test]
+    fn rerun_stop_token_binds_only_to_its_prepared_analysis() {
+        let source = crate::domain::AnalysisId::new();
+        let unrelated_source = crate::domain::AnalysisId::new();
+        let rerun = crate::domain::AnalysisId::new();
+        let unrelated_analysis = crate::domain::AnalysisId::new();
+        let stop = StopObserving::new();
+        let observer = stop.clone();
+        let mut active = Some(ActiveAnalysis::preparing_rerun(stop, source));
+
+        update_active_analysis(
+            &AppEvent::HistoryRerunPrepared {
+                analysis_id: unrelated_source,
+                result: Ok(unrelated_analysis),
+            },
+            &mut active,
+        );
+        update_active_analysis(&failed_event(unrelated_analysis), &mut active);
+        assert!(active.is_some());
+        assert!(!observer.token().is_cancelled());
+
+        update_active_analysis(
+            &AppEvent::HistoryRerunPrepared {
+                analysis_id: source,
+                result: Ok(rerun),
+            },
+            &mut active,
+        );
+        update_active_analysis(&failed_event(unrelated_analysis), &mut active);
+        assert!(active.is_some());
+        assert!(!observer.token().is_cancelled());
+
+        update_active_analysis(&failed_event(rerun), &mut active);
+        assert!(active.is_none());
+        assert!(observer.token().is_cancelled());
     }
 }

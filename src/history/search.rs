@@ -228,7 +228,7 @@ fn certify_list_search_store(connection: &Connection) -> Result<(), HistoryError
 /// Proves the one-to-one typed relationship between analyses and their FTS5
 /// rows before list/search returns a page. Exact content projection is owned
 /// by full reads and destructive certification.
-fn certify_search_index(connection: &Connection) -> Result<(), HistoryError> {
+pub(super) fn certify_search_index(connection: &Connection) -> Result<(), HistoryError> {
     let corrupt: bool = connection
         .query_row(
             "SELECT EXISTS (

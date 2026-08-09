@@ -240,7 +240,7 @@ fn pending_label(pending: &PendingOperation) -> &'static str {
         PendingOperation::Reload(_) => "Pending: refreshing local history",
         PendingOperation::Detail(_) => "Pending: loading selected detail",
         PendingOperation::Delete(_) => "Pending: deleting local record",
-        PendingOperation::Rerun(_) => "Pending: preparing billable rerun",
+        PendingOperation::Rerun { .. } => "Pending: preparing billable rerun",
         PendingOperation::Export(_) => "Pending: exporting local history",
     }
 }

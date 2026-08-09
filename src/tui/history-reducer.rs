@@ -108,15 +108,15 @@ pub(super) fn complete_delete(
 pub(super) fn complete_rerun(
     state: &mut AppState,
     analysis_id: AnalysisId,
-    result: Result<(), CanonicalError>,
+    result: Result<AnalysisId, CanonicalError>,
     effects: &mut Vec<Effect>,
 ) {
-    let operation = PendingOperation::Rerun(analysis_id);
-    if state.history.pending() != Some(&operation) {
-        return;
-    }
     match result {
-        Ok(()) => {
+        Ok(rerun_analysis_id)
+            if state
+                .history
+                .bind_rerun_analysis(analysis_id, rerun_analysis_id) =>
+        {
             // Request preparation has finished, but credentials, submission,
             // polling, and optional persistence still run in the same worker.
             // Keep both the History gate and the global analysis gate closed
@@ -126,8 +126,11 @@ pub(super) fn complete_rerun(
             state.focus = Focus::ActiveList;
             state.notice = Some("Rerun started.".to_owned());
         }
+        Ok(_) => {}
         Err(error) => {
-            state.history.finish_pending(&operation);
+            if !state.history.fail_rerun_preparation(analysis_id) {
+                return;
+            }
             state.analysis.submitting = false;
             history_error(state, error);
             reload_if_dirty(state, effects);
@@ -135,14 +138,14 @@ pub(super) fn complete_rerun(
     }
 }
 
-pub(super) fn complete_rerun_analysis(state: &mut AppState, effects: &mut Vec<Effect>) {
-    let Some(PendingOperation::Rerun(analysis_id)) = state.history.pending().cloned() else {
-        return;
-    };
-    state
-        .history
-        .finish_pending(&PendingOperation::Rerun(analysis_id));
-    reload_if_dirty(state, effects);
+pub(super) fn complete_rerun_analysis(
+    state: &mut AppState,
+    analysis_id: AnalysisId,
+    effects: &mut Vec<Effect>,
+) {
+    if state.history.finish_rerun_analysis(analysis_id) {
+        reload_if_dirty(state, effects);
+    }
 }
 
 pub(super) fn edit_search(state: &mut AppState, key: KeyInput) -> bool {
@@ -310,7 +313,7 @@ fn rerun_selected(state: &mut AppState, effects: &mut Vec<Effect>) {
     };
     if state
         .history
-        .start_pending(PendingOperation::Rerun(analysis_id))
+        .start_pending(PendingOperation::rerun(analysis_id))
     {
         // Close the shared analysis gate before private preflight begins. The
         // history operation remains pending through the terminal worker event.

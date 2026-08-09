@@ -31,26 +31,21 @@ pub(super) fn spawn_fresh_analysis(
     automatic_save: bool,
     stop: StopObserving,
     events: Sender<AppEvent>,
-) {
-    let request = fresh_request(text.clone(), public_link);
+) -> AnalysisId {
+    let save_state = requested_save_state(manual_save, automatic_save);
+    let retained_text = save_state.map(|_| text.clone());
+    let request = fresh_request(text, public_link);
     let analysis_id = request.id();
     let fallback_events = events.clone();
     if let Err(error) = std::thread::Builder::new()
         .name("pangram-tui-analysis".to_owned())
         .spawn(move || {
-            run_analysis_worker(
-                service,
-                text,
-                request,
-                manual_save,
-                automatic_save,
-                stop,
-                events,
-            );
+            run_analysis_worker(service, retained_text, request, save_state, stop, events);
         })
     {
         send_failure(&fallback_events, analysis_id, analysis_runtime_error(error));
     }
+    analysis_id
 }
 
 /// Loads one certified summary page using the exact applied TUI criteria.
@@ -165,18 +160,19 @@ pub(super) fn spawn_history_rerun(
             if events
                 .send(AppEvent::HistoryRerunPrepared {
                     analysis_id: original_id,
-                    result: Ok(()),
+                    result: Ok(request.id()),
                 })
                 .is_err()
             {
                 return;
             }
 
-            // `text` never crosses the worker channel. It exists here only
+            // Retained text never crosses the worker channel. It exists here only
             // because a successful automatic save must retain the submitted
             // bytes after Analyzer consumes the private request.
-            let text = request.text().to_owned();
-            run_analysis_worker(service, text, request, false, automatic_save, stop, events);
+            let save_state = automatic_save.then_some(SaveState::SavedHistory);
+            let retained_text = save_state.map(|_| request.text().to_owned());
+            run_analysis_worker(service, retained_text, request, save_state, stop, events);
         })
     {
         let _ = fallback_events.send(AppEvent::HistoryRerunPrepared {
@@ -213,10 +209,9 @@ pub(super) fn export_after_restore(service: &ConfigService, request: ExportReque
 
 fn run_analysis_worker(
     service: ConfigService,
-    text: String,
+    retained_text: Option<String>,
     request: AnalysisRequest,
-    manual_save: bool,
-    automatic_save: bool,
+    save_state: Option<SaveState>,
     stop: StopObserving,
     events: Sender<AppEvent>,
 ) {
@@ -235,10 +230,9 @@ fn run_analysis_worker(
         };
         runtime.block_on(run_analysis(
             service,
-            text,
+            retained_text,
             request,
-            manual_save,
-            automatic_save,
+            save_state,
             stop,
             events,
         ));
@@ -250,10 +244,9 @@ fn run_analysis_worker(
 
 async fn run_analysis(
     service: ConfigService,
-    text: String,
+    retained_text: Option<String>,
     request: AnalysisRequest,
-    manual_save: bool,
-    automatic_save: bool,
+    save_state: Option<SaveState>,
     stop: StopObserving,
     events: Sender<AppEvent>,
 ) {
@@ -321,15 +314,11 @@ async fn run_analysis(
         return;
     };
 
-    let save_state = if manual_save {
-        Some(SaveState::SavedManual)
-    } else if automatic_save {
-        Some(SaveState::SavedHistory)
-    } else {
-        None
-    };
     if let Some(save_state) = save_state {
-        match save_analysis(&service, &analysis, &text, save_state) {
+        let text = retained_text
+            .as_deref()
+            .expect("a requested save retains its submitted text");
+        match save_analysis(&service, &analysis, text, save_state) {
             Ok(()) => {
                 analysis = analysis.with_save_state(save_state);
                 let _ = events.send(AppEvent::HistoryChanged);
@@ -340,7 +329,11 @@ async fn run_analysis(
                 let _ = events.send(AppEvent::AnalysisFinished(analysis));
                 let _ = events.send(AppEvent::Notice(format!(
                     "{} save failed: {}",
-                    if manual_save { "Manual" } else { "History" },
+                    if save_state == SaveState::SavedManual {
+                        "Manual"
+                    } else {
+                        "History"
+                    },
                     error.message()
                 )));
                 return;
@@ -348,6 +341,16 @@ async fn run_analysis(
         }
     }
     let _ = events.send(AppEvent::AnalysisFinished(analysis));
+}
+
+fn requested_save_state(manual_save: bool, automatic_save: bool) -> Option<SaveState> {
+    if manual_save {
+        Some(SaveState::SavedManual)
+    } else if automatic_save {
+        Some(SaveState::SavedHistory)
+    } else {
+        None
+    }
 }
 
 fn fresh_request(text: String, public_link: bool) -> AnalysisRequest {

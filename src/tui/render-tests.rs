@@ -122,6 +122,48 @@ fn failed_terminal_analysis() -> Analysis<CanonicalError> {
     analysis_with_check(Check::AiDetection(check), SaveState::Ephemeral)
 }
 
+fn partial_terminal_analysis() -> Analysis<CanonicalError> {
+    let checks = OrderedChecks::new([
+        Check::AiDetection(CheckState::Failed {
+            upstream: None,
+            error: canonical_error(
+                ErrorCode::UpstreamAnalysisFailed,
+                "AI check failed.\u{1b}[31m\nRetry later.",
+            ),
+        }),
+        Check::Plagiarism(CheckState::Succeeded {
+            upstream: None,
+            result: PlagiarismResult {
+                plagiarism_detected: true,
+                total_sentences: 2,
+                plagiarized_sentence_count: 1,
+                percent_plagiarized: Percentage::new(50.0).expect("valid percentage"),
+                matches: vec![PlagiarismMatch {
+                    source_url: "https://e.test/\u{1b}[32m\nx".to_owned(),
+                    matched_text: "evidence\u{1b}[2J\nshown".to_owned(),
+                    similarity_score: Fraction::new(0.91).expect("valid fraction"),
+                }],
+            },
+        }),
+    ])
+    .expect("canonical partial checks");
+    let input = TextInput::new(
+        TextOrigin::Literal,
+        None,
+        Sha256Hash::digest(b"A deterministic partial-result test sentence."),
+        45,
+        5,
+        None,
+    )
+    .expect("valid text input");
+    analysis_with_input(
+        analysis_id(),
+        AnalysisInput::Text(input),
+        checks,
+        SaveState::Ephemeral,
+    )
+}
+
 fn analysis_with_check(
     check: Check<CanonicalError>,
     save_state: SaveState,
@@ -443,6 +485,22 @@ fn failed_submission_and_terminal_check_failures_have_distinct_results() {
     assert!(
         terminal_text.contains("AI detection failed: Pangram could not complete this analysis.")
     );
+}
+
+#[test]
+fn partial_terminal_result_keeps_succeeded_evidence_and_failed_diagnostic_terminal_safe() {
+    let state = reduce(
+        ready_state(120, 40),
+        AppEvent::AnalysisFinished(partial_terminal_analysis()),
+    )
+    .state;
+    let text = draw(120, 40, &state).text();
+
+    assert!(text.contains("Overall: partial"));
+    assert!(text.contains("Plagiarism: detected - 50.0% across 1/2 sentences"));
+    assert!(text.contains("Match 1: 91.0% - https://e.test/ [32m x - evidence [2J shown"));
+    assert!(text.contains("AI detection failed: AI check failed. [31m Retry later."));
+    assert!(!text.contains('\u{1b}'));
 }
 
 #[test]

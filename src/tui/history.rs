@@ -142,8 +142,20 @@ pub(crate) enum PendingOperation {
     Reload(HistoryLoadRequest),
     Detail(AnalysisId),
     Delete(AnalysisId),
-    Rerun(AnalysisId),
+    Rerun {
+        original_id: AnalysisId,
+        analysis_id: Option<AnalysisId>,
+    },
     Export(ExportRequest),
+}
+
+impl PendingOperation {
+    pub(crate) const fn rerun(original_id: AnalysisId) -> Self {
+        Self::Rerun {
+            original_id,
+            analysis_id: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -336,6 +348,70 @@ impl HistoryState {
         true
     }
 
+    /// Binds a prepared rerun's fresh identity to the original history
+    /// request that owns the operation gate. A stale preparation completion
+    /// cannot replace an identity that is already running.
+    pub(crate) fn bind_rerun_analysis(
+        &mut self,
+        original_id: AnalysisId,
+        analysis_id: AnalysisId,
+    ) -> bool {
+        let Some(PendingOperation::Rerun {
+            original_id: pending_id,
+            analysis_id: pending_analysis,
+        }) = self.pending.as_mut()
+        else {
+            return false;
+        };
+        if *pending_id != original_id || pending_analysis.is_some() {
+            return false;
+        }
+        *pending_analysis = Some(analysis_id);
+        true
+    }
+
+    /// Analysis worker events belong to a pending rerun only after preflight
+    /// has bound its fresh identity. Other analysis completions are stale and
+    /// must not alter either the global analysis state or the history gate.
+    pub(crate) fn accepts_analysis_event(&self, analysis_id: AnalysisId) -> bool {
+        match self.pending.as_ref() {
+            Some(PendingOperation::Rerun {
+                analysis_id: Some(pending_id),
+                ..
+            }) => *pending_id == analysis_id,
+            Some(PendingOperation::Rerun { .. }) => false,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn fail_rerun_preparation(&mut self, original_id: AnalysisId) -> bool {
+        let preparing = matches!(
+            self.pending.as_ref(),
+            Some(PendingOperation::Rerun {
+                original_id: pending_id,
+                analysis_id: None,
+            }) if *pending_id == original_id
+        );
+        if preparing {
+            self.pending = None;
+        }
+        preparing
+    }
+
+    pub(crate) fn finish_rerun_analysis(&mut self, analysis_id: AnalysisId) -> bool {
+        let running = matches!(
+            self.pending.as_ref(),
+            Some(PendingOperation::Rerun {
+                analysis_id: Some(pending_id),
+                ..
+            }) if *pending_id == analysis_id
+        );
+        if running {
+            self.pending = None;
+        }
+        running
+    }
+
     pub(crate) fn pending(&self) -> Option<&PendingOperation> {
         self.pending.as_ref()
     }
@@ -492,7 +568,7 @@ mod tests {
         assert!(!state.start_pending(reload.clone()));
         assert!(!state.start_pending(PendingOperation::Detail(id(1))));
         assert!(!state.start_pending(PendingOperation::Delete(id(1))));
-        assert!(!state.start_pending(PendingOperation::Rerun(id(1))));
+        assert!(!state.start_pending(PendingOperation::rerun(id(1))));
         assert!(
             !state.start_pending(PendingOperation::Export(ExportRequest {
                 format: HistoryExportFormat::Jsonl,
@@ -503,6 +579,32 @@ mod tests {
         assert_eq!(state.pending(), Some(&reload));
         assert!(state.finish_pending(&reload));
         assert_eq!(state.pending(), None);
+    }
+
+    #[test]
+    fn rerun_gate_tracks_the_fresh_analysis_identity_until_exact_finish() {
+        let original_id = id(1);
+        let rerun_id = id(2);
+        let unrelated_id = id(3);
+        let mut state = HistoryState::default();
+        assert!(state.start_pending(PendingOperation::rerun(original_id)));
+
+        assert!(!state.accepts_analysis_event(rerun_id));
+        assert!(!state.bind_rerun_analysis(unrelated_id, unrelated_id));
+        assert!(state.bind_rerun_analysis(original_id, rerun_id));
+        assert!(!state.fail_rerun_preparation(original_id));
+        assert!(!state.accepts_analysis_event(unrelated_id));
+        assert!(state.accepts_analysis_event(rerun_id));
+        assert!(!state.finish_rerun_analysis(unrelated_id));
+        assert!(matches!(
+            state.pending(),
+            Some(PendingOperation::Rerun {
+                original_id: pending_id,
+                analysis_id: Some(pending_analysis),
+            }) if *pending_id == original_id && *pending_analysis == rerun_id
+        ));
+        assert!(state.finish_rerun_analysis(rerun_id));
+        assert!(state.pending().is_none());
     }
 
     #[test]

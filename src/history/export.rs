@@ -4,6 +4,8 @@ use std::io::Write;
 
 use super::{HistoryError, HistoryErrorCode, HistoryStore};
 
+type CanonicalAnalysis = crate::domain::Analysis<crate::output::CanonicalError>;
+
 /// The closed local-history export formats shared by CLI and TUI adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryExportFormat {
@@ -33,30 +35,141 @@ pub fn export_history(
     format: HistoryExportFormat,
     redact_content: bool,
 ) -> Result<(), HistoryExportError> {
-    // The complete snapshot must certify before Markdown can write its header
-    // or JSONL can write its first row. This keeps a corrupt later row from
-    // leaking an earlier certified record.
-    let analyses = store.map_or_else(|| Ok(Vec::new()), certified_analyses)?;
-    let values = analyses.into_iter().map(|analysis| {
-        serde_json::to_value(analysis)
-            .map_err(|_| HistoryExportError::History(export_encoding_error()))
-    });
-    write_values(writer, values, format, redact_content)
+    let Some(store) = store else {
+        return write_values(
+            writer,
+            std::iter::empty::<Result<serde_json::Value, HistoryExportError>>(),
+            format,
+            redact_content,
+        );
+    };
+
+    // Keep certification and output on one immutable WAL snapshot. The read
+    // transaction is intentionally dropped rather than committed: it never
+    // writes, and this avoids a fallible database operation after stdout may
+    // contain export bytes.
+    let transaction = store
+        .connection_ref()
+        .unchecked_transaction()
+        .map_err(|_| begin_snapshot_error())?;
+    super::read_validation::certify_foreign_keys(&transaction)?;
+    super::search::certify_search_index(&transaction).map_err(|error| {
+        if error.code() == HistoryErrorCode::HistoryUnavailable {
+            export_read_error()
+        } else {
+            error
+        }
+    })?;
+    let identities = export_identities(&transaction)?;
+
+    // Fully consume the first pass before stdout. This validates every
+    // canonical aggregate and JSON encoding while retaining only the current
+    // record. The lightweight identity/timestamp metadata above is the only
+    // whole-export allocation needed for exact chronological ordering.
+    visit_export_records(&transaction, &identities, |record| {
+        let _ = record.to_value()?;
+        Ok(())
+    })?;
+
+    write_header(writer, format)?;
+    visit_export_records(&transaction, &identities, |record| {
+        let mut value = record.to_value()?;
+        if redact_content {
+            redact(&mut value);
+        }
+        write_value(writer, &value, format)
+    })?;
+    writer.flush().map_err(|_| HistoryExportError::Output)
 }
 
-fn certified_analyses(
-    store: &HistoryStore,
-) -> Result<Vec<crate::domain::Analysis<crate::output::CanonicalError>>, HistoryError> {
-    store.with_read_snapshot(|transaction| {
-        let mut analyses = super::read_validation::certify_analysis_batch(transaction, true)?;
-        analyses.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(analyses)
-    })
+fn export_identities(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<(crate::domain::AnalysisId, crate::domain::UtcTimestamp)>, HistoryExportError> {
+    let mut statement = connection
+        .prepare("SELECT id, created_at FROM analyses")
+        .map_err(|_| export_read_error())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|_| export_read_error())?;
+    let mut identities = Vec::new();
+    for row in rows {
+        let (id, created_at) = row.map_err(|_| export_corruption_error())?;
+        let id = id
+            .parse::<crate::domain::AnalysisId>()
+            .map_err(|_| export_corruption_error())?;
+        let created_at = created_at
+            .parse::<crate::domain::UtcTimestamp>()
+            .map_err(|_| export_corruption_error())?;
+        identities.push((id, created_at));
+    }
+    identities.sort_by(|(left_id, left_created), (right_id, right_created)| {
+        right_created
+            .cmp(left_created)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    Ok(identities)
+}
+
+fn visit_export_records(
+    connection: &rusqlite::Connection,
+    identities: &[(crate::domain::AnalysisId, crate::domain::UtcTimestamp)],
+    mut visit: impl FnMut(&ExportRecord) -> Result<(), HistoryExportError>,
+) -> Result<(), HistoryExportError> {
+    for (id, _) in identities {
+        let record = ExportRecord::load(connection, id)?;
+        visit(&record)?;
+    }
+    Ok(())
+}
+
+struct ExportRecord {
+    analysis: CanonicalAnalysis,
+}
+
+impl ExportRecord {
+    fn load(
+        connection: &rusqlite::Connection,
+        id: &crate::domain::AnalysisId,
+    ) -> Result<Self, HistoryError> {
+        let analysis = super::read_validation::certified_analysis_on(connection, id, true)?;
+        #[cfg(test)]
+        tests::record_opened();
+        Ok(Self { analysis })
+    }
+
+    fn to_value(&self) -> Result<serde_json::Value, HistoryError> {
+        serde_json::to_value(&self.analysis).map_err(|_| export_encoding_error())
+    }
+}
+
+#[cfg(test)]
+impl Drop for ExportRecord {
+    fn drop(&mut self) {
+        tests::record_dropped();
+    }
+}
+
+fn begin_snapshot_error() -> HistoryExportError {
+    HistoryExportError::History(HistoryError::from_sqlite(
+        HistoryErrorCode::HistoryUnavailable,
+        "begin export snapshot",
+    ))
+}
+
+fn export_read_error() -> HistoryError {
+    HistoryError::from_sqlite(
+        HistoryErrorCode::HistoryUnavailable,
+        "read export identities",
+    )
+}
+
+fn export_corruption_error() -> HistoryError {
+    HistoryError::new(
+        HistoryErrorCode::HistoryCorrupt,
+        "export history: a stored analysis identity or timestamp is invalid",
+    )
 }
 
 fn write_values(
@@ -65,11 +178,7 @@ fn write_values(
     format: HistoryExportFormat,
     redact_content: bool,
 ) -> Result<(), HistoryExportError> {
-    if format == HistoryExportFormat::Markdown {
-        writer
-            .write_all(b"# Pangram history export\n")
-            .map_err(|_| HistoryExportError::Output)?;
-    }
+    write_header(writer, format)?;
     for value in values {
         let mut value = value?;
         // Redaction is deliberately stage 2: certification sees the complete
@@ -80,6 +189,18 @@ fn write_values(
         write_value(writer, &value, format)?;
     }
     writer.flush().map_err(|_| HistoryExportError::Output)
+}
+
+fn write_header(
+    writer: &mut impl Write,
+    format: HistoryExportFormat,
+) -> Result<(), HistoryExportError> {
+    if format == HistoryExportFormat::Markdown {
+        writer
+            .write_all(b"# Pangram history export\n")
+            .map_err(|_| HistoryExportError::Output)?;
+    }
+    Ok(())
 }
 
 fn write_value(
@@ -250,7 +371,124 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{HistoryExportError, HistoryExportFormat, export_history, write_values};
+    use crate::domain::{
+        AnalysisStatus, CheckKind, SaveState, Sha256Hash, SubmissionOutcome, UtcTimestamp,
+    };
+    use crate::history::{HistoryStore, InputKind, StoredAnalysis, StoredUpstreamTask};
+
+    use super::{
+        HistoryErrorCode, HistoryExportError, HistoryExportFormat, export_history, write_values,
+    };
+
+    #[derive(Clone, Copy, Default)]
+    struct RecordProbeState {
+        enabled: bool,
+        live: usize,
+        peak: usize,
+        opened: usize,
+    }
+
+    thread_local! {
+        static RECORD_PROBE: Cell<RecordProbeState> = const {
+            Cell::new(RecordProbeState {
+                enabled: false,
+                live: 0,
+                peak: 0,
+                opened: 0,
+            })
+        };
+    }
+
+    pub(super) fn record_opened() {
+        RECORD_PROBE.with(|probe| {
+            let mut state = probe.get();
+            if state.enabled {
+                state.live += 1;
+                state.peak = state.peak.max(state.live);
+                state.opened += 1;
+                probe.set(state);
+            }
+        });
+    }
+
+    pub(super) fn record_dropped() {
+        RECORD_PROBE.with(|probe| {
+            let mut state = probe.get();
+            if state.enabled {
+                state.live = state
+                    .live
+                    .checked_sub(1)
+                    .expect("tracked export records must be balanced");
+                probe.set(state);
+            }
+        });
+    }
+
+    struct RecordProbe;
+
+    impl RecordProbe {
+        fn start() -> Self {
+            RECORD_PROBE.with(|probe| {
+                probe.set(RecordProbeState {
+                    enabled: true,
+                    ..RecordProbeState::default()
+                });
+            });
+            Self
+        }
+
+        fn state(&self) -> RecordProbeState {
+            RECORD_PROBE.with(Cell::get)
+        }
+    }
+
+    impl Drop for RecordProbe {
+        fn drop(&mut self) {
+            RECORD_PROBE.with(|probe| probe.set(RecordProbeState::default()));
+        }
+    }
+
+    fn seed_running_analysis(store: &mut HistoryStore, id: &str, created_at: &str) {
+        let id = id.parse().expect("analysis identity");
+        let created_at = created_at.parse::<UtcTimestamp>().expect("timestamp");
+        let record = StoredAnalysis {
+            id,
+            bulk: None,
+            caller_id: None,
+            status: AnalysisStatus::Running,
+            submission_outcome: SubmissionOutcome::Accepted,
+            save_state: SaveState::SavedHistory,
+            input_kind: InputKind::Text,
+            input_sha256: Sha256Hash::from_bytes([0; 32]),
+            display_name: None,
+            input_json: "null".to_owned(),
+            result_json: None,
+            error_json: None,
+            upstream_version: None,
+            retry_of: None,
+            rerun_of: None,
+            submitted_at: None,
+            created_at,
+            updated_at: created_at,
+            completed_at: None,
+            search_input_text: None,
+            search_filename: None,
+            search_headline: None,
+            search_source_urls: None,
+        };
+        store
+            .save_analysis_atomic(
+                &record,
+                &[StoredUpstreamTask {
+                    analysis_id: id,
+                    check_kind: CheckKind::AiDetection,
+                    upstream_task_id: format!("task-{id}"),
+                    last_stage: Some("STAGE_INFERENCE".to_owned()),
+                    observed_at: created_at,
+                }],
+            )
+            .expect("seed canonical running analysis");
+    }
 
     struct ShortWriter {
         remaining: usize,
@@ -288,6 +526,21 @@ mod tests {
             false,
         )
         .expect_err("short writer eventually closes");
+        assert!(matches!(error, HistoryExportError::Output));
+    }
+
+    #[test]
+    fn export_mid_record_io_failure_is_an_output_error() {
+        let error = write_values(
+            &mut ShortWriter {
+                remaining: 3,
+                flush_fails: false,
+            },
+            [Ok(json!({"id": "one", "status": "running"}))].into_iter(),
+            HistoryExportFormat::Jsonl,
+            false,
+        )
+        .expect_err("the output device closes during JSON serialization");
         assert!(matches!(error, HistoryExportError::Output));
     }
 
@@ -388,6 +641,133 @@ mod tests {
             String::from_utf8(writer.bytes).unwrap(),
             "# Pangram history export\n\n## `one`\n\n```json\n{\n  \"id\": \"one\",\n  \"text\": \"\\u0060\"\n}\n```\n\n## `two`\n\n```json\n{\n  \"id\": \"two\"\n}\n```\n"
         );
+    }
+
+    #[test]
+    fn redacted_export_never_keeps_more_than_one_full_canonical_record_live() {
+        let root = tempfile::tempdir().expect("temporary history root");
+        let mut store = HistoryStore::open(root.path()).expect("history store");
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a71",
+            "2026-08-01T10:00:00Z",
+        );
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a72",
+            "2026-08-01T11:00:00Z",
+        );
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a73",
+            "2026-08-01T12:00:00Z",
+        );
+        let probe = RecordProbe::start();
+        let mut output = Vec::new();
+
+        export_history(Some(&store), &mut output, HistoryExportFormat::Jsonl, true)
+            .expect("redacted export");
+
+        let state = probe.state();
+        assert_eq!(
+            state.opened, 6,
+            "three records are loaded in each cursor pass"
+        );
+        assert_eq!(state.peak, 1, "full records must never be prebuffered");
+        assert_eq!(state.live, 0, "each full record is dropped after use");
+        assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 3);
+    }
+
+    #[test]
+    fn export_orders_fractional_timestamps_chronologically_then_by_identity() {
+        let root = tempfile::tempdir().expect("temporary history root");
+        let mut store = HistoryStore::open(root.path()).expect("history store");
+        let older = "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a61";
+        let newer = "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a62";
+        seed_running_analysis(&mut store, older, "2026-08-01T10:00:00Z");
+        seed_running_analysis(&mut store, newer, "2026-08-01T10:00:00.1Z");
+        let mut output = Vec::new();
+
+        export_history(Some(&store), &mut output, HistoryExportFormat::Jsonl, true)
+            .expect("ordered export");
+
+        let ids = String::from_utf8(output)
+            .expect("UTF-8 JSONL")
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).expect("JSONL row")["id"]
+                    .as_str()
+                    .expect("analysis identity")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [newer, older]);
+    }
+
+    #[test]
+    fn corrupt_later_record_writes_no_jsonl_or_markdown_prefix() {
+        let root = tempfile::tempdir().expect("temporary history root");
+        let mut store = HistoryStore::open(root.path()).expect("history store");
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a81",
+            "2026-08-01T10:00:00Z",
+        );
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a82",
+            "2026-08-01T11:00:00Z",
+        );
+        store
+            .with_connection(|connection| {
+                connection.execute(
+                    "DELETE FROM analysis_search WHERE analysis_id = ?1",
+                    ["anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a81"],
+                )
+            })
+            .expect("borrow history connection")
+            .expect("corrupt the later export record");
+
+        for format in [HistoryExportFormat::Jsonl, HistoryExportFormat::Markdown] {
+            let mut output = Vec::new();
+            let error = export_history(Some(&store), &mut output, format, false)
+                .expect_err("the complete export is certified first");
+            let HistoryExportError::History(error) = error else {
+                panic!("corruption must remain a history error")
+            };
+            assert_eq!(error.code(), HistoryErrorCode::HistoryCorrupt);
+            assert!(output.is_empty(), "corruption must write no prefix");
+        }
+    }
+
+    #[test]
+    fn orphan_search_row_is_rejected_before_markdown_header() {
+        let root = tempfile::tempdir().expect("temporary history root");
+        let store = HistoryStore::open(root.path()).expect("history store");
+        store
+            .with_connection(|connection| {
+                connection.execute(
+                    "INSERT INTO analysis_search (analysis_id) VALUES (?1)",
+                    ["anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a91"],
+                )
+            })
+            .expect("borrow history connection")
+            .expect("insert orphan search row");
+        let mut output = Vec::new();
+
+        let error = export_history(
+            Some(&store),
+            &mut output,
+            HistoryExportFormat::Markdown,
+            false,
+        )
+        .expect_err("orphan search state must fail closed");
+
+        let HistoryExportError::History(error) = error else {
+            panic!("search corruption must remain a history error")
+        };
+        assert_eq!(error.code(), HistoryErrorCode::HistoryCorrupt);
+        assert!(output.is_empty(), "Markdown must not write its header");
     }
 
     #[test]

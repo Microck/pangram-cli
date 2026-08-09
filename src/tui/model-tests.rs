@@ -58,6 +58,20 @@ fn history_summary(index: u8) -> AnalysisSummary {
     }
 }
 
+fn assert_pending_rerun(
+    state: &AppState,
+    original_id: AnalysisId,
+    analysis_id: Option<AnalysisId>,
+) {
+    assert!(matches!(
+        state.history.pending(),
+        Some(PendingOperation::Rerun {
+            original_id: pending_original,
+            analysis_id: pending_analysis,
+        }) if *pending_original == original_id && *pending_analysis == analysis_id
+    ));
+}
+
 #[test]
 fn vim_printable_navigation_keys_edit_the_composer() {
     let mut state = ready_state();
@@ -401,6 +415,7 @@ fn rerun_gate_stays_closed_until_the_analysis_finishes() {
     state.route = Route::History;
     state.focus = Focus::HistoryRerun;
     let analysis_id = history_id(1);
+    let rerun_id = AnalysisId::new();
 
     let requested = reduce(state, AppEvent::Key(KeyInput::Enter));
     assert!(matches!(
@@ -410,53 +425,91 @@ fn rerun_gate_stays_closed_until_the_analysis_finishes() {
             automatic_save: false,
         }] if *requested_id == analysis_id
     ));
-    assert_eq!(
-        requested.state.history.pending(),
-        Some(&PendingOperation::Rerun(analysis_id))
-    );
+    assert_pending_rerun(&requested.state, analysis_id, None);
     assert!(requested.state.analysis.submitting);
 
+    let mut preparing = requested.state;
+    preparing.route = Route::Analyze;
+    preparing.focus = Focus::Submit;
+    preparing.composer = TextField::from_value("second request".to_owned());
+    let fresh_while_preparing = reduce(preparing, AppEvent::Key(KeyInput::Enter));
+    assert!(fresh_while_preparing.effects.is_empty());
+
+    let mut preparing = fresh_while_preparing.state;
+    preparing.route = Route::History;
+    preparing.focus = Focus::HistoryRerun;
+    let rerun_while_preparing = reduce(preparing, AppEvent::Key(KeyInput::Enter));
+    assert!(rerun_while_preparing.effects.is_empty());
+
     let wrong = reduce(
-        requested.state,
+        rerun_while_preparing.state,
         AppEvent::HistoryRerunPrepared {
             analysis_id: history_id(2),
-            result: Ok(()),
+            result: Ok(AnalysisId::new()),
         },
     );
-    assert_eq!(
-        wrong.state.history.pending(),
-        Some(&PendingOperation::Rerun(analysis_id))
-    );
+    assert_pending_rerun(&wrong.state, analysis_id, None);
     let completed = reduce(
         wrong.state,
         AppEvent::HistoryRerunPrepared {
             analysis_id,
-            result: Ok(()),
+            result: Ok(rerun_id),
         },
     );
     assert_eq!(completed.state.route, Route::Active);
     assert_eq!(completed.state.focus, Focus::ActiveList);
     assert_eq!(completed.state.notice.as_deref(), Some("Rerun started."));
     assert!(completed.state.analysis.submitting);
-    assert_eq!(
-        completed.state.history.pending(),
-        Some(&PendingOperation::Rerun(analysis_id))
-    );
+    assert_pending_rerun(&completed.state, analysis_id, Some(rerun_id));
 
-    let mut returned = completed.state;
+    let stale_preflight_failure = reduce(
+        completed.state,
+        AppEvent::HistoryRerunPrepared {
+            analysis_id,
+            result: Err(CanonicalError::new(
+                crate::output::ErrorCode::LocalTaskUnresolvable,
+                "stale preflight failure",
+            )
+            .expect("valid canonical error")),
+        },
+    );
+    assert!(stale_preflight_failure.state.analysis.submitting);
+    assert_pending_rerun(&stale_preflight_failure.state, analysis_id, Some(rerun_id));
+
+    let mut returned = stale_preflight_failure.state;
     returned.route = Route::History;
     returned.focus = Focus::HistoryRerun;
     let duplicate = reduce(returned, AppEvent::Key(KeyInput::Enter));
     assert!(duplicate.effects.is_empty());
-    assert_eq!(
-        duplicate.state.history.pending(),
-        Some(&PendingOperation::Rerun(analysis_id))
-    );
+    assert_pending_rerun(&duplicate.state, analysis_id, Some(rerun_id));
 
-    let failed = reduce(
+    let unrelated_failure = reduce(
         duplicate.state,
         AppEvent::AnalysisFailed(AnalysisFailure {
             analysis_id: AnalysisId::new(),
+            error: CanonicalError::new(crate::output::ErrorCode::NetworkUnavailable, "offline")
+                .expect("valid canonical error"),
+        }),
+    );
+    assert!(unrelated_failure.state.analysis.submitting);
+    assert!(unrelated_failure.state.analysis.failure.is_none());
+    assert_pending_rerun(&unrelated_failure.state, analysis_id, Some(rerun_id));
+
+    let mut attempted_fresh_submit = unrelated_failure.state;
+    attempted_fresh_submit.route = Route::Analyze;
+    attempted_fresh_submit.focus = Focus::Submit;
+    attempted_fresh_submit.composer = TextField::from_value("second request".to_owned());
+    let blocked = reduce(attempted_fresh_submit, AppEvent::Key(KeyInput::Enter));
+    assert!(blocked.effects.is_empty());
+    assert_eq!(
+        blocked.state.notice.as_deref(),
+        Some("An analysis is already in progress.")
+    );
+
+    let failed = reduce(
+        blocked.state,
+        AppEvent::AnalysisFailed(AnalysisFailure {
+            analysis_id: rerun_id,
             error: CanonicalError::new(crate::output::ErrorCode::NetworkUnavailable, "offline")
                 .expect("valid canonical error"),
         }),

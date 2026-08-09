@@ -344,7 +344,7 @@ pub enum AppEvent {
     },
     HistoryRerunPrepared {
         analysis_id: AnalysisId,
-        result: Result<(), CanonicalError>,
+        result: Result<AnalysisId, CanonicalError>,
     },
     Notice(String),
     SettingStored {
@@ -399,29 +399,43 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
     match event {
         AppEvent::Resize(size) => state.terminal = size,
         AppEvent::AnalysisAccepted(analysis) => {
+            if !state.history.accepts_analysis_event(analysis.id) {
+                return Transition { state, effects };
+            }
             state.analysis.submitting = false;
             state.analysis.failure = None;
             state.analysis.current = Some(analysis.clone());
             upsert_active(&mut state.active, analysis);
         }
         AppEvent::AnalysisProgress(progress) => {
+            if !state.history.accepts_analysis_event(progress.analysis_id) {
+                return Transition { state, effects };
+            }
             state.analysis.submitting = false;
             state.analysis.progress = Some(progress);
         }
         AppEvent::AnalysisFinished(analysis) => {
+            if !state.history.accepts_analysis_event(analysis.id) {
+                return Transition { state, effects };
+            }
+            let analysis_id = analysis.id;
             state.analysis.submitting = false;
             state.analysis.progress = None;
             state.analysis.failure = None;
             state.active.retain(|item| item.id != analysis.id);
             state.analysis.current = Some(analysis);
-            super::history_reducer::complete_rerun_analysis(&mut state, &mut effects);
+            super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
         }
         AppEvent::AnalysisFailed(failure) => {
+            if !state.history.accepts_analysis_event(failure.analysis_id) {
+                return Transition { state, effects };
+            }
+            let analysis_id = failure.analysis_id;
             state.analysis.submitting = false;
             state.analysis.progress = None;
             state.active.retain(|item| item.id != failure.analysis_id);
             state.analysis.failure = Some(failure);
-            super::history_reducer::complete_rerun_analysis(&mut state, &mut effects);
+            super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
         }
         AppEvent::HistoryChanged => {
             super::history_reducer::history_changed(&mut state, &mut effects)
