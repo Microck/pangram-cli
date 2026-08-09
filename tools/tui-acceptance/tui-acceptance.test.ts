@@ -209,6 +209,9 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         // uses. Vim route keys must only take effect after focus leaves a text
         // field.
         await session.keyboard.press("Escape")
+        await session.screen.waitForText("> [Analyze]", {
+          timeoutMs: START_TIMEOUT_MS,
+        })
         await pressMany(session, "ArrowRight", 3)
         await session.screen.waitForText("Keymap: Regular", { timeoutMs: START_TIMEOUT_MS })
         await pressMany(session, "ArrowDown", 4)
@@ -217,6 +220,9 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.screen.waitForText("> Keymap: Vim", { timeoutMs: START_TIMEOUT_MS })
 
         await session.keyboard.press("Escape")
+        await session.screen.waitForText("> [Settings]", {
+          timeoutMs: START_TIMEOUT_MS,
+        })
         await session.keyboard.type("hhh")
         await session.screen.waitForText("Text composer", {
           timeoutMs: START_TIMEOUT_MS,
@@ -236,6 +242,11 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         // Help is keyboard-reachable, dismissible by the same key, and leaves
         // route focus intact for Vim navigation.
         await session.keyboard.press("Escape")
+        // Wait for Escape to leave the text field before sending `?`. If the
+        // bytes arrive together, a terminal parser may treat them as Alt+?.
+        await session.screen.waitForText("> [Analyze]", {
+          timeoutMs: START_TIMEOUT_MS,
+        })
         await session.keyboard.type("?")
         await session.screen.waitForText("Focus Quit in the command bar", {
           timeoutMs: START_TIMEOUT_MS,
@@ -307,6 +318,9 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         async (session, fixture) => {
           await session.screen.waitForText("Text composer", { timeoutMs: START_TIMEOUT_MS })
           await session.keyboard.press("Escape")
+          await session.screen.waitForText("> [Analyze]", {
+            timeoutMs: START_TIMEOUT_MS,
+          })
           await pressMany(session, "ArrowRight", 2)
           await session.screen.waitForText("History unavailable:", {
             timeoutMs: START_TIMEOUT_MS,
@@ -341,6 +355,9 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
       await runIsolatedScenario("history-consent", async (session) => {
         await finishCredentialFreeOnboarding(session)
         await session.keyboard.press("Escape")
+        await session.screen.waitForText("> [Analyze]", {
+          timeoutMs: START_TIMEOUT_MS,
+        })
         await pressMany(session, "ArrowRight", 3)
         await pressMany(session, "ArrowDown", 2)
         await session.screen.waitForText("> History: disabled", {
@@ -390,6 +407,9 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
       await runIsolatedScenario("history-export-confirmations", async (session) => {
         await finishCredentialFreeOnboarding(session)
         await session.keyboard.press("Escape")
+        await session.screen.waitForText("> [Analyze]", {
+          timeoutMs: START_TIMEOUT_MS,
+        })
         await pressMany(session, "ArrowRight", 2)
         await session.screen.waitForText("No saved analyses match these criteria.", {
           timeoutMs: START_TIMEOUT_MS,
@@ -495,6 +515,9 @@ async function runPollingExitJourney(exit: "ctrl-c" | "quit"): Promise<void> {
       return
     }
     await session.keyboard.press("Escape")
+    await session.screen.waitForText("> [Analyze]", {
+      timeoutMs: START_TIMEOUT_MS,
+    })
     await session.keyboard.press("ArrowRight")
     await session.screen.waitUntil(
       ({ text: visible }) =>
@@ -835,6 +858,8 @@ async function quitNormally(session: Session, sensitiveValues: readonly string[]
   // it after Escape leaves whichever text field currently owns focus. There
   // is intentionally no single-key quit shortcut.
   await session.keyboard.press("Escape")
+  const capture = await session.screen.capture({ settleMs: 50, deadlineMs: START_TIMEOUT_MS })
+  expect(capture.reason).toBe("idle")
   await session.keyboard.press("End")
   await session.screen.waitForText("> [Enter] Quit <", { timeoutMs: START_TIMEOUT_MS })
   await session.keyboard.press("Enter")
