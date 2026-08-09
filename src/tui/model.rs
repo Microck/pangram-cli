@@ -13,10 +13,13 @@ use crate::output::CanonicalError;
 
 pub(crate) use super::history::HistoryExportField;
 use super::history::{ExportRequest, HistoryLoadRequest, HistoryState, RedactedAnalysis};
+pub use super::text_field::TextField;
+use super::text_field::edit_value;
 
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 pub const WIDE_WIDTH: u16 = 120;
+pub(super) const ANALYSIS_IN_PROGRESS_NOTICE: &str = "An analysis is already in progress.";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Route {
@@ -133,31 +136,17 @@ pub enum Focus {
     Quit,
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct TextField {
-    value: String,
-}
-
-impl TextField {
-    #[cfg(test)]
-    pub fn from_value(value: String) -> Self {
-        Self { value }
-    }
-
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub struct CredentialEntry {
     value: Zeroizing<String>,
+    cursor: usize,
 }
 
 impl Default for CredentialEntry {
     fn default() -> Self {
         Self {
             value: Zeroizing::new(String::new()),
+            cursor: 0,
         }
     }
 }
@@ -175,8 +164,10 @@ impl fmt::Debug for CredentialEntry {
 impl CredentialEntry {
     #[cfg(test)]
     pub fn from_value(value: String) -> Self {
+        let cursor = value.len();
         Self {
             value: Zeroizing::new(value),
+            cursor,
         }
     }
 
@@ -185,6 +176,7 @@ impl CredentialEntry {
     }
 
     fn take(&mut self) -> Zeroizing<String> {
+        self.cursor = 0;
         std::mem::replace(&mut self.value, Zeroizing::new(String::new()))
     }
 }
@@ -577,10 +569,13 @@ fn reduce_overlay(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>
                 });
             }
             _ => {
-                edit_value(&mut entry.value, key);
+                edit_value(&mut entry.value, &mut entry.cursor, key);
             }
         },
         Overlay::UpdatePreference { choice } => match key {
+            KeyInput::Escape => {
+                state.overlay = Some(Overlay::Credential(CredentialEntry::default()));
+            }
             KeyInput::Character('y' | 'Y') => effects.push(Effect::StoreUpdatePreference(true)),
             KeyInput::Character('n' | 'N') => effects.push(Effect::StoreUpdatePreference(false)),
             KeyInput::Left | KeyInput::Right | KeyInput::Up | KeyInput::Down => *choice = !*choice,
@@ -619,7 +614,7 @@ fn advance_onboarding(state: &mut AppState) {
 
 fn reduce_text_field(state: &mut AppState, key: KeyInput) -> bool {
     if state.focus == Focus::Composer && key == KeyInput::Enter {
-        state.composer.value.push('\n');
+        state.composer.insert('\n');
         return true;
     }
     let field = match state.focus {
@@ -632,22 +627,7 @@ fn reduce_text_field(state: &mut AppState, key: KeyInput) -> bool {
     let Some(field) = field else {
         return false;
     };
-    edit_value(&mut field.value, key)
-}
-
-fn edit_value(value: &mut String, key: KeyInput) -> bool {
-    match key {
-        KeyInput::Character(character) if !character.is_control() => value.push(character),
-        KeyInput::Backspace => {
-            value.pop();
-        }
-        KeyInput::Delete | KeyInput::Left | KeyInput::Right | KeyInput::Home | KeyInput::End => {}
-        KeyInput::Escape | KeyInput::Tab | KeyInput::BackTab | KeyInput::Up | KeyInput::Down => {
-            return false;
-        }
-        _ => return true,
-    }
-    true
+    field.edit(key)
 }
 
 fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
@@ -661,7 +641,7 @@ fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
         Focus::ManualSave => state.manual_save = !state.manual_save,
         Focus::Submit => {
             if state.analysis.submitting || !state.active.is_empty() {
-                state.notice = Some("An analysis is already in progress.".to_owned());
+                state.notice = Some(ANALYSIS_IN_PROGRESS_NOTICE.to_owned());
             } else if state.analysis.current.is_some()
                 || state.analysis.progress.is_some()
                 || state.analysis.failure.is_some()

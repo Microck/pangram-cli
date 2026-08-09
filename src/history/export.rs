@@ -67,7 +67,7 @@ pub fn export_history(
     // record. The lightweight identity/timestamp metadata above is the only
     // whole-export allocation needed for exact chronological ordering.
     visit_export_records(&transaction, &identities, |record| {
-        let _ = record.to_value()?;
+        record.validate_encoding()?;
         Ok(())
     })?;
 
@@ -78,7 +78,12 @@ pub fn export_history(
             redact(&mut value);
         }
         write_value(writer, &value, format)
-    })?;
+    })
+    // The complete immutable snapshot was certified before output began. If
+    // replay nevertheless fails, stdout may already contain valid records, so
+    // the public contract requires the same partial-output lane as a broken
+    // writer rather than a fail-closed history error.
+    .map_err(|_| HistoryExportError::Output)?;
     writer.flush().map_err(|_| HistoryExportError::Output)
 }
 
@@ -133,6 +138,8 @@ impl ExportRecord {
         connection: &rusqlite::Connection,
         id: &crate::domain::AnalysisId,
     ) -> Result<Self, HistoryError> {
+        #[cfg(test)]
+        tests::before_record_load()?;
         let analysis = super::read_validation::certified_analysis_on(connection, id, true)?;
         #[cfg(test)]
         tests::record_opened();
@@ -141,6 +148,10 @@ impl ExportRecord {
 
     fn to_value(&self) -> Result<serde_json::Value, HistoryError> {
         serde_json::to_value(&self.analysis).map_err(|_| export_encoding_error())
+    }
+
+    fn validate_encoding(&self) -> Result<(), HistoryError> {
+        serde_json::to_writer(std::io::sink(), &self.analysis).map_err(|_| export_encoding_error())
     }
 }
 
@@ -397,6 +408,18 @@ mod tests {
                 opened: 0,
             })
         };
+        static FAIL_RECORD_LOAD: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn before_record_load() -> Result<(), crate::history::HistoryError> {
+        FAIL_RECORD_LOAD.with(|remaining| match remaining.get() {
+            Some(0) => Err(super::export_read_error()),
+            Some(count) => {
+                remaining.set(Some(count - 1));
+                Ok(())
+            }
+            None => Ok(()),
+        })
     }
 
     pub(super) fn record_opened() {
@@ -445,6 +468,21 @@ mod tests {
     impl Drop for RecordProbe {
         fn drop(&mut self) {
             RECORD_PROBE.with(|probe| probe.set(RecordProbeState::default()));
+        }
+    }
+
+    struct RecordLoadFailure;
+
+    impl RecordLoadFailure {
+        fn after_successes(count: usize) -> Self {
+            FAIL_RECORD_LOAD.with(|remaining| remaining.set(Some(count)));
+            Self
+        }
+    }
+
+    impl Drop for RecordLoadFailure {
+        fn drop(&mut self) {
+            FAIL_RECORD_LOAD.with(|remaining| remaining.set(None));
         }
     }
 
@@ -738,6 +776,36 @@ mod tests {
             assert_eq!(error.code(), HistoryErrorCode::HistoryCorrupt);
             assert!(output.is_empty(), "corruption must write no prefix");
         }
+    }
+
+    #[test]
+    fn certified_replay_failure_after_prefix_is_an_output_error() {
+        let root = tempfile::tempdir().expect("temporary history root");
+        let mut store = HistoryStore::open(root.path()).expect("history store");
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8aa1",
+            "2026-08-01T10:00:00Z",
+        );
+        seed_running_analysis(
+            &mut store,
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8aa2",
+            "2026-08-01T11:00:00Z",
+        );
+        // Two successful loads certify the store and a third writes the first
+        // record. The fourth load models SQLite failing during replay.
+        let _failure = RecordLoadFailure::after_successes(3);
+        let mut output = Vec::new();
+
+        let error = export_history(Some(&store), &mut output, HistoryExportFormat::Jsonl, false)
+            .expect_err("replay fails after the first record");
+
+        assert!(matches!(error, HistoryExportError::Output));
+        assert_eq!(
+            output.iter().filter(|byte| **byte == b'\n').count(),
+            1,
+            "the certified first record was already written"
+        );
     }
 
     #[test]

@@ -1,8 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
-import { text as consumeText } from "node:stream/consumers"
 import { fileURLToPath } from "node:url"
 
 import {
@@ -13,11 +11,17 @@ import {
 } from "@kitlangton/terminal-control"
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 
+import {
+  HOSTILE_UPSTREAM_MESSAGE,
+  LOOPBACK_TASK_ID,
+  startLoopbackFixture,
+  type LoopbackFixture,
+  type LoopbackMode,
+} from "./loopback-fixture"
+
 const START_TIMEOUT_MS = 5_000
 const EXIT_TIMEOUT_MS = 5_000
 const SYNTHETIC_API_KEY = "synthetic-api-key-not-a-secret"
-const LOOPBACK_TASK_ID = "task-terminal-control"
-const HOSTILE_UPSTREAM_MESSAGE = "synthetic upstream failure\u001b[31mforged\nsecond line"
 const ANALYSIS_ID_PATTERN = /anl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gu
 const STABLE_ANALYSIS_ID = "anl_00000000-0000-0000-0000-000000000000"
 const SUPPORTED_PLATFORM = process.platform === "linux" || process.platform === "darwin"
@@ -37,21 +41,6 @@ type AcceptanceHarness = {
 type ScenarioOptions = {
   environment?: Readonly<Record<string, string>>
   prepare?: (fixture: IsolatedFixture) => Promise<void>
-}
-
-type LoopbackMode = "success" | "failure" | "polling"
-
-type LoopbackRequest = {
-  method: string
-  path: string
-  body: string
-  authenticated: boolean
-}
-
-type LoopbackFixture = {
-  baseUrl: string
-  requests: LoopbackRequest[]
-  close: () => Promise<void>
 }
 
 type SanitizedArtifactManifest = Pick<
@@ -535,7 +524,7 @@ async function runLoopbackAnalysis(
   text: string,
   interact: (session: Session) => Promise<void>,
 ): Promise<void> {
-  const loopback = await startLoopbackFixture(mode)
+  const loopback = await startLoopbackFixture(mode, SYNTHETIC_API_KEY)
   try {
     await runIsolatedScenario(
       artifactName,
@@ -559,119 +548,6 @@ async function runLoopbackAnalysis(
     ).toBe(true)
   } finally {
     await loopback.close()
-  }
-}
-
-async function startLoopbackFixture(mode: LoopbackMode): Promise<LoopbackFixture> {
-  const requests: LoopbackRequest[] = []
-  const server = createServer((request, response) => {
-    void handleLoopbackRequest(mode, requests, request, response).catch(() => {
-      if (!response.headersSent) response.statusCode = 500
-      response.end()
-    })
-  })
-
-  await new Promise<void>((resolveListening, rejectListening) => {
-    const handleError = (error: Error) => rejectListening(error)
-    server.once("error", handleError)
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", handleError)
-      resolveListening()
-    })
-  })
-  const address = server.address()
-  if (!address || typeof address === "string") {
-    server.close()
-    throw new Error("loopback fixture did not bind a TCP address")
-  }
-
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requests,
-    close: () =>
-      new Promise<void>((resolveClosed, rejectClosed) => {
-        server.close((error) => {
-          if (error) rejectClosed(error)
-          else resolveClosed()
-        })
-        server.closeAllConnections()
-      }),
-  }
-}
-
-async function handleLoopbackRequest(
-  mode: LoopbackMode,
-  requests: LoopbackRequest[],
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
-  const body = await readRequestBody(request)
-  const method = request.method ?? ""
-  const path = request.url ?? ""
-  requests.push({
-    method,
-    path,
-    body,
-    authenticated: request.headers["x-api-key"] === SYNTHETIC_API_KEY,
-  })
-
-  if (method === "POST" && path === "/task") {
-    writeJson(response, { task_id: LOOPBACK_TASK_ID })
-    return
-  }
-  if (method === "GET" && path === `/task/${LOOPBACK_TASK_ID}`) {
-    if (mode === "success") {
-      const submitted = requests.find((candidate) => candidate.method === "POST")
-      const submittedText = submitted ? JSON.parse(submitted.body).text : ""
-      writeJson(response, pangram4Success(submittedText))
-    } else if (mode === "failure") {
-      writeJson(response, { stage: "STAGE_FAILED", error_message: HOSTILE_UPSTREAM_MESSAGE })
-    } else {
-      writeJson(response, { task_id: LOOPBACK_TASK_ID, stage: "STAGE_INFERENCE" })
-    }
-    return
-  }
-
-  response.statusCode = 404
-  writeJson(response, { error: "unexpected synthetic fixture route" })
-}
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  return consumeText(request)
-}
-function writeJson(response: ServerResponse, value: unknown): void {
-  response.setHeader("content-type", "application/json")
-  response.end(JSON.stringify(value))
-}
-
-function pangram4Success(text: string) {
-  const wordCount = text.trim().split(/\s+/u).length
-  return {
-    stage: "STAGE_SUCCESS",
-    text,
-    version: "4.0",
-    headline: "Human-written",
-    prediction: "The document appears to be human-written.",
-    prediction_short: "Human",
-    fraction_ai: 0,
-    fraction_ai_assisted: 0,
-    fraction_human: 1,
-    num_ai_segments: 0,
-    num_ai_assisted_segments: 0,
-    num_human_segments: 1,
-    windows: [
-      {
-        text,
-        label: "Human Written",
-        ai_assistance_score: 0,
-        confidence: "High",
-        start_index: 0,
-        end_index: text.length,
-        word_count: wordCount,
-        token_length: wordCount,
-        is_humanized: false,
-        humanizer_score: 0,
-      },
-    ],
   }
 }
 

@@ -16,8 +16,8 @@ use crate::history::HistoryExportFormat;
 use crate::output::{CanonicalError, ErrorCode};
 use crate::tui::history::{ExportRequest, RedactedAnalysis, SelectionMove};
 use crate::tui::model::{
-    AnalysisFailure, AppEvent, CredentialEntry, HistoryExportField, SettingsDraft, StartupState,
-    TerminalSize, TextField, reduce,
+    AnalysisFailure, AppEvent, CredentialEntry, HistoryExportField, KeyInput, SettingsDraft,
+    StartupState, TerminalSize, TextField, reduce,
 };
 
 const FIXED_ANALYSIS_ID: &str = "anl_01983c20-0180-7a80-a001-000000000501";
@@ -485,6 +485,46 @@ fn failed_submission_and_terminal_check_failures_have_distinct_results() {
     assert!(
         terminal_text.contains("AI detection failed: Pangram could not complete this analysis.")
     );
+}
+
+#[test]
+fn failed_history_rerun_leaves_active_and_renders_the_terminal_error() {
+    let mut state = history_state(120, 40);
+    state.history.reload(vec![history_summary(
+        1,
+        SaveState::SavedHistory,
+        "rerun source",
+    )]);
+    state.focus = Focus::HistoryRerun;
+
+    let requested = reduce(state, AppEvent::Key(KeyInput::Enter));
+    let prepared = reduce(
+        requested.state,
+        AppEvent::HistoryRerunPrepared {
+            analysis_id: history_id(1),
+            result: Ok(analysis_id()),
+        },
+    );
+    assert_eq!(prepared.state.route, Route::Active);
+
+    let failed = reduce(
+        prepared.state,
+        AppEvent::AnalysisFailed(AnalysisFailure {
+            analysis_id: analysis_id(),
+            error: canonical_error(
+                ErrorCode::NetworkUnavailable,
+                "The Pangram service is unavailable.",
+            ),
+        }),
+    )
+    .state;
+    let text = draw(120, 40, &failed).text();
+
+    assert_eq!(failed.route, Route::Analyze);
+    assert_eq!(failed.focus, Focus::Submit);
+    assert!(text.contains("Analysis failed"));
+    assert!(text.contains("Error: The Pangram service is unavailable."));
+    assert!(!text.contains("Rerun started."));
 }
 
 #[test]

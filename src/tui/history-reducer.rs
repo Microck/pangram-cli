@@ -7,11 +7,15 @@
 use crate::domain::{AnalysisId, AnalysisSummary};
 use crate::output::CanonicalError;
 
+const RERUN_STARTED_NOTICE: &str = "Rerun started.";
+
 use super::history::{
     ExportResolution, HistoryExportField, HistoryLoadRequest, PendingOperation, RedactedAnalysis,
     SelectionMove,
 };
-use super::model::{AppState, Effect, Focus, KeyInput, Overlay, Route};
+use super::model::{
+    ANALYSIS_IN_PROGRESS_NOTICE, AppState, Effect, Focus, KeyInput, Overlay, Route,
+};
 
 pub(super) const fn focus_order() -> &'static [Focus] {
     &[
@@ -124,7 +128,7 @@ pub(super) fn complete_rerun(
             state.analysis.submitting = true;
             state.route = Route::Active;
             state.focus = Focus::ActiveList;
-            state.notice = Some("Rerun started.".to_owned());
+            state.notice = Some(RERUN_STARTED_NOTICE.to_owned());
         }
         Ok(_) => {}
         Err(error) => {
@@ -144,29 +148,28 @@ pub(super) fn complete_rerun_analysis(
     effects: &mut Vec<Effect>,
 ) {
     if state.history.finish_rerun_analysis(analysis_id) {
+        // Active is a transient session list and does not render terminal
+        // outcomes. Show the shared Analyze result view when the user stayed
+        // on the route selected for the rerun, but do not steal focus if they
+        // navigated elsewhere while the worker was running.
+        if state.route == Route::Active {
+            state.route = Route::Analyze;
+            state.focus = Focus::Submit;
+            state.notice = None;
+        } else if matches!(
+            state.notice.as_deref(),
+            Some(RERUN_STARTED_NOTICE | ANALYSIS_IN_PROGRESS_NOTICE)
+        ) {
+            state.notice = None;
+        }
         reload_if_dirty(state, effects);
     }
 }
 
 pub(super) fn edit_search(state: &mut AppState, key: KeyInput) -> bool {
-    let query = state.history.draft_query_mut();
-    match key {
-        // Printable Vim navigation characters are literal search input while
-        // the search field owns focus.
-        KeyInput::Character(character) if !character.is_control() => query.push(character),
-        KeyInput::Backspace => {
-            query.pop();
-        }
-        KeyInput::Delete | KeyInput::Left | KeyInput::Right | KeyInput::Home | KeyInput::End => {}
-        KeyInput::Escape
-        | KeyInput::Enter
-        | KeyInput::Tab
-        | KeyInput::BackTab
-        | KeyInput::Up
-        | KeyInput::Down => return false,
-        _ => return true,
-    }
-    true
+    // Printable Vim navigation characters remain literal while the search
+    // field owns focus; the field handles cursor keys identically elsewhere.
+    state.history.edit_draft_query(key)
 }
 
 pub(super) fn reduce_key(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>) -> bool {
@@ -305,7 +308,7 @@ fn load_selected_detail(state: &mut AppState, effects: &mut Vec<Effect>) {
 
 fn rerun_selected(state: &mut AppState, effects: &mut Vec<Effect>) {
     if state.analysis.submitting || !state.active.is_empty() {
-        state.notice = Some("An analysis is already in progress.".to_owned());
+        state.notice = Some(ANALYSIS_IN_PROGRESS_NOTICE.to_owned());
         return;
     }
     let Some(analysis_id) = state.history.selected_id() else {

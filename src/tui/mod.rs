@@ -18,6 +18,8 @@ mod render;
 #[path = "result-lines.rs"]
 mod result_lines;
 mod terminal;
+#[path = "text-field.rs"]
+mod text_field;
 
 use std::io::{self, IsTerminal as _};
 use std::sync::mpsc::{self, Sender};

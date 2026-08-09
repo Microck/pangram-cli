@@ -10,6 +10,9 @@ use crate::domain::{
 use crate::history::HistoryExportFormat;
 use crate::output::CanonicalError;
 
+use super::model::KeyInput;
+use super::text_field::TextField;
+
 pub(crate) const HISTORY_LIMIT: u32 = 50;
 pub(crate) const VISIBLE_ROWS: usize = 6;
 
@@ -185,7 +188,7 @@ impl RedactedAnalysis {
 
 #[derive(Clone, Default)]
 pub(crate) struct HistoryState {
-    draft_query: String,
+    draft_query: TextField,
     applied_query: String,
     status_filter: Option<AnalysisStatus>,
     check_filter: Option<CheckKind>,
@@ -206,17 +209,18 @@ impl HistoryState {
     }
 
     pub(crate) fn draft_query(&self) -> &str {
-        &self.draft_query
+        self.draft_query.value()
     }
 
-    pub(crate) fn draft_query_mut(&mut self) -> &mut String {
-        &mut self.draft_query
+    pub(crate) fn edit_draft_query(&mut self, key: KeyInput) -> bool {
+        self.draft_query.edit(key)
     }
 
     /// Applies the literal draft. The runtime decides whether to start the
     /// resulting reload, so pressing Enter can refresh unchanged criteria.
     pub(crate) fn apply_query(&mut self) {
-        self.applied_query.clone_from(&self.draft_query);
+        self.applied_query.clear();
+        self.applied_query.push_str(self.draft_query.value());
     }
 
     pub(crate) fn cycle_status_filter(&mut self) {
@@ -547,13 +551,17 @@ mod tests {
     #[test]
     fn query_changes_only_when_the_draft_is_applied() {
         let mut state = HistoryState::default();
-        state.draft_query_mut().push_str("first");
+        for character in "first".chars() {
+            assert!(state.edit_draft_query(KeyInput::Character(character)));
+        }
         assert_eq!(state.load_request().query, None);
 
         state.apply_query();
         assert_eq!(state.load_request().query.as_deref(), Some("first"));
 
-        state.draft_query_mut().push_str(" second");
+        for character in " second".chars() {
+            assert!(state.edit_draft_query(KeyInput::Character(character)));
+        }
         assert_eq!(state.load_request().query.as_deref(), Some("first"));
         state.apply_query();
         assert_eq!(state.load_request().query.as_deref(), Some("first second"));

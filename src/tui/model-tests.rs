@@ -84,6 +84,50 @@ fn vim_printable_navigation_keys_edit_the_composer() {
 }
 
 #[test]
+fn composer_navigation_keys_edit_at_the_cursor() {
+    let mut state = ready_state();
+    state.composer = TextField::from_value("alpha".to_owned());
+
+    for key in [
+        KeyInput::Home,
+        KeyInput::Right,
+        KeyInput::Delete,
+        KeyInput::End,
+        KeyInput::Left,
+        KeyInput::Backspace,
+        KeyInput::Character('X'),
+    ] {
+        state = reduce(state, AppEvent::Key(key)).state;
+    }
+
+    assert_eq!(state.composer.value(), "apXa");
+    assert_eq!(state.focus, Focus::Composer);
+}
+
+#[test]
+fn credential_entry_uses_the_same_cursor_editing_behavior() {
+    let mut state = AppState::new(TerminalSize::default(), StartupState::default());
+    for key in [
+        KeyInput::Character('a'),
+        KeyInput::Character('b'),
+        KeyInput::Home,
+        KeyInput::Right,
+        KeyInput::Delete,
+        KeyInput::Character('c'),
+        KeyInput::Enter,
+    ] {
+        let transition = reduce(state, AppEvent::Key(key));
+        if let [Effect::StoreCredential { credential }] = transition.effects.as_slice() {
+            assert_eq!(credential.as_str(), "ac");
+            return;
+        }
+        state = transition.state;
+    }
+
+    panic!("credential entry did not request persistence");
+}
+
+#[test]
 fn unavailable_controls_cannot_submit_work() {
     let mut state = ready_state();
     state.focus = Focus::CheckPlagiarism;
@@ -152,6 +196,23 @@ fn onboarding_orders_credential_before_update_preference() {
         },
     );
     assert!(transition.state.overlay.is_none());
+}
+
+#[test]
+fn update_preference_escape_returns_to_credential_setup() {
+    let state = AppState::new(TerminalSize::default(), StartupState::default());
+    let update = reduce(state, AppEvent::Key(KeyInput::Escape));
+    assert!(matches!(
+        update.state.overlay,
+        Some(Overlay::UpdatePreference { .. })
+    ));
+
+    let credential = reduce(update.state, AppEvent::Key(KeyInput::Escape));
+    assert!(matches!(
+        credential.state.overlay,
+        Some(Overlay::Credential(_))
+    ));
+    assert!(credential.effects.is_empty());
 }
 
 #[test]
@@ -355,6 +416,29 @@ fn vim_search_characters_are_literal_and_bare_d_never_deletes() {
 }
 
 #[test]
+fn history_search_navigation_keys_edit_at_the_cursor() {
+    let mut state = history_state(vec![history_summary(1)]);
+    state.route = Route::History;
+    state.focus = Focus::HistorySearch;
+    for key in [
+        KeyInput::Character('f'),
+        KeyInput::Character('o'),
+        KeyInput::Character('x'),
+        KeyInput::Home,
+        KeyInput::Right,
+        KeyInput::Delete,
+        KeyInput::Character('i'),
+        KeyInput::End,
+        KeyInput::Left,
+        KeyInput::Backspace,
+        KeyInput::Character('i'),
+    ] {
+        state = reduce(state, AppEvent::Key(key)).state;
+    }
+    assert_eq!(state.history.draft_query(), "fix");
+}
+
+#[test]
 fn delete_and_export_confirmations_default_to_cancel() {
     let mut state = history_state(vec![history_summary(1)]);
     state.route = Route::History;
@@ -516,6 +600,9 @@ fn rerun_gate_stays_closed_until_the_analysis_finishes() {
     );
     assert!(!failed.state.analysis.submitting);
     assert!(failed.state.history.pending().is_none());
+    assert_eq!(failed.state.route, Route::Analyze);
+    assert_eq!(failed.state.focus, Focus::Submit);
+    assert_eq!(failed.state.notice, None);
 }
 
 #[test]
