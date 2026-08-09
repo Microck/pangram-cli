@@ -468,6 +468,150 @@ async fn save_repeated_files_persist_one_row_each_in_order() {
     fixture.shutdown().await;
 }
 
+/// A later deterministic submission rejection still leaves every earlier
+/// completed member visible and durable. The terminal authentication error
+/// follows the completed JSONL prefix, and no row is invented for the file
+/// whose request was rejected before billable work began.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_save_persists_completed_prefix_before_a_later_rejection() {
+    let first_text = "First saved file completes before the next request is rejected";
+    let second_text = "Second file is rejected before any billable work begins";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-prefix"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    fixture.on_submit(Step::Status(401, None, None));
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--save",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run repeated detect --save with a later rejection");
+
+    assert_eq!(output.status.code(), Some(4), "authentication exit wins");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the completed member renders before the terminal failure"
+    );
+    let completed: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(completed["data"]["input"]["name"], "first.txt");
+    assert_eq!(completed["data"]["status"], "succeeded");
+    assert_eq!(completed["data"]["save_state"], "saved_manual");
+    let failure: Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(failure["command"], "detect");
+    assert_eq!(failure["error"]["code"], "invalid_api_key");
+
+    let connection = isolated.open_database();
+    let rows = analyses_rows(&connection);
+    assert_eq!(rows.len(), 1, "only the completed prefix persists");
+    assert_eq!(
+        serde_json::from_str::<Value>(&rows[0].5).unwrap()["name"],
+        "first.txt"
+    );
+    assert_eq!(rows[0].3, "saved_manual");
+    drop(connection);
+    assert_eq!(
+        fixture.post_count(),
+        2,
+        "the rejected request is not replayed"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// SIGINT while observing a later accepted task keeps the earlier completed
+/// prefix durable and visible before the canonical interruption envelope.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_save_persists_completed_prefix_before_a_later_interrupt() {
+    use std::process::Stdio;
+
+    let first_text = "First saved file completes before the next task is interrupted";
+    let second_text = "Second file is accepted but local observation is interrupted";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-prefix"})));
+    fixture.on_poll(Step::Json(pangram4_success(first_text)));
+    fixture.on_submit(Step::Json(
+        serde_json::json!({"task_id": "task-interrupted"}),
+    ));
+    fixture.on_poll(Step::Hang);
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--save",
+            "--progress",
+            "never",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn repeated detect --save");
+    fixture.wait_for_gets(2).await;
+    interrupt(&mut child);
+    let output = child
+        .wait_with_output()
+        .expect("wait for interrupted detect");
+
+    assert_eq!(output.status.code(), Some(130));
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the completed member renders before the interruption"
+    );
+    let completed: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(completed["data"]["input"]["name"], "first.txt");
+    assert_eq!(completed["data"]["save_state"], "saved_manual");
+    let failure: Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(failure["command"], "detect");
+    assert_eq!(failure["error"]["code"], "network_unavailable");
+    assert!(stderr_text(&output).contains("task-interrupted"));
+
+    let connection = isolated.open_database();
+    let rows = analyses_rows(&connection);
+    assert_eq!(rows.len(), 1, "only the completed prefix persists");
+    assert_eq!(
+        serde_json::from_str::<Value>(&rows[0].5).unwrap()["name"],
+        "first.txt"
+    );
+    assert_eq!(rows[0].3, "saved_manual");
+    drop(connection);
+    assert_eq!(fixture.post_count(), 2, "no billable request is replayed");
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
 /// Explicit save is completed-envelope-only, so Clap rejects the detached
 /// combination before credentials, network, or history work.
 #[tokio::test(flavor = "multi_thread")]

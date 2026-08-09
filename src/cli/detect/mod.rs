@@ -271,14 +271,14 @@ pub(crate) fn execute(
     // token from the recorded flag is spawned inside the runtime below.
     client::install_sigint_driver();
 
-    let outcome = runtime.block_on(async {
+    let (members, terminal) = runtime.block_on(async {
         // A lock-free SIGINT bridge: the low-level handler only sets an
         // atomic flag (async-signal-safe); this task translates it into the
         // shared observation token cancel outside signal context.
         let bridge = tokio::spawn(client::bridge_sigint(stop.token().clone()));
         let mut members: Vec<crate::domain::Analysis<CanonicalError>> =
             Vec::with_capacity(plan.inputs.len());
-        let mut run = Ok(());
+        let mut terminal = None;
         for input in &plan.inputs {
             match analyze_one(
                 &analyzer,
@@ -294,45 +294,58 @@ pub(crate) fn execute(
                 // order; the run continues with the remaining files so one
                 // failed file never discards the billable work already done.
                 Ok(analysis) => members.push(analysis),
-                // An accepted task's local observation failure or a genuine
-                // local interruption unwinds the whole run with its canonical
-                // envelope; those members never completed, so nothing is
-                // persisted for them.
+                // The current member did not complete, but the ordered prefix
+                // did. Carry both parts out so the prefix can persist and
+                // render before the terminal failure or interruption.
                 Err(flow) => {
-                    run = Err(flow);
+                    terminal = Some(flow);
                     break;
                 }
             }
         }
         bridge.abort();
-        run.map(|_| members)
+        (members, terminal)
     });
     // A finished flow must not leak its interrupt into the next run.
     client::reset_sigint_flag();
 
     let command = crate::output::ResolvedCommand::Detect;
-    match outcome {
-        Ok(members) => {
-            let retained_texts = plan
-                .inputs
-                .iter()
-                .map(|input| input.text.clone())
-                .collect::<Vec<_>>();
-            let (members, save_failure) =
-                save::persist_analyses(members, &retained_texts, plan.history_gate, service);
-            let mut outcome = success_outcome(output, started_at, members);
-            if let Some(error) = save_failure {
-                outcome.attach_failure(command, output, started_at, error);
-            }
-            outcome
-        }
-        Err(flow) => match flow {
+    if members.is_empty() {
+        return match terminal.expect("an empty run has a terminal flow") {
             Flow::Failed(error) => failure_outcome(command, output, started_at, error),
             Flow::Interrupted(error, note) => {
                 interrupted_outcome(command, output, started_at, error, note)
             }
-        },
+        };
     }
+
+    // A terminal flow can only stop at the next input, so the completed
+    // analyses map exactly to the same-length input prefix.
+    let retained_texts = plan
+        .inputs
+        .iter()
+        .take(members.len())
+        .map(|input| input.text.clone())
+        .collect::<Vec<_>>();
+    let (members, save_failure) =
+        save::persist_analyses(members, &retained_texts, plan.history_gate, service);
+    let mut outcome = success_outcome(output, started_at, members);
+    if let Some(error) = save_failure {
+        outcome.attach_failure(command, output, started_at, error);
+    }
+    if let Some(flow) = terminal {
+        match flow {
+            Flow::Failed(error) => outcome.attach_failure(command, output, started_at, error),
+            Flow::Interrupted(error, note) => {
+                render::note_stderr_raw(&note);
+                outcome.attach_failure(command, output, started_at, error);
+                if outcome.primary_ok {
+                    outcome.exit_code = crate::output::ExitCode::Interrupted.as_u8();
+                }
+            }
+        }
+    }
+    outcome
 }
 
 /// The global (root-level) flags that affect detection rendering. Read once
