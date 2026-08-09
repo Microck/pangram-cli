@@ -309,6 +309,68 @@ fn a_missing_search_row_for_a_stored_analysis_is_history_corrupt() {
     assert!(rendered.contains("preserved"), "{rendered}");
 }
 
+// -------------------------------------- destructive checkpoint outcome --
+
+/// SQLite reports a blocked `wal_checkpoint(TRUNCATE)` through its result
+/// row, not as an API error. A logical delete still commits, but the command
+/// must report the failed truncation instead of claiming complete success.
+#[test]
+fn delete_reports_a_busy_wal_checkpoint_after_committing_the_logical_delete() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = open_store(&root);
+    let id = AnalysisId::from_str("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a35").unwrap();
+    save_complete(
+        &mut store,
+        &analysis(
+            "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a35",
+            "checkpoint contention",
+        ),
+    );
+
+    // Keep the test fast. The checkpoint result must carry contention even
+    // when this connection does not wait before returning its PRAGMA row.
+    store
+        .with_connection(|connection| connection.busy_timeout(std::time::Duration::ZERO))
+        .unwrap()
+        .unwrap();
+
+    // A real second SQLite connection pins a read snapshot that predates the
+    // delete. The writer can commit, but SQLite cannot truncate the WAL while
+    // this snapshot still needs its pages.
+    let reader = rusqlite::Connection::open(store.database_path()).unwrap();
+    let snapshot = reader.unchecked_transaction().unwrap();
+    let visible: i64 = snapshot
+        .query_row(
+            "SELECT COUNT(*) FROM analyses WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(visible, 1, "the competing snapshot is pinned");
+
+    let error = store
+        .delete_analysis(&id)
+        .expect_err("a busy truncate checkpoint must be reported");
+    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+    assert!(error.message().contains("wal checkpoint"), "{error:?}");
+
+    let remaining: i64 = store
+        .with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM analyses WHERE id = ?1",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        })
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "checkpoint failure never rolls back the committed logical delete"
+    );
+}
+
 // ----------------------------------------- finding 4: WAL/SHM sidecars --
 
 #[cfg(unix)]

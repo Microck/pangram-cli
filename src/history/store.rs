@@ -323,11 +323,19 @@ impl HistoryStore {
 
     /// Checkpoints and truncates the WAL after a committed logical deletion.
     pub(crate) fn checkpoint_truncate(&self) -> Result<(), HistoryError> {
-        self.connection
-            .pragma_update(None, "wal_checkpoint", "TRUNCATE")
+        let busy: i64 = self
+            .connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
             .map_err(|_| {
                 HistoryError::from_sqlite(HistoryErrorCode::HistoryWriteFailed, "wal checkpoint")
-            })
+            })?;
+        if busy != 0 {
+            return Err(HistoryError::new(
+                HistoryErrorCode::HistoryWriteFailed,
+                "wal checkpoint: the database remained busy",
+            ));
+        }
+        Ok(())
     }
 
     fn prepare_connection(&self) -> Result<(), HistoryError> {

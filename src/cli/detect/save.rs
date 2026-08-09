@@ -457,10 +457,14 @@ fn automatic_warning_once(error: &HistoryError, warned: &mut InvocationWarningLa
         return;
     }
     *warned = true;
-    super::render::warning_stderr_raw(&format!(
+    super::render::warning_stderr_raw(&automatic_warning_body(error));
+}
+
+fn automatic_warning_body(error: &HistoryError) -> String {
+    super::render::sanitize_for_stderr(&format!(
         "automatic history save failed ({})",
         error.message()
-    ));
+    ))
 }
 
 #[cfg(test)]
@@ -473,9 +477,28 @@ mod tests {
         OrderedChecks, Provenance, Provider, SaveState, SubmissionOutcome, UpstreamBulkId,
         UpstreamIdentity, UpstreamTaskId, UpstreamTaskIds, UtcTimestamp,
     };
-    use crate::history::HistoryStore;
+    use crate::history::{HistoryError, HistoryErrorCode, HistoryStore};
 
-    use super::{BulkChild, BulkSaveWarning, persist_bulk_collection};
+    use super::{BulkChild, BulkSaveWarning, automatic_warning_body, persist_bulk_collection};
+
+    #[test]
+    fn automatic_history_warning_body_sanitizes_terminal_control_characters() {
+        let error = HistoryError::new(
+            HistoryErrorCode::HistoryCorrupt,
+            "integrity diagnostic \u{1b}[31mforged\u{7}\nsecond line",
+        );
+
+        let warning = automatic_warning_body(&error);
+
+        assert_eq!(
+            warning,
+            "automatic history save failed (integrity diagnostic \u{fffd}[31mforged\u{fffd}\u{fffd}second line)"
+        );
+        assert!(
+            warning.chars().all(|character| !character.is_control()),
+            "terminal control characters must not reach stderr: {warning:?}"
+        );
+    }
 
     fn service(root: &tempfile::TempDir, enabled: bool) -> ConfigService {
         let config = root.path().join("config");
