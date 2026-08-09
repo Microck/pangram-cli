@@ -338,6 +338,23 @@ pub struct FileConfigStore {
     path: PathBuf,
 }
 
+/// Result of one lock-scoped configuration mutation.
+///
+/// The transition flag is derived from the same persisted snapshot that the
+/// mutation replaces. Adapters can therefore acknowledge plaintext-history
+/// enablement without racing a separate read against another process.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConfigSetOutcome {
+    config: Config,
+    history_became_enabled: bool,
+}
+
+impl ConfigSetOutcome {
+    pub(crate) const fn history_became_enabled(&self) -> bool {
+        self.history_became_enabled
+    }
+}
+
 impl FileConfigStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
@@ -393,13 +410,69 @@ impl FileConfigStore {
     /// `config set KEY VALUE`: parses, applies, validates, saves atomically.
     /// The returned config is the new persisted shape.
     pub fn set(&self, key: &str, raw_value: &str) -> Result<Config, ConfigError> {
+        self.set_with_outcome(key, raw_value)
+            .map(|outcome| outcome.config)
+    }
+
+    /// Performs one config mutation and reports whether it enabled plaintext
+    /// history. The decision and write will share one cross-process lock.
+    pub(crate) fn set_with_outcome(
+        &self,
+        key: &str,
+        raw_value: &str,
+    ) -> Result<ConfigSetOutcome, ConfigError> {
         let key = ConfigKey::parse(key)?;
         let value = key.parse_value(raw_value)?;
+        // The lock covers the whole read-modify-atomic-rename operation. It
+        // lives in a separate stable inode because `save` replaces the config
+        // file itself. Dropping the handle releases the OS lock on every exit.
+        let _mutation_lock = self.acquire_mutation_lock()?;
         let mut config = self.load()?;
+        let history_became_enabled = key == ConfigKey::HistoryEnabled
+            && value == ConfigValue::Bool(true)
+            && !config
+                .history
+                .and_then(|history| history.enabled)
+                .unwrap_or(false);
         key.apply(&mut config, value);
         config.validate()?;
         self.save(&config)?;
-        Ok(config)
+        Ok(ConfigSetOutcome {
+            config,
+            history_became_enabled,
+        })
+    }
+
+    fn acquire_mutation_lock(&self) -> Result<fs::File, ConfigError> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| ConfigError::Io("configuration path has no parent directory".into()))?;
+        fs::create_dir_all(parent)?;
+
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            // Create the persistent empty lock sidecar owner-only. It carries
+            // no configuration content, but matching config-file permissions
+            // avoids publishing unnecessary filesystem metadata to peers.
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let lock = options.open(self.lock_path())?;
+        fs4::FileExt::lock(&lock)?;
+        Ok(lock)
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        let mut file_name = self
+            .path
+            .file_name()
+            .map(std::ffi::OsStr::to_os_string)
+            .unwrap_or_else(|| std::ffi::OsString::from(CONFIG_FILE_NAME));
+        file_name.push(".lock");
+        self.path.with_file_name(file_name)
     }
 
     /// `config list`: effective values for every settable key in a stable

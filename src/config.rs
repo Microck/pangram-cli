@@ -18,6 +18,7 @@ pub(crate) mod windows_acl;
 pub use credentials::{
     CREDENTIALS_FILE_NAME, CredentialResolution, CredentialService, CredentialSource,
 };
+pub(crate) use file_config::ConfigSetOutcome;
 pub use file_config::{CONFIG_FILE_NAME, ConfigKey, ConfigValue, FileConfigStore};
 pub use model::{
     CONFIG_VERSION, Config, HistoryConfig, IntroMode, Keymap, MAX_REQUESTS_PER_SECOND, Motion,
@@ -129,6 +130,16 @@ impl ConfigService {
         self.store.set(key, value)
     }
 
+    /// Mutates one persisted key and reports transition facts derived inside
+    /// the storage lock rather than from a racy adapter-side read.
+    pub(crate) fn set_with_outcome(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> Result<ConfigSetOutcome, ConfigError> {
+        self.store.set_with_outcome(key, value)
+    }
+
     /// Reads the onboarding/setup state (credential status plus platform
     /// paths). Uses this service's original overrides so an environment
     /// credential reports the correct onboarding status.
@@ -193,3 +204,136 @@ pub(crate) fn redact_io(error: &std::io::Error) -> String {
 
 /// Shares one service across adapter code without `'static` borrowing.
 pub type SharedConfigService = Arc<ConfigService>;
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use std::fs;
+    use std::sync::{Barrier, mpsc};
+    use std::time::Duration;
+
+    fn store(root: &tempfile::TempDir) -> FileConfigStore {
+        FileConfigStore::new(root.path().join(CONFIG_FILE_NAME))
+    }
+
+    #[test]
+    fn config_mutation_waits_for_the_production_sidecar_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(&root);
+        let held_lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.path().join(format!("{CONFIG_FILE_NAME}.lock")))
+            .unwrap();
+        fs4::FileExt::lock(&held_lock).unwrap();
+
+        let started = Barrier::new(2);
+        let (completed_tx, completed_rx) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                started.wait();
+                completed_tx
+                    .send(store.set_with_outcome("history.enabled", "true"))
+                    .unwrap();
+            });
+
+            started.wait();
+            assert!(
+                completed_rx.recv_timeout(Duration::from_secs(1)).is_err(),
+                "the mutation completed without respecting the held config lock"
+            );
+
+            fs4::FileExt::unlock(&held_lock).unwrap();
+            let outcome = completed_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("mutation completes after the config lock is released")
+                .unwrap();
+            worker.join().unwrap();
+            assert!(outcome.history_became_enabled());
+        });
+    }
+
+    #[test]
+    fn concurrent_history_enable_has_exactly_one_transition_winner() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(&root);
+        let started = Barrier::new(3);
+        let winners: usize = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        started.wait();
+                        store
+                            .set_with_outcome("history.enabled", "true")
+                            .unwrap()
+                            .history_became_enabled()
+                    })
+                })
+                .collect();
+
+            started.wait();
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum()
+        });
+        assert_eq!(winners, 1, "only the persisted false-to-true writer wins");
+        assert_eq!(
+            store.get("history.enabled").unwrap(),
+            ConfigValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn concurrent_disable_cannot_hide_a_persisted_reenable_transition() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(&root);
+        store.set("history.enabled", "true").unwrap();
+        let started = Barrier::new(3);
+
+        let outcomes: Vec<(bool, bool)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = [false, true]
+                .into_iter()
+                .map(|enabled| {
+                    let store = &store;
+                    let started = &started;
+                    scope.spawn(move || {
+                        started.wait();
+                        let value = if enabled { "true" } else { "false" };
+                        let outcome = store.set_with_outcome("history.enabled", value).unwrap();
+                        (enabled, outcome.history_became_enabled())
+                    })
+                })
+                .collect();
+
+            started.wait();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect()
+        });
+        let enable_transition = outcomes
+            .iter()
+            .find_map(|(enabled, transitioned)| enabled.then_some(*transitioned))
+            .unwrap();
+        let disable_transition = outcomes
+            .iter()
+            .find_map(|(enabled, transitioned)| (!enabled).then_some(*transitioned))
+            .unwrap();
+        let ConfigValue::Bool(final_enabled) = store.get("history.enabled").unwrap() else {
+            panic!("history.enabled must remain a persisted bool");
+        };
+
+        assert!(
+            !disable_transition,
+            "disabling never owns an enable warning"
+        );
+        assert_eq!(
+            enable_transition, final_enabled,
+            "from an enabled start, a final true means disable serialized first \
+             and the enable call must report that persisted false-to-true transition"
+        );
+    }
+}

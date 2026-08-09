@@ -16,6 +16,9 @@ dev-tools = []
 [dependencies]
 clap = { version = "=4.6.4", features = ["derive"] }
 directories = "=6.0.0"
+# Cross-process serialization for read-modify-write config mutations. The
+# separate sidecar lock remains stable while atomic rename replaces config.toml.
+fs4 = "=1.1.0"
 jiff = { version = "=0.2.35", features = ["serde"] }
 # rustls-only TLS through the platform verifier; native TLS is never
 # compiled. `system-proxy` keeps the documented system proxy discovery,

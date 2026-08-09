@@ -90,6 +90,7 @@ pub(crate) const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
 pub(crate) const PHASE_4_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
     "directories",
+    "fs4",
     "jiff",
     "reqwest",
     "rpassword",
