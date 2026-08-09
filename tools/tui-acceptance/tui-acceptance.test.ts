@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
@@ -760,7 +760,10 @@ function initializedHarness(): AcceptanceHarness {
 }
 
 async function makeIsolatedFixture(): Promise<IsolatedFixture> {
-  const root = await mkdtemp(join(tmpdir(), "pangram-tui-acceptance-"))
+  // macOS exposes its temporary directory through `/var`, a symlink to
+  // `/private/var`. Resolve it before SQLite enforces SQLITE_OPEN_NOFOLLOW so
+  // history scenarios test database behavior rather than the fixture path.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pangram-tui-acceptance-")))
   const home = join(root, "home")
   const configDirectory = join(root, "config")
   const dataDirectory = join(root, "data")
