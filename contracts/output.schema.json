@@ -2133,7 +2133,25 @@
         "$ref": "#/$defs/CheckKind"
       },
       "minItems": 1,
-      "maxItems": 2
+      "maxItems": 2,
+      "uniqueItems": true,
+      "allOf": [
+        {
+          "if": {
+            "minItems": 2
+          },
+          "then": {
+            "prefixItems": [
+              {
+                "const": "ai_detection"
+              },
+              {
+                "const": "plagiarism"
+              }
+            ]
+          }
+        }
+      ]
     },
     "CheckKind": {
       "type": "string",

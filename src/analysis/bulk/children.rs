@@ -2,9 +2,10 @@
 //! (contracts.md 14.2): the honest HTTP 202 acceptance children of a
 //! trusted local submission plan, and the observed children of one
 //! documented results read. Input descriptors derive only from the trusted
-//! plan (contracts.md 9.1); persisted local authorship is never claimed by
-//! an observed read (contracts.md 4.6). The page-window assembly lives in
-//! [`assemble`]; this module owns the child-level save projections.
+//! plan (contracts.md 9.1); only a plan-backed same-process read claims local
+//! authorship, while a remote-only observation never invents it (contracts.md
+//! 4.6). The page-window assembly lives in [`assemble`]; this module owns the
+//! child-level save projections.
 
 use crate::domain::{
     Analysis, AnalysisId, AnalysisInput, BulkItem, BulkPage, BulkSubmissionPlan, Check, CheckState,
@@ -239,12 +240,12 @@ impl ChildInputContext {
     }
 }
 
-/// Projects one observed `results`-window item onto the canonical child
-/// that persists through the history save seam (contracts.md 14.2). Every
-/// observed child is `accepted` (never `terminal`: only the submission-flow
-/// projection claims local authorship) and `saved_history`-state; identity
-/// is fresh (`anl_` minted per read) because persistence reconciles on the
-/// `(bulk_id, bulk_index)` membership, never on a fabricated stable id.
+/// Projects one observed `results`-window item onto the canonical child that
+/// persists through the history save seam (contracts.md 14.2). A plan-backed
+/// same-process terminal child is `terminal` with its retained submission
+/// time; a remote-only child is `accepted` with no invented authorship. Every
+/// projected child has `saved_history` state and a fresh `anl_` identity,
+/// because persistence reconciles on `(bulk_id, bulk_index)` membership.
 ///
 /// - A succeeded item becomes a terminal-success child carrying its
 ///   canonical result; the input descriptor comes from the trusted plan
@@ -256,12 +257,13 @@ impl ChildInputContext {
 ///   item's upstream task identity as its check evidence (no fabricated
 ///   result or error).
 ///
-/// With held provenance the observed upstream bulk identity is recorded on
-/// the child; without it (`status`/`wait` of a job this process did not
-/// submit) the provenance stays honest about what the read actually holds.
+/// The observed upstream bulk identity is always recorded. The optional
+/// submission time distinguishes a locally submitted handle from a remote
+/// `status`/`wait` handle without inferring ownership from result content.
 pub(super) fn build_observed_children(
     page: BulkPage<CanonicalError>,
     plan: Option<&BulkSubmissionPlan>,
+    submitted_at: Option<UtcTimestamp>,
     upstream_bulk_id: &UpstreamBulkId,
     context: &ChildInputContext,
     observed_at: UtcTimestamp,
@@ -274,6 +276,7 @@ pub(super) fn build_observed_children(
                     item,
                     analysis,
                     plan,
+                    submitted_at,
                     upstream_bulk_id,
                     context,
                     observed_at,
@@ -281,8 +284,15 @@ pub(super) fn build_observed_children(
                 (child, item.caller_id.clone())
             }
             crate::domain::BulkItemState::Failed { error } => {
-                let child =
-                    project_failed_child(item, error, plan, upstream_bulk_id, context, observed_at);
+                let child = project_failed_child(
+                    item,
+                    error,
+                    plan,
+                    submitted_at,
+                    upstream_bulk_id,
+                    context,
+                    observed_at,
+                );
                 (child, item.caller_id.clone())
             }
             crate::domain::BulkItemState::Queued => {
@@ -293,6 +303,7 @@ pub(super) fn build_observed_children(
                     },
                     upstream_bulk_id,
                     plan,
+                    submitted_at,
                     context,
                     observed_at,
                 );
@@ -306,6 +317,7 @@ pub(super) fn build_observed_children(
                     },
                     upstream_bulk_id,
                     plan,
+                    submitted_at,
                     context,
                     observed_at,
                 );
@@ -332,6 +344,7 @@ fn project_succeeded_child(
     item: &BulkItem<CanonicalError>,
     analysis: &Analysis<CanonicalError>,
     plan: Option<&BulkSubmissionPlan>,
+    submitted_at: Option<UtcTimestamp>,
     upstream_bulk_id: &UpstreamBulkId,
     context: &ChildInputContext,
     observed_at: UtcTimestamp,
@@ -355,6 +368,7 @@ fn project_succeeded_child(
                 error: plundered_success_error(),
             }),
         Some(analysis.provenance()),
+        submitted_at,
         upstream_bulk_id,
         observed_at,
     )
@@ -376,6 +390,7 @@ fn project_failed_child(
     item: &BulkItem<CanonicalError>,
     error: &CanonicalError,
     plan: Option<&BulkSubmissionPlan>,
+    submitted_at: Option<UtcTimestamp>,
     upstream_bulk_id: &UpstreamBulkId,
     context: &ChildInputContext,
     observed_at: UtcTimestamp,
@@ -388,6 +403,7 @@ fn project_failed_child(
             error: error.clone(),
         },
         None,
+        submitted_at,
         upstream_bulk_id,
         observed_at,
     )
@@ -403,14 +419,15 @@ enum TerminalBranch {
     },
 }
 
-/// Assembles one terminal observed child under the honest-`accepted`
-/// outcome, with the observed upstream bulk identity as its outcome
-/// evidence and a terminal-observed `completed_at`.
+/// Assembles one terminal observed child. A retained submission time makes
+/// the same-process outcome `terminal`; its absence keeps a remote-only read
+/// `accepted`. Both carry the observed bulk identity and completion time.
 fn build_terminal_child(
     item: &BulkItem<CanonicalError>,
     input: Option<AnalysisInput>,
     branch: TerminalBranch,
     observed_provenance: Option<&Provenance>,
+    submitted_at: Option<UtcTimestamp>,
     upstream_bulk_id: &UpstreamBulkId,
     observed_at: UtcTimestamp,
 ) -> Analysis<CanonicalError> {
@@ -443,14 +460,18 @@ fn build_terminal_child(
                     .map(|task| UpstreamTaskIds::new(vec![task.clone()]).expect("one ID"))
             }),
         upstream_bulk_id: Some(upstream_bulk_id.clone()),
-        submitted_at: None,
+        submitted_at,
         completed_at: observed_provenance
             .and_then(|provenance| provenance.completed_at)
             .or(Some(observed_at)),
     };
     Analysis::with_optional_input(
         AnalysisId::new(),
-        crate::domain::SubmissionOutcome::Accepted,
+        if submitted_at.is_some() {
+            crate::domain::SubmissionOutcome::Terminal
+        } else {
+            crate::domain::SubmissionOutcome::Accepted
+        },
         input,
         checks,
         SaveState::SavedHistory,
@@ -536,6 +557,7 @@ fn project_inflight_child(
     state: CheckState<crate::domain::AiDetectionResult, CanonicalError>,
     upstream_bulk_id: &UpstreamBulkId,
     plan: Option<&BulkSubmissionPlan>,
+    submitted_at: Option<UtcTimestamp>,
     context: &ChildInputContext,
     observed_at: UtcTimestamp,
 ) -> Analysis<CanonicalError> {
@@ -546,7 +568,7 @@ fn project_inflight_child(
         upstream_version: None,
         upstream_task_ids: None,
         upstream_bulk_id: Some(upstream_bulk_id.clone()),
-        submitted_at: None,
+        submitted_at,
         completed_at: None,
     };
     Analysis::with_optional_input(

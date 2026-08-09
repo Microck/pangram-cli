@@ -160,6 +160,45 @@ fn analysis_status_name(status: AnalysisStatus) -> &'static str {
     }
 }
 
+#[test]
+fn output_schema_history_summaries_enforce_canonical_check_order() {
+    let schema = output_schema_value();
+    let validator = jsonschema::options()
+        .with_draft(Draft::Draft202012)
+        .build(&schema)
+        .expect("generated output schema compiles");
+    let envelope = |command: &str, checks: Value| {
+        json!({
+            "schema_version": "1",
+            "command": command,
+            "data": {
+                "items": [{
+                    "id": "anl_01983c20-0180-7a80-a001-000000000001",
+                    "status": "succeeded",
+                    "checks": checks,
+                    "save_state": "saved_history",
+                    "input_kind": "text",
+                    "created_at": "2026-07-23T12:00:00Z"
+                }]
+            },
+            "meta": {"started_at": "2026-07-23T12:00:00Z"}
+        })
+    };
+
+    assert!(validator.is_valid(&envelope(
+        "history_list",
+        json!(["ai_detection", "plagiarism"]),
+    )));
+    assert!(!validator.is_valid(&envelope(
+        "history_list",
+        json!(["plagiarism", "ai_detection"]),
+    )));
+    assert!(!validator.is_valid(&envelope(
+        "history_search",
+        json!(["ai_detection", "ai_detection"]),
+    )));
+}
+
 // The generated output schema's parent-status constraint must accept exactly
 // the declared status that `derive_parent_status` computes for every non-empty
 // set of one or two check statuses, and reject every other status (PR #14

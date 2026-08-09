@@ -235,6 +235,10 @@ pub struct RunningBulk<C = super::config::SystemClock> {
     /// without `--wait` never fabricates all-queued children over an
     /// acceptance that already attests identities or immediate failures.
     acceptance: Option<super::normalize::bulk::NormalizedBulkPlan>,
+    /// The local acceptance time when this process submitted or rehydrated
+    /// the plan-backed operation. Remote-only observation keeps this absent,
+    /// so child projection never invents submission authorship.
+    submitted_at: Option<UtcTimestamp>,
     last: crate::domain::BulkCounters,
     last_status: AnalysisStatus,
 }
@@ -316,9 +320,10 @@ impl<C: Clock> RunningBulk<C> {
     /// Projects the observed children of one fetched results window for the
     /// history save seam (contracts.md 14.2). The caller furnishes the
     /// already-validated `window` (a [`crate::domain::BulkPage`] from any
-    /// safe-GET read); this assembles the honest `accepted`-outcome children
-    /// without issuing any further network work, so the projection can never
-    /// diverge from the read the caller already performed.
+    /// safe-GET read); this retains same-process authorship when the handle
+    /// owns a plan and otherwise assembles remote-only `accepted` children.
+    /// It issues no further network work, so projection cannot diverge from
+    /// the read the caller already performed.
     #[must_use]
     pub fn project_observed_children(
         &self,
@@ -328,6 +333,7 @@ impl<C: Clock> RunningBulk<C> {
         children::build_observed_children(
             window,
             self.plan.as_ref(),
+            self.submitted_at,
             self.upstream_bulk_id(),
             &children::ChildInputContext::new(source_name.map(str::to_owned)),
             UtcTimestamp::now(),
@@ -575,6 +581,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             upstream_bulk_id,
             plan: Some(request.plan().clone()),
             acceptance: Some(normalized.clone()),
+            submitted_at: Some(UtcTimestamp::now()),
             last: counters,
             last_status: initial_status,
         }
@@ -599,6 +606,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             upstream_bulk_id,
             plan: Some(plan),
             acceptance: None,
+            submitted_at: Some(UtcTimestamp::now()),
             last: counters,
             last_status: AnalysisStatus::Queued,
         }
@@ -621,6 +629,7 @@ impl<C: Clock> BulkAnalyzer<C> {
             upstream_bulk_id,
             plan: None,
             acceptance: None,
+            submitted_at: None,
             last: counters,
             last_status: AnalysisStatus::Queued,
         }
