@@ -245,15 +245,24 @@ async fn task_status_then_wait_merge_one_check_into_a_saved_combined_analysis() 
         .output()
         .expect("run task status");
     assert_eq!(status.status.code(), Some(0));
-    assert_eq!(
-        stdout_envelope(&status)["data"]["save_state"],
-        "saved_history"
-    );
+    assert_eq!(stdout_envelope(&status)["data"]["save_state"], "ephemeral");
     assert!(!stderr_text(&status).contains("warning:"));
     assert_no_leak(&status);
     let connection = isolated.open_database();
     assert_eq!(analyses_rows(&connection).len(), 1);
     assert_eq!(task_rows(&connection).len(), 2);
+    let (parent_updated_at, task_observed_at): (String, String) = connection
+        .query_row(
+            "SELECT a.updated_at, t.observed_at
+             FROM analyses a
+             JOIN upstream_tasks t ON t.analysis_id = a.id
+             WHERE a.id = ?1 AND t.check_kind = 'ai_detection'",
+            [id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read unchanged combined timestamps");
+    assert_eq!(parent_updated_at, created_at.to_string());
+    assert_eq!(task_observed_at, created_at.to_string());
     assert_eq!(
         connection
             .query_row(

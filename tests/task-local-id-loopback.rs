@@ -116,6 +116,60 @@ async fn local_status_reads_disabled_history_and_keeps_running_ephemeral() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn enabled_history_keeps_nonterminal_local_status_ephemeral_and_read_only() {
+    let text = "enabled history still skips a nonterminal resumed observation";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
+    let isolated = Isolated::new();
+    let original = save_original(&fixture, &isolated, text);
+    isolated.enable_history();
+
+    let durable_snapshot = || {
+        isolated
+            .open_database()
+            .query_row(
+                "SELECT a.status, a.updated_at, a.result_json, t.last_stage, t.observed_at
+             FROM analyses a
+             JOIN upstream_tasks t ON t.analysis_id = a.id
+             WHERE a.id = ?1",
+                [&original],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .expect("read durable task snapshot")
+    };
+    let before = durable_snapshot();
+
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["task", "status", &original])
+        .output()
+        .expect("running status by local ID with history enabled");
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["data"]["status"], "running");
+    assert_eq!(envelope["data"]["save_state"], "ephemeral");
+
+    let after = durable_snapshot();
+    assert_eq!(
+        after, before,
+        "nonterminal status performs no history write"
+    );
+    assert_eq!(fixture.post_count(), 1, "the task read never submits");
+    assert_eq!(fixture.get_count(), 2, "save poll plus one status snapshot");
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn local_wait_resolves_saved_task_through_nonterminal_to_terminal() {
     let text = "local wait reaches its terminal result";
     let fixture = ProtocolFixture::start().await;

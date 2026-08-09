@@ -284,21 +284,16 @@ fn persist_observed(
     service: &crate::config::ConfigService,
     warned: &mut InvocationWarningLatch,
 ) -> (Analysis<CanonicalError>, ()) {
-    if !automatic_enabled(service) {
+    if !automatic_enabled(service)
+        || matches!(
+            analysis.status(),
+            AnalysisStatus::Queued | AnalysisStatus::Running
+        )
+    {
         return (analysis, ());
     }
-    let nonterminal = matches!(
-        analysis.status(),
-        AnalysisStatus::Queued | AnalysisStatus::Running
-    );
-    let store = if nonterminal {
-        HistoryStore::open_existing(service.paths().data_dir())
-    } else {
-        HistoryStore::open(service.paths().data_dir()).map(Some)
-    };
-    let mut store = match store {
-        Ok(Some(store)) => store,
-        Ok(None) => return (analysis, ()),
+    let mut store = match HistoryStore::open(service.paths().data_dir()) {
+        Ok(store) => store,
         Err(error) => {
             automatic_warning_once(&error, warned);
             return (analysis, ());
@@ -331,28 +326,14 @@ fn persist_observed(
     let merge = |prior: &crate::history::StoredAnalysis| {
         crate::history::save::observation_merge(&analysis, prior)
     };
-    let outcome = if nonterminal {
-        store.reconcile_existing_observed_analysis_complete(
-            &record,
-            &checks,
-            &observations,
-            observed_at,
-            merge,
-        )
-    } else {
-        store.reconcile_observed_analysis_complete(
-            &record,
-            &checks,
-            &observations,
-            observed_at,
-            merge,
-        )
-    };
-    match outcome {
+    match store.reconcile_observed_analysis_complete(
+        &record,
+        &checks,
+        &observations,
+        observed_at,
+        merge,
+    ) {
         Ok(_) => (analysis.with_save_state(SaveState::SavedHistory), ()),
-        Err(error) if nonterminal && error.code() == crate::history::HistoryErrorCode::NotFound => {
-            (analysis, ())
-        }
         Err(error) => {
             automatic_warning_once(&error, warned);
             (analysis, ())

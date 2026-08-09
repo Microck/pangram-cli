@@ -17,7 +17,7 @@ use super::common::{incoming_body, update_observation_snapshot_tx};
 #[derive(Clone, Copy)]
 enum ReconcileMode {
     Legacy,
-    Authoritative { insert_if_missing: bool },
+    Authoritative,
 }
 
 impl HistoryStore {
@@ -57,33 +57,7 @@ impl HistoryStore {
             checks,
             observations,
             observed_at,
-            ReconcileMode::Authoritative {
-                insert_if_missing: true,
-            },
-            merge,
-        )
-    }
-
-    /// Reconciles one authoritative standalone check only when its task
-    /// identity already belongs to a saved analysis. Non-terminal task reads
-    /// use this path so they can refresh an existing combined analysis
-    /// without creating a new durable row for an otherwise ephemeral poll.
-    pub fn reconcile_existing_observed_analysis_complete(
-        &mut self,
-        record: &StoredAnalysis,
-        checks: &[StoredCheck],
-        observations: &[StoredUpstreamTask],
-        observed_at: crate::domain::UtcTimestamp,
-        merge: impl Fn(&StoredAnalysis) -> Result<ObservationSnapshot, HistoryError>,
-    ) -> Result<ReconciledAnalysis, HistoryError> {
-        self.reconcile_observed_analysis_impl(
-            record,
-            checks,
-            observations,
-            observed_at,
-            ReconcileMode::Authoritative {
-                insert_if_missing: false,
-            },
+            ReconcileMode::Authoritative,
             merge,
         )
     }
@@ -99,7 +73,7 @@ impl HistoryStore {
     ) -> Result<ReconciledAnalysis, HistoryError> {
         self.in_immediate_transaction(|transaction| {
             incoming_body(&record.result_json, &record.error_json)?;
-            if matches!(mode, ReconcileMode::Authoritative { .. }) {
+            if matches!(mode, ReconcileMode::Authoritative) {
                 super::super::analysis_writes::validate_check_rows(record.id, checks)?;
                 super::super::analysis_writes::validate_observation_rows(
                     record.id,
@@ -126,7 +100,7 @@ impl HistoryStore {
                     // back unchanged.
                     validate_owned_task_evidence(transaction, &id, observations)?;
                     let mut snapshot = merge(&prior)?;
-                    if matches!(mode, ReconcileMode::Authoritative { .. }) {
+                    if matches!(mode, ReconcileMode::Authoritative) {
                         let stored_checks = load_stored_check_rows(transaction, &id)?;
                         let merged_checks =
                             merge_matching_checks(&stored_checks, checks, observations, id)?;
@@ -166,17 +140,6 @@ impl HistoryStore {
                     })
                 }
                 None => {
-                    if matches!(
-                        mode,
-                        ReconcileMode::Authoritative {
-                            insert_if_missing: false
-                        }
-                    ) {
-                        return Err(HistoryError::new(
-                            HistoryErrorCode::NotFound,
-                            "no saved analysis owns the observed task identity",
-                        ));
-                    }
                     if matches!(mode, ReconcileMode::Legacy) {
                         super::super::analysis_writes::validate_legacy_save(record, checks)?;
                     }
