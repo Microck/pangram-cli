@@ -412,11 +412,11 @@ async fn mixed_running_and_failed_positions_normalize_in_order() {
         "items": [
             {"index": 1, "id": "row-001", "task_id": "t1", "stage": "STAGE_SUCCESS",
              "error": null, "result": success_result("One")},
-            {"index": 2, "id": "row-002", "task_id": "t2", "stage": "STAGE_INFERENCE",
+            {"index": 2, "id": "row-002", "task_id": "t2", "stage": "STAGE_\u{1b}[31mINFERENCE",
              "error": null, "result": null}
         ],
         "failed_items": [
-            {"index": 0, "id": "row-000", "task_id": null, "stage": "STAGE_FAILED",
+            {"index": 0, "id": "row-000", "task_id": null, "stage": "STAGE_\nFAILED",
              "error": "Text must contain at least one valid token"}
         ]
     })));
@@ -436,10 +436,12 @@ async fn mixed_running_and_failed_positions_normalize_in_order() {
     assert_eq!(items.len(), 3, "succeeded + running + failed");
     assert_eq!(items[0].index, 0);
     assert!(matches!(items[0].state, BulkItemState::Failed { .. }));
+    assert_eq!(items[0].last_stage(), Some("STAGE_ FAILED"));
     assert_eq!(items[1].index, 1);
     assert!(matches!(items[1].state, BulkItemState::Succeeded { .. }));
     assert_eq!(items[2].index, 2);
     assert!(matches!(items[2].state, BulkItemState::Running));
+    assert_eq!(items[2].last_stage(), Some("STAGE_[31mINFERENCE"));
     fixture.shutdown().await;
 }
 
@@ -571,7 +573,56 @@ async fn observed_results_page_children_are_accepted_never_terminal() {
     fixture.shutdown().await;
 }
 
-/// 32. A resumed observed results page whose succeeded child's terminal
+/// 32. A same-process observed results page retains submission authorship:
+/// the validated local plan proves this process submitted every child, so
+/// terminal children claim `terminal` and carry `submitted_at`. This differs
+/// from the resumed remote-only path above, which must stay `accepted`.
+#[tokio::test(flavor = "current_thread")]
+async fn same_process_observed_children_retain_submission_authorship() {
+    use microck_pangram_cli::domain::SubmissionOutcome;
+
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_submit(Step::Status(202, None, Some(accepted_submit_body())));
+    fixture.on_bulk_results(Step::Json(serde_json::json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-001", "task_id": "task-1", "stage": "STAGE_SUCCESS",
+             "error": null, "result": success_result("Locally submitted text")}
+        ],
+        "failed_items": [
+            {"index": 1, "id": "row-002", "task_id": "task-2", "stage": "STAGE_FAILED",
+             "error": "Text must contain at least one valid token"}
+        ]
+    })));
+
+    let analyzer = Analyzer::from_client(fixture.client());
+    let running = analyzer
+        .submit_bulk(
+            BulkAnalysisRequest::new(two_item_plan()),
+            &StopObserving::new().token().clone(),
+        )
+        .await
+        .expect("same-process acceptance");
+    let children = analyzer
+        .bulk_observed_children(&running, None, &StopObserving::new().token().clone())
+        .await
+        .expect("same-process observed children");
+
+    assert_eq!(children.len(), 2);
+    for (child, _) in children {
+        assert_eq!(child.submission_outcome(), SubmissionOutcome::Terminal);
+        assert!(
+            child.provenance().submitted_at.is_some(),
+            "a plan-backed child retains local submission authorship"
+        );
+    }
+    fixture.shutdown().await;
+}
+
+/// 33. A resumed observed results page whose succeeded child's terminal
 /// document carries no `text` field still emits the child analysis as
 /// `accepted`, and omits the input descriptor entirely rather than
 /// fabricating one from nothing.
@@ -618,7 +669,7 @@ async fn observed_results_success_without_text_omits_the_descriptor() {
     fixture.shutdown().await;
 }
 
-/// 33. A mixed observed page (succeeded 0 + failed 1, then failed 0 +
+/// 34. A mixed observed page (succeeded 0 + failed 1, then failed 0 +
 /// succeeded 1 across two reads of the same job) keeps exact item status,
 /// counters/order identity through the canonical page, and marks every
 /// emitted child analysis `accepted`. (Order within one page is

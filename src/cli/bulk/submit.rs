@@ -8,7 +8,7 @@ use clap::ArgMatches;
 use crate::analysis::{BulkAnalysisRequest, StopObserving, WaitOptions};
 use crate::cli::StreamTty;
 use crate::cli::detect::{self, DetectOutcome, GlobalFlags, ProgressMode};
-use crate::domain::{BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
+use crate::domain::{AnalysisStatus, BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
 use crate::output::{
     CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode, ExitCode, OutputFormat,
     ResolvedCommand,
@@ -94,8 +94,8 @@ pub(super) fn bulk_submit(
     // Actual submission: only accepted work (a 202) keeps the pipelines. A
     // local observation failure after acceptance changes the local status
     // and exits 1, never a top-level failure envelope.
-    let analyzer = match prepare(resolved, root_matches, output, started) {
-        Ok(analyzer) => analyzer,
+    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
+        Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
 
@@ -107,12 +107,29 @@ pub(super) fn bulk_submit(
     detect::install_sigint_driver();
     let progress = resolve_wait_progress(sub, output, streams);
     let wait_mode = wait;
+    let source_name = sub
+        .get_one::<String>("JSONL_PATH")
+        .filter(|path| path.as_str() != "-")
+        .and_then(|path| {
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        });
+    // The automatic-history gate decides before the runtime: the observed
+    // children fetch runs only when persistence is armed (contracts.md 14.2;
+    // bulk carries no `--save`). The one invocation warning latch is shared
+    // by whichever certified unit reaches persistence.
+    let history_armed = detect::save::automatic_history_armed(&service);
+    let mut bulk_warning = detect::save::BulkSaveWarning::new();
     let result = runtime.block_on(async {
         let bridge = tokio::spawn(detect::bridge_sigint(stop.token().clone()));
         let cancel = stop.token().child_token();
         let outcome = match analyzer.submit_bulk(request, &cancel).await {
             Ok(running) => {
                 if wait_mode {
+                    let accepted_at = UtcTimestamp::now();
+                    let observed_running = running.clone();
                     let observed = running
                         .observe(
                             WaitOptions::UNBOUNDED,
@@ -124,7 +141,30 @@ pub(super) fn bulk_submit(
                             stop.clone(),
                         )
                         .await;
-                    Analyzed::Observed(observed)
+                    // A terminal collection may reconcile only with the
+                    // complete results window from that same observation.
+                    // Keep a failed or skipped read distinct from an empty
+                    // successful window so no mixed-time snapshot can save.
+                    let children = if history_armed && matches!(observed, Ok(Ok(_))) {
+                        Some(
+                            analyzer
+                                .bulk_observed_children(
+                                    &observed_running,
+                                    source_name.as_deref(),
+                                    &cancel,
+                                )
+                                .await
+                                .map_err(|_| ()),
+                        )
+                    } else {
+                        None
+                    };
+                    Analyzed::Observed {
+                        outcome: observed,
+                        children,
+                        accepted: Box::new(observed_running),
+                        accepted_at,
+                    }
                 } else {
                     Analyzed::Accepted(running)
                 }
@@ -142,10 +182,43 @@ pub(super) fn bulk_submit(
         outcome
     });
     detect::reset_sigint_flag();
+    // Observation failures and interruptions do not invalidate the HTTP 202
+    // acceptance. Preserve that independently certified, potentially billable
+    // unit before returning the primary local outcome.
+    if let Analyzed::Observed {
+        outcome,
+        accepted,
+        accepted_at,
+        ..
+    } = &result
+    {
+        if history_armed && !matches!(outcome, Ok(Ok(_))) {
+            let _ = persist_accepted_snapshot(
+                accepted,
+                source_name.as_deref(),
+                *accepted_at,
+                &service,
+                &mut bulk_warning,
+            );
+        }
+    }
     match result {
-        Analyzed::Accepted(running) => submit_accepted_outcome(&running, output, started),
-        Analyzed::Observed(Ok(Ok(collection))) => {
+        Analyzed::Accepted(running) => {
+            submit_accepted_outcome(&running, source_name.as_deref(), &service, output, started)
+        }
+        Analyzed::Observed {
+            outcome: Ok(Ok(collection)),
+            children,
+            ..
+        } => {
             let exit = super::status_wait::collection_exit(&collection);
+            let collection = super::status_wait::persist_observed_collection(
+                collection,
+                children,
+                &service,
+                &mut bulk_warning,
+                streams,
+            );
             succeed(
                 resolved,
                 CommandData::BulkWait(collection),
@@ -154,7 +227,10 @@ pub(super) fn bulk_submit(
                 started,
             )
         }
-        Analyzed::Observed(Ok(Err(failure))) => {
+        Analyzed::Observed {
+            outcome: Ok(Err(failure)),
+            ..
+        } => {
             let error = failure.into_error();
             observed_failure_outcome(
                 "the bulk job was accepted but its local observation failed",
@@ -163,7 +239,10 @@ pub(super) fn bulk_submit(
                 started,
             )
         }
-        Analyzed::Observed(Err(interrupted)) => {
+        Analyzed::Observed {
+            outcome: Err(interrupted),
+            ..
+        } => {
             let note = bulk_identity_note(&interrupted.identity);
             detect::interrupted_outcome(
                 ResolvedCommand::BulkWait,
@@ -192,15 +271,21 @@ fn bulk_json_format_error() -> CanonicalError {
 
 /// The intermediate flow states for a bulk submission run. Accepted keeps
 /// the running handle for the enqueue projection; Observed carries the
-/// observe outcome; Failed/Interrupted carry the canonical error.
+/// observe outcome, the optional observed-children read, and the independently
+/// certified acceptance snapshot and timestamp retained for an observation
+/// failure or interruption.
+/// Failed/Interrupted carry a pre-acceptance canonical error.
 enum Analyzed {
     Accepted(crate::analysis::RunningBulk),
-    Observed(
-        Result<
+    Observed {
+        outcome: Result<
             Result<BulkCollection, crate::analysis::BulkAnalysisError>,
             crate::analysis::InterruptedBulk,
         >,
-    ),
+        children: Option<Result<Vec<detect::save::BulkChild>, ()>>,
+        accepted: Box<crate::analysis::RunningBulk>,
+        accepted_at: UtcTimestamp,
+    },
     Interrupted(CanonicalError, String),
     Failed(CanonicalError),
 }
@@ -284,6 +369,7 @@ fn failure_status_envelope(error: CanonicalError, started: UtcTimestamp) -> Dete
         exit_code,
         envelopes: vec![envelope],
         rendered: false,
+        primary_ok: true,
     }
 }
 
@@ -293,36 +379,29 @@ fn failure_status_envelope(error: CanonicalError, started: UtcTimestamp) -> Dete
 /// immediately failed counts, and the derived collection status) without
 /// observing remotely; it never fabricates all-queued-zero counters over an
 /// acceptance that may already report immediate failures (contracts.md 12).
+/// Under the automatic history gate the accepted collection and its plan
+/// children persist through the same save seam.
 fn submit_accepted_outcome(
     running: &crate::analysis::RunningBulk,
+    source_name: Option<&str>,
+    service: &crate::config::ConfigService,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
 ) -> DetectOutcome {
-    let identity = running.identity();
-    let plan = running.plan();
-    let estimated = plan.map(|plan| plan.estimated_billable_units());
-    let (status, counters) = running.accepted_snapshot();
-    let now = UtcTimestamp::now();
-    let collection = match BulkCollection::new(
-        identity.bulk_id,
-        identity.upstream_bulk_id.clone(),
-        status,
-        SubmissionOutcome::Accepted,
-        counters,
-        estimated,
-        now,
-        now,
-        None,
-    ) {
-        Ok(collection) => collection,
-        Err(_) => {
-            return detect::failure_outcome(
-                ResolvedCommand::BulkSubmit,
-                output,
-                started,
-                detect::internal_error("the accepted bulk state could not be projected"),
-            );
-        }
+    let mut bulk_warning = detect::save::BulkSaveWarning::new();
+    let Some(collection) = persist_accepted_snapshot(
+        running,
+        source_name,
+        UtcTimestamp::now(),
+        service,
+        &mut bulk_warning,
+    ) else {
+        return detect::failure_outcome(
+            ResolvedCommand::BulkSubmit,
+            output,
+            started,
+            detect::internal_error("the accepted bulk state could not be projected"),
+        );
     };
     succeed(
         ResolvedCommand::BulkSubmit,
@@ -331,6 +410,46 @@ fn submit_accepted_outcome(
         output,
         started,
     )
+}
+
+/// Persists the independently certified HTTP 202 acceptance unit. A failed or
+/// interrupted later observation may still save this earlier snapshot because
+/// its parent, children, local inputs, and task identities all come from the
+/// same acceptance response. `None` denotes the structurally impossible case
+/// where that already validated acceptance cannot be projected into its domain
+/// type.
+fn persist_accepted_snapshot(
+    running: &crate::analysis::RunningBulk,
+    source_name: Option<&str>,
+    accepted_at: UtcTimestamp,
+    service: &crate::config::ConfigService,
+    warning: &mut detect::save::BulkSaveWarning,
+) -> Option<BulkCollection> {
+    let identity = running.identity();
+    let plan = running.plan();
+    let estimated = plan.map(|plan| plan.estimated_billable_units());
+    let (status, counters) = running.accepted_snapshot();
+    // A 202 may immediately reject every item. That accepted snapshot is
+    // already terminal, so its observation time is also its completion time.
+    let completed_at = matches!(
+        status,
+        AnalysisStatus::Succeeded | AnalysisStatus::Failed | AnalysisStatus::Partial
+    )
+    .then_some(accepted_at);
+    let collection = BulkCollection::new(
+        identity.bulk_id,
+        identity.upstream_bulk_id.clone(),
+        status,
+        SubmissionOutcome::Accepted,
+        counters,
+        estimated,
+        accepted_at,
+        accepted_at,
+        completed_at,
+    )
+    .ok()?;
+    let children = running.acceptance_children(source_name, accepted_at);
+    Some(detect::save::persist_bulk_collection(&collection, children, service, warning).0)
 }
 
 /// The dry-run outcome: the canonical typed reconciliation shape at exit 0

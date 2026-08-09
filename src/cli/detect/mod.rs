@@ -22,18 +22,20 @@
 #![allow(clippy::result_large_err)]
 
 pub(crate) mod client;
-mod inputs;
+pub(crate) mod inputs;
 mod render;
+pub(crate) mod save;
 
 pub(crate) use client::{
     bridge_sigint, build_analyzer, credential_error, install_sigint_driver, reset_sigint_flag,
     resolve_api_key,
 };
 pub(crate) use render::{
-    DetectOutcome, analysis_exit_code, early_failure, elapsed_ms, failure_outcome, identity_note,
-    internal_error, interrupted_outcome, note_stderr, primary_outcome, sanitize_for_stderr,
-    usage_error,
+    DetectOutcome, analysis_command_outcome, analysis_exit_code, early_failure, elapsed_ms,
+    failure_outcome, identity_note, internal_error, interrupted_outcome, note_stderr,
+    primary_outcome, sanitize_for_stderr, usage_error, warning_stderr,
 };
+pub(crate) use save::SaveStoreGate;
 
 use clap::ArgMatches;
 
@@ -90,6 +92,7 @@ pub(crate) enum Source {
 pub(crate) struct DetectArgs {
     detach: bool,
     include_input: bool,
+    save: bool,
     public_link: bool,
     format: Option<OutputFormat>,
     progress: ProgressMode,
@@ -104,6 +107,7 @@ impl DetectArgs {
         Self {
             detach: false,
             include_input: false,
+            save: false,
             public_link: false,
             format: None,
             progress: ProgressMode::Auto,
@@ -156,6 +160,7 @@ impl DetectArgs {
         Ok(Self {
             detach: matches.get_flag("detach"),
             include_input: matches.get_flag("include-input"),
+            save: matches.get_flag("save"),
             public_link: matches.get_flag("public-link"),
             format,
             progress,
@@ -166,12 +171,14 @@ impl DetectArgs {
 }
 
 /// A fully validated, priced detection plan: its output projection, progress
-/// mode, and resolved inputs. Constructing it performs no billable work.
+/// mode, resolved inputs, and the history gate. Constructing it performs no
+/// billable work and never opens or creates history storage.
 pub(crate) struct DetectionPlan {
     arguments: DetectArgs,
     output: ResolvedOutput,
     progress: ProgressMode,
     inputs: Vec<ResolvedInput>,
+    history_gate: SaveStoreGate,
 }
 
 /// Parses arguments, validates input, and enforces the billable-unit ceiling
@@ -208,12 +215,18 @@ pub(crate) fn plan(
         ));
     }
 
+    // Resolve the history gate without touching storage: the configuration
+    // read decides whether the automatic path is armed, and `--save` arms
+    // the manual path. Opening the database waits until a completed analysis
+    // exists to persist, so a disabled run never creates the directory.
+    let history_gate = save::resolve_gate(arguments.save);
     let progress = resolve_progress(arguments.progress, output, streams);
     Ok(DetectionPlan {
         arguments,
         output,
         progress,
         inputs,
+        history_gate,
     })
 }
 
@@ -227,10 +240,12 @@ impl DetectionPlan {
 }
 
 /// Runs a priced plan against the analyzer. By this point credentials and the
-/// client exist, so only submission, observation, and rendering remain.
+/// client exist, so only submission, observation, persistence, and rendering
+/// remain.
 pub(crate) fn execute(
     plan: &DetectionPlan,
     analyzer: Analyzer,
+    service: &crate::config::ConfigService,
     streams: &dyn StreamTty,
 ) -> DetectOutcome {
     let started_at = crate::domain::UtcTimestamp::now();
@@ -256,14 +271,14 @@ pub(crate) fn execute(
     // token from the recorded flag is spawned inside the runtime below.
     client::install_sigint_driver();
 
-    let outcome = runtime.block_on(async {
+    let (members, terminal) = runtime.block_on(async {
         // A lock-free SIGINT bridge: the low-level handler only sets an
         // atomic flag (async-signal-safe); this task translates it into the
         // shared observation token cancel outside signal context.
         let bridge = tokio::spawn(client::bridge_sigint(stop.token().clone()));
         let mut members: Vec<crate::domain::Analysis<CanonicalError>> =
             Vec::with_capacity(plan.inputs.len());
-        let mut run = Ok(());
+        let mut terminal = None;
         for input in &plan.inputs {
             match analyze_one(
                 &analyzer,
@@ -279,40 +294,69 @@ pub(crate) fn execute(
                 // order; the run continues with the remaining files so one
                 // failed file never discards the billable work already done.
                 Ok(analysis) => members.push(analysis),
-                // An accepted task's local observation failure or a genuine
-                // local interruption unwinds the whole run with its canonical
-                // envelope; these already-reported billable members are not
-                // re-rendered (their costs are logged in history later).
+                // The current member did not complete, but the ordered prefix
+                // did. Carry both parts out so the prefix can persist and
+                // render before the terminal failure or interruption.
                 Err(flow) => {
-                    run = Err(flow);
+                    terminal = Some(flow);
                     break;
                 }
             }
         }
         bridge.abort();
-        run.map(|_| members)
+        (members, terminal)
     });
     // A finished flow must not leak its interrupt into the next run.
     client::reset_sigint_flag();
 
-    match outcome {
-        Ok(members) => success_outcome(output, started_at, members),
-        Err(flow) => match flow {
-            Flow::Failed(error) => failure_outcome(
-                crate::output::ResolvedCommand::Detect,
-                output,
-                started_at,
-                error,
-            ),
-            Flow::Interrupted(error, note) => interrupted_outcome(
-                crate::output::ResolvedCommand::Detect,
-                output,
-                started_at,
-                error,
-                note,
-            ),
-        },
+    let command = crate::output::ResolvedCommand::Detect;
+    if members.is_empty() {
+        return match terminal.expect("an empty run has a terminal flow") {
+            Flow::Failed(error) => failure_outcome(command, output, started_at, error),
+            Flow::Interrupted(error, note) => {
+                interrupted_outcome(command, output, started_at, error, note)
+            }
+        };
     }
+
+    // A terminal flow can only stop at the next input, so the completed
+    // analyses map exactly to the same-length input prefix.
+    let retained_texts = plan
+        .inputs
+        .iter()
+        .take(members.len())
+        .map(|input| input.text.clone())
+        .collect::<Vec<_>>();
+    let (members, save_failure) =
+        save::persist_analyses(members, &retained_texts, plan.history_gate, service);
+    let mut outcome = success_outcome(output, started_at, members);
+    let required_save_exit = save_failure.and_then(|error| {
+        outcome.attach_failure(command, output, started_at, error);
+        // A render failure owns exit 1. Otherwise retain the exact manual-save
+        // category so a later terminal flow can remain visible without
+        // replacing the caller's unfulfilled explicit save requirement.
+        outcome.primary_ok.then_some(outcome.exit_code)
+    });
+    if let Some(flow) = terminal {
+        match flow {
+            Flow::Failed(error) => {
+                outcome.attach_failure(command, output, started_at, error);
+                if outcome.primary_ok {
+                    if let Some(exit_code) = required_save_exit {
+                        outcome.exit_code = exit_code;
+                    }
+                }
+            }
+            Flow::Interrupted(error, note) => {
+                render::note_stderr_raw(&note);
+                outcome.attach_failure(command, output, started_at, error);
+                if outcome.primary_ok {
+                    outcome.exit_code = crate::output::ExitCode::Interrupted.as_u8();
+                }
+            }
+        }
+    }
+    outcome
 }
 
 /// The global (root-level) flags that affect detection rendering. Read once
@@ -454,7 +498,7 @@ async fn analyze_one(
 /// `acceptance_unknown` for an ambiguous issued send, `terminal` otherwise.
 /// The member never carries upstream identity: an unaccepted submission has
 /// no real task id or result, so none is fabricated.
-fn failed_member(
+pub(crate) fn failed_member(
     request: &AnalysisRequest,
     error: CanonicalError,
 ) -> crate::domain::Analysis<CanonicalError> {
@@ -483,7 +527,7 @@ fn failed_member(
         crate::domain::SaveState::Ephemeral,
         provenance,
         None,
-        None,
+        request.rerun_of(),
         now,
         now,
         None,

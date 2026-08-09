@@ -49,13 +49,12 @@ pub(super) fn resolve_inputs(
 
 /// Builds one literal-text input, rejecting empty/whitespace-only content.
 fn literal(text: String) -> Result<ResolvedInput, CanonicalError> {
-    let word_count = count_words(&text);
-    if word_count == 0 {
-        return Err(usage_error(
+    let word_count = validate_text_eligibility(&text).map_err(|()| {
+        usage_error(
             ErrorCode::InputRequired,
             "detection requires non-empty text",
-        ));
-    }
+        )
+    })?;
     Ok(ResolvedInput {
         text,
         origin: TextOrigin::Literal,
@@ -80,13 +79,8 @@ fn resolve_stdin_source(
         Some(text) => text,
         None => read_all_stdin()?,
     };
-    let word_count = count_words(&text);
-    if word_count == 0 {
-        return Err(usage_error(
-            ErrorCode::InputRequired,
-            "stdin carried no detectable text",
-        ));
-    }
+    let word_count = validate_text_eligibility(&text)
+        .map_err(|()| usage_error(ErrorCode::InputRequired, "stdin carried no detectable text"))?;
     Ok(vec![ResolvedInput {
         text,
         origin: TextOrigin::Stdin,
@@ -110,13 +104,12 @@ fn read_text_file(path: &str) -> Result<ResolvedInput, CanonicalError> {
             &format!("{path} is not a UTF-8 text file"),
         )
     })?;
-    let word_count = count_words(&text);
-    if word_count == 0 {
-        return Err(usage_error(
+    let word_count = validate_text_eligibility(&text).map_err(|()| {
+        usage_error(
             ErrorCode::UnsupportedInput,
             &format!("{path} contains no detectable text"),
-        ));
-    }
+        )
+    })?;
     let name = std::path::Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -131,7 +124,21 @@ fn read_text_file(path: &str) -> Result<ResolvedInput, CanonicalError> {
 
 /// The canonical word count: Unicode whitespace-separated tokens.
 fn count_words(text: &str) -> u64 {
-    text.split_whitespace().count() as u64
+    crate::analysis::canonical_text_word_count(text)
+}
+
+/// The canonical eligibility validator for text that may be submitted to the
+/// Pangram text endpoint. Fresh detection and history rerun both call this
+/// owner before credentials or network work so retained input cannot bypass
+/// the zero-token rule (including Unicode-only whitespace). The returned
+/// count is the exact count authenticated in canonical input evidence.
+pub(crate) fn validate_text_eligibility(text: &str) -> Result<u64, ()> {
+    let word_count = count_words(text);
+    if word_count == 0 {
+        Err(())
+    } else {
+        Ok(word_count)
+    }
 }
 
 /// Applies `--max-billable-units` before any submission: the sum of started
@@ -187,6 +194,14 @@ mod tests {
         assert_eq!(count_words(""), 0);
         assert_eq!(count_words("   \n\t  "), 0);
         assert_eq!(count_words("a"), 1);
+    }
+
+    #[test]
+    fn eligibility_rejects_ascii_and_unicode_only_whitespace() {
+        for text in ["", " \n\t", "\u{00a0}\u{2003}\u{2029}"] {
+            assert_eq!(validate_text_eligibility(text), Err(()), "{text:?}");
+        }
+        assert_eq!(validate_text_eligibility("\u{2003}one\u{00a0}two"), Ok(2));
     }
 
     #[test]

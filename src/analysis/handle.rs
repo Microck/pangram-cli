@@ -171,7 +171,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
             SaveState::Ephemeral,
             self.provenance(None),
             None,
-            None,
+            self.request.rerun_of(),
             self.created_at,
             now,
             None,
@@ -210,7 +210,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
             SaveState::Ephemeral,
             provenance,
             None,
-            None,
+            self.request.rerun_of(),
             self.created_at,
             now,
             Some(now),
@@ -234,7 +234,7 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
             SaveState::Ephemeral,
             self.provenance(Some(now)),
             None,
-            None,
+            self.request.rerun_of(),
             self.created_at,
             now,
             Some(now),
@@ -536,6 +536,38 @@ impl<C: super::config::Clock> Analyzer<C> {
         self.bulk().resume_observed(upstream_bulk_id)
     }
 
+    /// Fetches the documented results window for the whole job and projects
+    /// the observed children for the history save seam (contracts.md 14.2).
+    /// Safe-GET paging, retry, pacing, and the exact-coverage drift guards
+    /// all stay inside this module; the adapters only choose when to
+    /// persist. This is the one observation-projection path every
+    /// save-adjacent bulk read uses (`bulk submit --wait`, `bulk status`,
+    /// `bulk wait`). The failure of the underlying read surfaces through
+    /// its canonical error unchanged; the automatic-history adapter treats
+    /// that failure as the save path's one sanitized warning while the
+    /// already-completed primary read renders untouched.
+    ///
+    /// `source_name` marks the local JSONL file source when this process
+    /// submitted the job from a file (`stdin` or an unauthored job when
+    /// `None`). The fetch-all walk is bounded by the same documented page
+    /// ceiling as every walk (100-item pages over the 1,000-item job cap).
+    pub async fn bulk_observed_children(
+        &self,
+        running: &RunningBulk<C>,
+        source_name: Option<&str>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<(crate::domain::Analysis<CanonicalError>, Option<String>)>, BulkAnalysisError>
+    {
+        // 100-item pages over the documented 1,000-item job cap: ten reads
+        // always suffice, and the walk's own exact-coverage drift guards
+        // bound the walk internally.
+        const OBSERVED_CHILDREN_MAX_READS: u64 = 10;
+        let page_result = self
+            .bulk_results_all(running, OBSERVED_CHILDREN_MAX_READS, cancel, |_| {})
+            .await?;
+        Ok(running.project_observed_children(page_result.page, source_name))
+    }
+
     /// Reads one observed task snapshot by upstream ID (`task status`).
     ///
     /// This reconciles a remote record the caller did not author
@@ -766,7 +798,7 @@ fn observed_terminal_task_success(
     let now = UtcTimestamp::now();
     let input = task.normalized_text.as_deref().map(|text| {
         let byte_count = u64::try_from(text.len()).unwrap_or(u64::MAX);
-        let word_count = u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX);
+        let word_count = super::canonical_text_word_count(text);
         crate::domain::AnalysisInput::Text(
             crate::domain::TextInput::new(
                 crate::domain::TextOrigin::Unknown,

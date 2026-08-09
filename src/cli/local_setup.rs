@@ -365,8 +365,23 @@ fn config(
                     ),
                 );
             };
-            match service.set(key, value) {
-                Ok(_) => {
+            // ADR 0004: first enablement of durable plaintext history is
+            // always acknowledged. The storage service derives the transition
+            // from the same lock-scoped snapshot it persists, so concurrent
+            // enables cannot duplicate the warning and an intervening disable
+            // cannot make the adapter's decision disagree with the write.
+            match service.set_with_outcome(key, value) {
+                Ok(outcome) => {
+                    if outcome.history_became_enabled() {
+                        let mut stderr = std::io::stderr().lock();
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            stderr,
+                            "warning: history stores submitted content and results \
+                             unencrypted as plaintext in the local data directory"
+                        );
+                        let _ = stderr.flush();
+                    }
                     PhaseOneOutcome::success(CommandData::ConfigSet(MutationAcknowledgement::new()))
                 }
                 Err(error) => PhaseOneOutcome::failure(command, config_error(error)),

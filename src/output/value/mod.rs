@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::domain::{
-    Analysis, AnalysisPage, BulkCollection, BulkPage, NonEmptyString, UtcTimestamp,
+    Analysis, AnalysisSummaryPage, BulkCollection, BulkPage, NonEmptyString, UtcTimestamp,
 };
 
 use super::{
@@ -523,8 +523,8 @@ command_data! {
     BulkResults(BulkPage<CanonicalError>) => BulkResults,
     TaskStatus(Analysis<CanonicalError>) => TaskStatus,
     TaskWait(Analysis<CanonicalError>) => TaskWait,
-    HistoryList(AnalysisPage<CanonicalError>) => HistoryList,
-    HistorySearch(AnalysisPage<CanonicalError>) => HistorySearch,
+    HistoryList(AnalysisSummaryPage) => HistoryList,
+    HistorySearch(AnalysisSummaryPage) => HistorySearch,
     HistoryShow(Analysis<CanonicalError>) => HistoryShow,
     HistoryRerun(Analysis<CanonicalError>) => HistoryRerun,
     HistoryDelete(MutationAcknowledgement) => HistoryDelete,

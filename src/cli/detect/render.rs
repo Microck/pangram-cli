@@ -34,6 +34,164 @@ pub(crate) struct DetectOutcome {
     /// A single-envelope machine or human projection already emitted by the
     /// dispatch; the process layer must not re-print.
     pub(crate) rendered: bool,
+    /// Whether the primary output honestly completed: the primary envelope(s)
+    /// (or its text error surface) rendered and flushed successfully. A
+    /// primary render failure degrades this to `false` with exit 1, and the
+    /// post-primary failure attachment reads it so it never overwrites the
+    /// general render-failure exit with its own category-derived exit
+    /// (contracts.md 14.2 note).
+    pub(crate) primary_ok: bool,
+}
+
+/// A byte sink the render paths write through. The process wires
+/// `std::io::StdoutLock`/`StderrLock` into this seam; tests wire a
+/// deterministic faulting sink so a first-write-fails/second-write-succeeds
+/// surface can never pass accidentally (a `/dev/full`-only proof could
+/// silently bypass the real write). Production paths never hold this type;
+/// only the terminal write boundary uses it.
+pub(crate) trait RenderWrite {
+    fn write_all_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+    fn flush_bytes(&mut self) -> std::io::Result<()>;
+}
+
+impl<T: std::io::Write> RenderWrite for &mut T {
+    fn write_all_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_all(bytes)
+    }
+    fn flush_bytes(&mut self) -> std::io::Result<()> {
+        self.flush()
+    }
+}
+
+// The concrete process stream locks implement the seam directly so a
+// multi-iteration call can reborrow its sink without relying on blanket
+// reborrow coercion.
+impl RenderWrite for std::io::StdoutLock<'_> {
+    fn write_all_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_all(bytes)
+    }
+    fn flush_bytes(&mut self) -> std::io::Result<()> {
+        self.flush()
+    }
+}
+
+impl RenderWrite for std::io::StderrLock<'_> {
+    fn write_all_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_all(bytes)
+    }
+    fn flush_bytes(&mut self) -> std::io::Result<()> {
+        self.flush()
+    }
+}
+
+/// The sinks a terminal write boundary emits through. Production locks the
+/// real process streams; tests inject deterministic faulting sinks.
+pub(crate) struct RenderSinks<'a> {
+    pub(crate) stdout: &'a mut dyn RenderWrite,
+    pub(crate) stderr: &'a mut dyn RenderWrite,
+}
+
+impl DetectOutcome {
+    /// Attaches a post-primary canonical failure (contracts.md 14.2 note: an
+    /// explicit `--save` that failed after the remote result already
+    /// rendered). The primary envelope is already fixed with the honest
+    /// `ephemeral` save state; this replaces the process result with the
+    /// failure envelope and its category-derived exit (7 for local history).
+    ///
+    /// A rendered (streamed) primary stays streamed: for machine formats the
+    /// failure envelope is emitted on stdout after the already-printed
+    /// primary line, so both halves stay machine-readable in order; for the
+    /// text surface it prints on stderr.
+    ///
+    /// A render failure always wins. When the primary render already failed
+    /// (`primary_ok == false`, already exit 1), the attachment can never
+    /// overwrite that general render-failure exit with the category-derived
+    /// exit 7: a command whose own output surface could not render has not
+    /// honestly reported either failure. Equally, when the failure envelope
+    /// itself cannot be written (a closed stdout or stderr), the process
+    /// reports the render failure at exit 1 and never masks it behind the
+    /// category-derived exit (7).
+    pub(crate) fn attach_failure(
+        &mut self,
+        command: ResolvedCommand,
+        output: ResolvedOutput,
+        started_at: crate::domain::UtcTimestamp,
+        error: CanonicalError,
+    ) {
+        let mut stdout = std::io::stdout().lock();
+        let mut stderr = std::io::stderr().lock();
+        let mut sinks = RenderSinks {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        };
+        self.attach_failure_with(command, output, started_at, error, &mut sinks);
+    }
+
+    /// The sink-injectable core of [`Self::attach_failure`]. Split for the
+    /// deterministic render-failure proof: a test wires a faulting sink and
+    /// asserts the general render-failure exit 1 is preserved, while the
+    /// second write genuinely succeeds.
+    pub(crate) fn attach_failure_with(
+        &mut self,
+        command: ResolvedCommand,
+        output: ResolvedOutput,
+        started_at: crate::domain::UtcTimestamp,
+        error: CanonicalError,
+        sinks: &mut RenderSinks<'_>,
+    ) {
+        // Render precedence: a primary that already failed to render owns
+        // the exit. The history failure can never upgrade or replace the
+        // general render-failure exit 1 (contracts.md 14.2 note).
+        if !self.primary_ok {
+            self.exit_code = 1;
+            return;
+        }
+        let envelope = CommandEnvelope::failure(
+            command,
+            error,
+            EnvelopeMeta::default()
+                .with_started_at(started_at)
+                .with_failed_at(crate::domain::UtcTimestamp::now()),
+        );
+        let exit_code = envelope
+            .error()
+            .map_or(1, |error| ExitCode::for_error(error.category()).as_u8());
+        match output.error {
+            ErrorSurface::Json => {
+                // A streamed primary was already printed: append the failure
+                // envelope as its own JSON line so the sequence stays
+                // machine-readable (success then failure, in emit order).
+                // A queued (non-rendered) primary is dropped: its content is
+                // fully reproducible from the already-persisted state or the
+                // caller's rerun, and the failure envelope is the honest
+                // final surface.
+                if self.rendered {
+                    let emitted = serde_json::to_string(&envelope)
+                        .map_err(|_| ())
+                        .and_then(|line| {
+                            sinks
+                                .stdout
+                                .write_all_bytes(format!("{line}\n").as_bytes())
+                                .map_err(|_| ())
+                        })
+                        .and_then(|()| sinks.stdout.flush_bytes().map_err(|_| ()));
+                    if emitted.is_err() {
+                        self.exit_code = 1;
+                        self.primary_ok = false;
+                        return;
+                    }
+                }
+                self.exit_code = exit_code;
+            }
+            ErrorSurface::Text => {
+                let rendered = emit_error_text_with(&envelope, sinks);
+                self.exit_code = if rendered { exit_code } else { 1 };
+                if !rendered {
+                    self.primary_ok = false;
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn success_outcome(
@@ -115,6 +273,38 @@ pub(super) fn success_outcome(
             }
         }
     }
+}
+
+/// Renders one canonical analysis for a non-detect command while preserving
+/// the shared format, error, flush, and remote-outcome exit rules.
+pub(crate) fn analysis_command_outcome(
+    command: ResolvedCommand,
+    output: ResolvedOutput,
+    started_at: crate::domain::UtcTimestamp,
+    analysis: crate::domain::Analysis<CanonicalError>,
+) -> DetectOutcome {
+    let data = match command {
+        ResolvedCommand::HistoryRerun => CommandData::HistoryRerun(analysis),
+        _ => return internal_outcome(command, output, started_at),
+    };
+    let envelope = CommandEnvelope::success(
+        data,
+        EnvelopeMeta::default()
+            .with_started_at(started_at)
+            .with_duration_ms(elapsed_ms(started_at)),
+    );
+    let exit_code = analysis_exit_code(match envelope.data() {
+        Some(CommandData::HistoryRerun(analysis)) => analysis,
+        _ => unreachable!("history rerun envelope"),
+    })
+    .as_u8();
+    emit_primary(
+        command,
+        std::slice::from_ref(&envelope),
+        output,
+        exit_code,
+        started_at,
+    )
 }
 
 /// The process exit for a success envelope derives from its canonical
@@ -215,6 +405,22 @@ pub(crate) fn failure_outcome(
     started_at: crate::domain::UtcTimestamp,
     error: CanonicalError,
 ) -> DetectOutcome {
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    let mut sinks = RenderSinks {
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+    };
+    failure_outcome_with(command, output, started_at, error, &mut sinks)
+}
+
+pub(crate) fn failure_outcome_with(
+    command: ResolvedCommand,
+    output: ResolvedOutput,
+    started_at: crate::domain::UtcTimestamp,
+    error: CanonicalError,
+    sinks: &mut RenderSinks<'_>,
+) -> DetectOutcome {
     let exit_code = ExitCode::for_error(error.category()).as_u8();
     let envelope = CommandEnvelope::failure(
         command,
@@ -228,13 +434,15 @@ pub(crate) fn failure_outcome(
             exit_code,
             envelopes: vec![envelope],
             rendered: false,
+            primary_ok: true,
         },
         ErrorSurface::Text => {
-            let rendered = emit_error_text(&envelope);
+            let rendered = emit_error_text_with(&envelope, sinks);
             DetectOutcome {
                 exit_code: if rendered { exit_code } else { 1 },
                 envelopes: vec![],
                 rendered: true,
+                primary_ok: rendered,
             }
         }
     }
@@ -248,6 +456,22 @@ pub(crate) fn interrupted_outcome(
     note: String,
 ) -> DetectOutcome {
     note_stderr_raw(&note);
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    let mut sinks = RenderSinks {
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+    };
+    interrupted_outcome_with(command, output, started_at, error, &mut sinks)
+}
+
+pub(crate) fn interrupted_outcome_with(
+    command: ResolvedCommand,
+    output: ResolvedOutput,
+    started_at: crate::domain::UtcTimestamp,
+    error: CanonicalError,
+    sinks: &mut RenderSinks<'_>,
+) -> DetectOutcome {
     let envelope = CommandEnvelope::failure(
         command,
         error,
@@ -260,9 +484,10 @@ pub(crate) fn interrupted_outcome(
             exit_code: ExitCode::Interrupted.as_u8(),
             envelopes: vec![envelope],
             rendered: false,
+            primary_ok: true,
         },
         ErrorSurface::Text => {
-            let rendered = emit_error_text(&envelope);
+            let rendered = emit_error_text_with(&envelope, sinks);
             DetectOutcome {
                 exit_code: if rendered {
                     ExitCode::Interrupted.as_u8()
@@ -271,6 +496,7 @@ pub(crate) fn interrupted_outcome(
                 },
                 envelopes: vec![],
                 rendered: true,
+                primary_ok: rendered,
             }
         }
     }
@@ -298,7 +524,10 @@ pub(crate) fn primary_outcome(
 /// Renders the primary envelope to stdout through the single projection
 /// owner. Machine formats (JSON/JSONL/TOON) go to stdout; Markdown and pretty
 /// also go to stdout because they are the requested primary output. A write
-/// or flush failure degrades the exit to 1 rather than reporting success.
+/// or flush failure degrades the exit to 1 and records `primary_ok = false`
+/// so a later post-primary failure attachment can never overwrite the
+/// general render-failure exit with a category-derived exit (contracts.md
+/// 14.2 note).
 fn emit_primary(
     command: ResolvedCommand,
     envelopes: &[CommandEnvelope],
@@ -307,37 +536,113 @@ fn emit_primary(
     started_at: crate::domain::UtcTimestamp,
 ) -> DetectOutcome {
     let mut stdout = std::io::stdout().lock();
-    let result = output::render(output.format, output.color, envelopes, &mut stdout)
-        .and_then(|()| stdout.flush());
+    let mut stderr = std::io::stderr().lock();
+    let mut sinks = RenderSinks {
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+    };
+    emit_primary_with(
+        command, envelopes, output, exit_code, started_at, &mut sinks,
+    )
+}
+
+/// The sink-injectable core of [`emit_primary`], split for the deterministic
+/// render-failure proof.
+fn emit_primary_with(
+    command: ResolvedCommand,
+    envelopes: &[CommandEnvelope],
+    output: ResolvedOutput,
+    exit_code: u8,
+    started_at: crate::domain::UtcTimestamp,
+    sinks: &mut RenderSinks<'_>,
+) -> DetectOutcome {
+    let result = output::render(
+        output.format,
+        output.color,
+        envelopes,
+        &mut SinkAdapter(sinks),
+    )
+    .and_then(|()| sinks.stdout.flush_bytes());
     match result {
         Ok(()) => DetectOutcome {
             exit_code,
             envelopes: vec![],
             rendered: true,
+            primary_ok: true,
         },
-        Err(_) => internal_outcome(command, output, started_at),
+        Err(_) => internal_outcome_with(command, output, started_at, sinks),
     }
 }
 
-/// Renders a failure envelope as one sanitized text message on stderr.
-/// Returns false when the write fails so the caller degrades to exit 1.
-fn emit_error_text(envelope: &CommandEnvelope) -> bool {
+/// Brings the injected sinks into the `std::io::Write` shape the projection
+/// owner writes through, without changing the projection call sites.
+struct SinkAdapter<'a, 'b>(&'a mut RenderSinks<'b>);
+
+impl std::io::Write for SinkAdapter<'_, '_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0.stdout.write_all_bytes(buffer)?;
+        Ok(buffer.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.stdout.flush_bytes()
+    }
+    fn write_all(&mut self, buffer: &[u8]) -> std::io::Result<()> {
+        self.0.stdout.write_all_bytes(buffer)
+    }
+    fn write_fmt(&mut self, arguments: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        let rendered = arguments.to_string();
+        self.0.stdout.write_all_bytes(rendered.as_bytes())
+    }
+}
+
+/// Renders a failure envelope as one sanitized text message on stderr
+/// through the injected sinks. Returns false when the write fails so the
+/// caller degrades to exit 1.
+fn emit_error_text_with(envelope: &CommandEnvelope, sinks: &mut RenderSinks<'_>) -> bool {
     let Some(error) = envelope.error() else {
         return false;
     };
-    let mut stderr = std::io::stderr().lock();
-    let mut ok = writeln!(stderr, "error: {}", sanitize_for_stderr(error.message())).is_ok();
+    let mut ok = writeln!(
+        SinkWriter(sinks.stderr),
+        "error: {}",
+        sanitize_for_stderr(error.message())
+    )
+    .is_ok();
     if ok {
         if let Some(recovery) = error.recovery() {
-            ok = writeln!(stderr, "help: {}", sanitize_for_stderr(recovery.message())).is_ok();
+            ok = writeln!(
+                SinkWriter(sinks.stderr),
+                "help: {}",
+                sanitize_for_stderr(recovery.message())
+            )
+            .is_ok();
             if ok {
                 if let Some(command) = recovery.command() {
-                    ok = writeln!(stderr, "  try: {}", sanitize_for_stderr(command)).is_ok();
+                    ok = writeln!(
+                        SinkWriter(sinks.stderr),
+                        "  try: {}",
+                        sanitize_for_stderr(command)
+                    )
+                    .is_ok();
                 }
             }
         }
     }
-    ok && stderr.flush().is_ok()
+    ok && sinks.stderr.flush_bytes().is_ok()
+}
+
+/// Brings one injected sink into the `std::io::Write` shape used by the
+/// text-error rendering without changing its line structure.
+struct SinkWriter<'a>(&'a mut dyn RenderWrite);
+
+impl std::io::Write for SinkWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0.write_all_bytes(buffer)?;
+        Ok(buffer.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush_bytes()
+    }
 }
 
 /// Strips control characters from a message before it reaches stderr. One
@@ -356,6 +661,23 @@ pub(crate) fn note_stderr(_streams: &dyn crate::cli::StreamTty, note: &str) {
 pub(crate) fn note_stderr_raw(note: &str) {
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(stderr, "note: {note}");
+    let _ = stderr.flush();
+}
+
+/// A direct advisory warning on stderr, TTY or not, per the same shell
+/// contract as [`note_stderr`]. The body is reported verbatim (never
+/// re-prefixed with `note:`): the shared CLI stderr owner emits exactly one
+/// `warning:` line per emission, so an automatic history failure surfaces one
+/// sanitized `warning: ...` with no doubling (contracts.md 14.2 note). The
+/// caller supplies the sanitized body; every automatic-history call site
+/// reduces upstream/detail text before it reaches this seam.
+pub(crate) fn warning_stderr(_streams: &dyn crate::cli::StreamTty, body: &str) {
+    warning_stderr_raw(body);
+}
+
+pub(crate) fn warning_stderr_raw(body: &str) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "warning: {body}");
     let _ = stderr.flush();
 }
 
@@ -386,12 +708,54 @@ fn internal_outcome(
     output: ResolvedOutput,
     started_at: crate::domain::UtcTimestamp,
 ) -> DetectOutcome {
-    failure_outcome(
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    let mut sinks = RenderSinks {
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+    };
+    internal_outcome_with(command, output, started_at, &mut sinks)
+}
+
+/// The sink-injectable render-failure outcome. The primary write already
+/// failed: the internal failure is reported at the general render-failure
+/// exit 1 and `primary_ok` is always `false`, so a later post-primary
+/// failure attachment (a history save failure at category 7) can never
+/// overwrite the render failure (contracts.md 14.2 note). On the JSON
+/// surface the failure envelope defers to the process layer's write; on
+/// the text surface it renders to stderr through the injected sinks here.
+fn internal_outcome_with(
+    command: ResolvedCommand,
+    output: ResolvedOutput,
+    started_at: crate::domain::UtcTimestamp,
+    sinks: &mut RenderSinks<'_>,
+) -> DetectOutcome {
+    let envelope = CommandEnvelope::failure(
         command,
-        output,
-        started_at,
         internal_error("the result could not be rendered honestly"),
-    )
+        EnvelopeMeta::default()
+            .with_started_at(started_at)
+            .with_failed_at(crate::domain::UtcTimestamp::now()),
+    );
+    match output.error {
+        ErrorSurface::Json => DetectOutcome {
+            exit_code: 1,
+            envelopes: vec![envelope],
+            rendered: false,
+            primary_ok: false,
+        },
+        ErrorSurface::Text => {
+            // The secondary stderr write is attempted once; its own failure
+            // is still exit 1 with `primary_ok == false` either way.
+            let _ = emit_error_text_with(&envelope, sinks);
+            DetectOutcome {
+                exit_code: 1,
+                envelopes: vec![],
+                rendered: true,
+                primary_ok: false,
+            }
+        }
+    }
 }
 
 pub(crate) fn internal_error(message: &str) -> CanonicalError {
@@ -426,3 +790,6 @@ pub(crate) fn elapsed_ms(started: crate::domain::UtcTimestamp) -> u64 {
         duration => u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
     }
 }
+
+#[cfg(test)]
+mod tests;

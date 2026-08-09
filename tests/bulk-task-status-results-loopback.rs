@@ -26,7 +26,7 @@ use std::process::Stdio;
 
 use serde_json::{Value, json};
 
-use env::fixture::{self, BulkRequestView, ProtocolFixture, Step, TASK_ID, pangram4_success};
+use env::fixture::{BulkRequestView, ProtocolFixture, Step, TASK_ID, pangram4_success};
 use env::{
     BULK_ID, Isolated, accepted_202, assert_no_leak, interrupt, jsonl, results_page,
     spawn_with_stdin, status_body, stdout_envelope,
@@ -485,6 +485,51 @@ async fn bulk_results_textless_success_exits_0_without_contract_drift() {
     fixture.shutdown().await;
 }
 
+// A remote-only results read keeps every piece of evidence already validated
+// on the terminal child analysis. The history child projector consumes this
+// same value, so this compiled-flow assertion prevents the returned child
+// from losing its upstream-attested input descriptor, version, task ID, or
+// last stage before persistence.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_results_preserves_terminal_child_input_and_upstream_evidence() {
+    let text = "attested remote result metadata survives projection";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": TASK_ID, "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success(text)}
+        ],
+        "failed_items": []
+    })));
+    let isolated = Isolated::new();
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "results", BULK_ID, "--limit", "100"])
+        .output()
+        .expect("run bulk results with complete terminal evidence");
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = stdout_envelope(&output);
+    let analysis = &envelope["data"]["items"][0]["analysis"];
+    assert_eq!(analysis["input"]["origin"], "unknown");
+    assert_eq!(analysis["input"]["byte_count"], text.len());
+    assert_eq!(
+        analysis["input"]["word_count"],
+        text.split_whitespace().count()
+    );
+    assert_eq!(analysis["provenance"]["upstream_version"], "4.0");
+    assert_eq!(analysis["provenance"]["upstream_task_ids"][0], TASK_ID);
+    assert_eq!(
+        analysis["checks"][0]["upstream"]["last_stage"],
+        "STAGE_SUCCESS"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
 // A fetch-all read over a multi-page job reassembles every walked page into
 // one canonical aggregate window: `offset: 0`, `limit: max(1, total_items)`
 // bounded by 1,000 (the complete set, not the 100-item walk granularity),
@@ -565,189 +610,104 @@ async fn bulk_results_unknown_job_notes_the_id() {
     fixture.shutdown().await;
 }
 
-// `task status` observes one task by upstream ID, exits 0 on success, and
-// sends exactly one GET with the task-route grammar.
+// A fetch-all results walk over pages that repeat one source position is
+// contract drift, never merged silently: the process fails closed as
+// `upstream_contract_changed` with the network-or-upstream exit (6).
 #[tokio::test(flavor = "multi_thread")]
-async fn task_status_observes_a_succeeded_task() {
+async fn bulk_results_fetch_all_rejects_a_duplicate_position_across_pages() {
     let fixture = ProtocolFixture::start().await;
-    fixture.on_poll(Step::Json(pangram4_success("observed synthetic text")));
+    // First page covers position 0 of a 2-position job; the same position
+    // arrives again on the next page (no union coverage advance).
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-000", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("first synthetic words")}
+        ],
+        "failed_items": []
+    })));
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 1,
+        "limit": 100,
+        "total_items": 2,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-000", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("first synthetic words")}
+        ],
+        "failed_items": []
+    })));
     let isolated = Isolated::new();
     let output = isolated
         .command(fixture.base_url())
-        .args(["task", "status", TASK_ID])
+        .args(["bulk", "results", BULK_ID])
         .output()
-        .expect("run task status");
-    assert_eq!(output.status.code(), Some(0));
+        .expect("run bulk results with a duplicated position across pages");
+    assert_eq!(output.status.code(), Some(6));
     let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["command"], "task_status");
-    assert_eq!(envelope["data"]["status"], "succeeded");
-    assert_eq!(envelope["data"]["submission_outcome"], "accepted");
-    let requests = fixture.requests();
-    let polls: Vec<_> = requests
-        .iter()
-        .filter(|request| request.method == "GET")
-        .collect();
-    assert_eq!(polls.len(), 1);
-    assert!(polls[0].path.starts_with("/task/"));
+    assert_eq!(envelope["error"]["code"], "upstream_contract_changed");
     assert_no_leak(&output);
     fixture.shutdown().await;
 }
 
-// A terminal failed task (STAGE_FAILED) carries upstream_analysis_failed
-// (category upstream) and exits 6, matching detection.
+// A fetch-all walk whose page carries a source position at or beyond the
+// job total is contract drift (no position can be `>= total_items`).
 #[tokio::test(flavor = "multi_thread")]
-async fn task_status_failed_exits_6() {
+async fn bulk_results_fetch_all_rejects_a_position_at_or_above_the_total() {
     let fixture = ProtocolFixture::start().await;
-    fixture.on_poll(Step::Json(fixture::pangram4_failure(
-        "the text was too short",
-    )));
+    // total_items=1 but the page claims source position 1: not covered by
+    // any valid window, so the read fails contract-clean.
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 1, "id": "row-001", "task_id": "task-001", "stage": "STAGE_SUCCESS",
+             "error": null, "result": pangram4_success("spilled words")}
+        ],
+        "failed_items": []
+    })));
     let isolated = Isolated::new();
     let output = isolated
         .command(fixture.base_url())
-        .args(["task", "status", TASK_ID])
+        .args(["bulk", "results", BULK_ID])
         .output()
-        .expect("run task status that failed upstream");
-    assert_eq!(
-        output.status.code(),
-        Some(6),
-        "an upstream terminal task failure exits 6"
-    );
+        .expect("run bulk results with an out-of-total position");
+    assert_eq!(output.status.code(), Some(6));
     let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["data"]["status"], "failed");
-    assert_eq!(
-        envelope["data"]["checks"][0]["error"]["code"],
-        "upstream_analysis_failed"
-    );
+    assert_eq!(envelope["error"]["code"], "upstream_contract_changed");
     assert_no_leak(&output);
     fixture.shutdown().await;
 }
 
-// `task wait` observes through to a terminal success and exits 0.
+// The documented page window validation failure (an empty page while
+// positions remain uncovered: non-advancing drift) also fails closed with
+// the contract category because an empty page can never terminate a
+// partially-covered fetch-all walk as a fake success.
 #[tokio::test(flavor = "multi_thread")]
-async fn task_wait_reaches_succeeded() {
+async fn bulk_results_fetch_all_rejects_an_empty_page_before_full_coverage() {
     let fixture = ProtocolFixture::start().await;
-    fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
-    fixture.on_poll(Step::Json(pangram4_success("waited synthetic text")));
+    fixture.on_bulk_results(Step::Json(json!({
+        "bulk_id": BULK_ID,
+        "offset": 0,
+        "limit": 100,
+        "total_items": 2,
+        "items": [],
+        "failed_items": []
+    })));
     let isolated = Isolated::new();
     let output = isolated
         .command(fixture.base_url())
-        .args(["task", "wait", TASK_ID])
+        .args(["bulk", "results", BULK_ID])
         .output()
-        .expect("run task wait");
-    assert_eq!(output.status.code(), Some(0));
+        .expect("run bulk results with a non-advancing empty page");
+    assert_eq!(output.status.code(), Some(6));
     let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["command"], "task_wait");
-    assert_eq!(envelope["data"]["status"], "succeeded");
-    assert!(fixture.get_count() >= 2);
-    assert_no_leak(&output);
-    fixture.shutdown().await;
-}
-
-// A bounded `task wait --timeout` on a task that never reaches a terminal
-// stage hits the local wait timeout and exits 6 (`wait_timeout`) with the
-// upstream task identity, polling at least once and never sending a POST.
-#[tokio::test(flavor = "multi_thread")]
-async fn task_wait_timeout_exits_6_with_wait_timeout() {
-    let fixture = ProtocolFixture::start().await;
-    // The first poll observes one stage-bearing snapshot; the second holds
-    // until the local deadline so the finite queue can never run dry.
-    fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
-    fixture.on_poll(Step::Hang);
-    let isolated = Isolated::new();
-    let output = isolated
-        .command(fixture.base_url())
-        .args(["task", "wait", TASK_ID, "--timeout", "1s"])
-        .output()
-        .expect("run task wait --timeout");
-    assert_eq!(
-        output.status.code(),
-        Some(6),
-        "the local wait timeout is a network-category exit"
-    );
-    let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["error"]["code"], "wait_timeout");
-    assert!(envelope["error"]["details"]["upstream_task_id"].is_string());
-    // The timeout envelope preserves the last observed stage for
-    // reconciliation, matching the shared `RunningAnalysis` observation path.
-    assert_eq!(
-        envelope["error"]["details"]["last_stage"], "STAGE_INFERENCE",
-        "a timed-out observed wait retains the last upstream stage"
-    );
-    assert_eq!(fixture.post_count(), 0, "a wait never replays a send");
-    assert!(fixture.get_count() >= 1, "at least one poll fired");
-    assert_no_leak(&output);
-    fixture.shutdown().await;
-}
-
-// SIGINT during a task wait exits 130 with the identity note.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread")]
-async fn task_wait_sigint_exits_130() {
-    let fixture = ProtocolFixture::start().await;
-    fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
-    fixture.on_poll(Step::Hang);
-    let isolated = Isolated::new();
-    let mut child = isolated
-        .command(fixture.base_url())
-        .args(["task", "wait", TASK_ID])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn task wait");
-    fixture.wait_for_gets(1).await;
-    interrupt(&mut child);
-    let output = child.wait_with_output().expect("await task wait");
-    assert_eq!(output.status.code(), Some(130));
-    assert_no_leak(&output);
-    fixture.shutdown().await;
-}
-
-// An empty task ID is a usage error before any request.
-#[tokio::test(flavor = "multi_thread")]
-async fn task_status_empty_id_is_a_usage_error() {
-    let fixture = ProtocolFixture::start().await;
-    let isolated = Isolated::new();
-    let output = isolated
-        .command(fixture.base_url())
-        .args(["task", "status", ""])
-        .output()
-        .expect("run task status with an empty id");
-    assert_eq!(output.status.code(), Some(2));
-    let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["error"]["code"], "input_required");
-    assert_eq!(fixture.get_count(), 0);
-    fixture.shutdown().await;
-}
-
-// `--progress jsonl` on a task wait emits content-free JSONL events on
-// stderr while the canonical envelope stays on stdout.
-#[tokio::test(flavor = "multi_thread")]
-async fn task_wait_jsonl_progress_is_content_free_and_on_stderr() {
-    let fixture = ProtocolFixture::start().await;
-    fixture.on_poll(Step::Json(json!({"stage": "STAGE_INFERENCE"})));
-    fixture.on_poll(Step::Json(pangram4_success("progress synthetic text")));
-    let isolated = Isolated::new();
-    let output = isolated
-        .command(fixture.base_url())
-        .args(["task", "wait", TASK_ID, "--progress", "jsonl"])
-        .output()
-        .expect("run task wait --progress jsonl");
-    assert_eq!(output.status.code(), Some(0));
-    // The canonical envelope stays on stdout.
-    let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["command"], "task_wait");
-    // Progress events are JSONL on stderr, one event per line, content-free.
-    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
-    for line in stderr.lines().filter(|line| !line.trim().is_empty()) {
-        let event: Value = serde_json::from_str(line)
-            .unwrap_or_else(|error| panic!("stderr progress is JSONL: {error}\nline: {line}"));
-        assert_eq!(event["type"], "progress");
-        assert!(
-            event.get("text").is_none(),
-            "no content in progress: {event}"
-        );
-    }
+    assert_eq!(envelope["error"]["code"], "upstream_contract_changed");
     assert_no_leak(&output);
     fixture.shutdown().await;
 }

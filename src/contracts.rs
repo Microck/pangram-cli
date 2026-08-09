@@ -16,8 +16,8 @@ use thiserror::Error;
 
 use crate::cli::{FULL_GRAMMAR, runtime_command};
 use crate::domain::{
-    Analysis, AnalysisPage, BulkCollection, BulkItem, BulkPage, Check, CheckStatus, OrderedChecks,
-    SubmissionOutcomeUnknownDetails,
+    Analysis, AnalysisSummaryPage, BulkCollection, BulkItem, BulkPage, Check, CheckStatus,
+    OrderedChecks, SubmissionOutcomeUnknownDetails,
 };
 use crate::output::{
     CanonicalError, EnvelopeMeta, ErrorCode, ExitCode, ResolvedCommand,
@@ -431,7 +431,7 @@ fn output_schema() -> Value {
         data_condition(&["bulk_results"], schema_ref::<BulkPage<CanonicalError>>()),
         data_condition(
             &["history_list", "history_search"],
-            schema_ref::<AnalysisPage<CanonicalError>>(),
+            schema_ref::<AnalysisSummaryPage>(),
         ),
         data_condition(
             &[
@@ -578,6 +578,36 @@ fn patch_output_definitions(definitions: &mut Value) {
             }
         }]),
     );
+    // Schemars gives generic instantiations numeric suffixes according to
+    // registration order, while `schema_name()` returns only the unsuffixed
+    // base. Identify the summary instantiation by its item reference so this
+    // patch cannot silently land on the full `Check` array instead.
+    let mut summary_checks_patched = 0_usize;
+    for (name, definition) in object_mut(definitions).iter_mut() {
+        if name.starts_with("OrderedChecks")
+            && definition.pointer("/items/$ref").and_then(Value::as_str)
+                == Some("#/$defs/CheckKind")
+        {
+            object_mut(definition).insert("uniqueItems".into(), json!(true));
+            object_mut(definition).insert(
+                "allOf".into(),
+                json!([{
+                    "if": {"minItems": 2},
+                    "then": {
+                        "prefixItems": [
+                            {"const": "ai_detection"},
+                            {"const": "plagiarism"}
+                        ]
+                    }
+                }]),
+            );
+            summary_checks_patched += 1;
+        }
+    }
+    assert_eq!(
+        summary_checks_patched, 1,
+        "expected the history-summary ordered-check definition to be patched"
+    );
     let analysis = definition_mut::<Analysis<CanonicalError>>(definitions);
     object_mut(analysis).insert("not".into(), json!({"required": ["retry_of", "rerun_of"]}));
     // Constrain the derived analysis schema to a single object. The
@@ -673,6 +703,20 @@ fn patch_output_definitions(definitions: &mut Value) {
         .expect("BulkItem required fields are an array")
         .push(json!("status"));
     object_mut(bulk_item).insert("oneOf".into(), state_payload_invariant("analysis"));
+    push_all_of(
+        bulk_item,
+        json!({
+            "if": {
+                "properties": {
+                    "status": {"enum": ["queued", "succeeded"]}
+                },
+                "required": ["status"]
+            },
+            "then": {
+                "not": {"required": ["last_stage"]}
+            }
+        }),
+    );
 
     let unknown_submission = definition_mut::<SubmissionOutcomeUnknownDetails>(definitions);
     let properties = object_mut(&mut unknown_submission["properties"]);

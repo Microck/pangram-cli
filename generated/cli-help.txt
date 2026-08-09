@@ -3,13 +3,14 @@ Unofficial Pangram terminal client
 Usage: pangram [OPTIONS] [TEXT] [COMMAND]
 
 Commands:
-  auth    Manage the locally stored Pangram API key
-  config  Inspect and edit the local Pangram configuration
-  doctor  Run local diagnostics without network access or credential validation
-  detect  Detect AI-generated text through Pangram 4
-  bulk    Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
-  task    Inspect or wait for a Pangram 4 text task
-  help    Print this message or the help of the given subcommand(s)
+  auth     Manage the locally stored Pangram API key
+  config   Inspect and edit the local Pangram configuration
+  doctor   Run local diagnostics without network access or credential validation
+  detect   Detect AI-generated text through Pangram 4
+  bulk     Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
+  task     Inspect or wait for a Pangram 4 text task
+  history  Inspect and manage optional local analysis history
+  help     Print this message or the help of the given subcommand(s)
 
 Arguments:
   [TEXT]  Bare text analyzes it through AI detection; the literal `-` reads stdin

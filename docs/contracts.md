@@ -216,6 +216,9 @@ represented in the ordered series by one synthesized analysis member whose:
 - `provenance` carries only upstream identity facts that actually exist; the
   synthesized member never fabricates `result`, upstream identity, or other
   remote detail, and carries no task id because acceptance was never reached
+- `completed_at` and `provenance.completed_at` are absent because no remote
+  terminal observation occurred; the local `failed` status records the
+  ambiguous submission outcome rather than claiming remote completion
 
 The envelope's parent `status` is `partial` (mixed succeeded and failed
 members; section 4.1), and the process exits 3. JSONL preserves the ordered
@@ -414,10 +417,23 @@ not create a hidden task ledger.
 A command that observes a Pangram operation by its explicit upstream ID
 (`task status`, `task wait`, and every bulk status, wait, items, and results
 read of a job not submitted in the same invocation) reconciles a remote
-record it did not author. With local history disabled, the process retains no
-authorship record of earlier submissions, so the canonical analysis or bulk
-collection it emits honestly records only the observed remote state and never
-fabricates a local authorship fact:
+record it did not author. `task status` and `task wait` also accept a saved
+local `anl_` ID. Only a complete canonical local UUIDv7 ID selects this path;
+every other non-empty spelling is an opaque upstream ID and bypasses local
+lookup unchanged. Before credential resolution or network work, a canonical
+local ID opens only an existing history database, validates the complete
+canonical record and task evidence, and resolves exactly one AI-detection
+upstream task ID. An absent canonical local ID, a record with no applicable
+task, or ambiguous applicable task evidence is `local_task_unresolvable`;
+malformed stored canonical evidence retains its specific local-history error.
+Resolution never creates a missing history database and does not consult
+`history.enabled`, so disabling future automatic writes does not hide a saved
+task.
+
+With local history disabled, a process observing an explicit upstream ID
+retains no authorship record of earlier submissions, so the canonical analysis
+or bulk collection it emits honestly records only the observed remote state
+and never fabricates a local authorship fact:
 
 - the local `anl_` or `bulk_` identity is generated fresh for the read, so
   the envelope stays self-describing; it makes no claim about the original
@@ -986,7 +1002,8 @@ mapping is identical in both positions. In particular:
   `upstream_analysis_failed` (category `upstream`), and the command exits 6
   (network or upstream failure), never general exit 1
 - the per-task status snapshot (`task status` and `task wait`, reading a
-  text task by its upstream ID) follows the identical observation contract:
+  text task by its upstream ID or resolving it from one saved local `anl_`
+  ID) follows the identical observation contract:
   an upstream terminal `STAGE_FAILED` on the poll stream is normalized to
   the same upstream terminal failure (`upstream_analysis_failed`, category
   `upstream`, exit 6), and any non-terminal stage reads as still `running`
@@ -1137,11 +1154,283 @@ Common applicable flags:
 --max-billable-units N
 ```
 
-`--save` is a later-phase flag: local history arrives in Phase 4. It remains in
-the normative grammar so the Phase 4 surface is fixed now, but until history is
-compiled the flag is not advertised in runtime help or the generated reference,
-and passing it is rejected as an unknown-argument usage error (exit 2) before
-any billable work. It must not be presented as an available Phase 2 capability.
+`--save` persists one analysis locally even while automatic history remains
+disabled (product-spec section 10, docs/history-contract.md, and ADR 0004).
+Its observable semantics are locked:
+
+- Persists the completed local envelope: the input as submitted (durable
+  `input_json` retains the plaintext authorized by manual save or enabled
+  automatic history even when the primary canonical output omits it; history
+  show redacts it again unless `--include-input` is given), the terminal
+  result or the canonical check error, typed lifecycle
+  state, and current observation identity. Persistence runs after the
+  projection content is fixed and before the primary output render; the
+  projection then renders the honest `save_state` the store committed.
+- `--save` and `--detach` are mutually exclusive. A detached detection has
+  only an accepted queued/running snapshot, not the completed envelope that
+  `--save` promises, so Clap rejects the combination before credentials,
+  network, or history work (usage error, exit 2).
+- A saved analysis reports `saved_manual`; one written under the contracted
+  automatic gate (`history.enabled = true`) reports `saved_history`; every
+  unsaved analysis stays `ephemeral`. The save-state field is already part
+  of the canonical analysis schema, so no schema-major change occurs.
+- The write is durable per invocation: one run inserts each newly analyzed
+  input exactly once (its local ID is generated for that invocation, so an
+  argument listed twice analyzes twice and rows twice), in invocation order,
+  and the process exits only after the store handle is released, leaving no
+  WAL or shared-memory sidecar behind a closed store.
+- A repeated-file run never drops an envelope: every completed member
+  (succeeded or billable-failed) renders exactly once, in invocation order,
+  with only its own `save_state` changed by the save outcome. A member whose
+  save failed stays in the rendered series with `ephemeral`; a member that
+  saved reports its committed state. One member's store failure changes no
+  other member's envelope content, and every completed member persists to
+  the store before any primary output is written (an early store failure
+  never suppresses the persisted row of a later member that did save).
+- A manual save failure is a canonical `local_history` error: the explicit
+  request could not be honored, so the command fails after the remote result
+  with the exact store error code (for example `insecure_history_permissions`
+  or `history_write_failed`), category-derived exit 7, and every member's
+  envelope keeping the honest save state it actually committed (a member
+  that saved stays `saved_manual`; the unwritten members stay `ephemeral`).
+  An upstream result is never turned into a failure and never dropped
+  silently. When the primary render itself fails (for example a closed
+  stdout), the primary render failure wins: the process reports the render
+  failure (exit 1), never masking it behind the save-failure exit, and this
+  precedence binds inside one outcome chain: after a primary render has
+  already failed, attaching the post-primary save failure can never
+  overwrite the general render-failure exit 1 with the save failure's
+  category-derived exit 7 on any error surface (JSON or text); the exit 7
+  applies only when the primary output honestly rendered (or was written
+  successfully) first.
+- Automatic history write failures surface exactly once per invocation: one
+  sanitized warning on stderr covers the whole automatic save flow for that
+  command (one detect run, one bulk submission or read, one task read),
+  regardless of how many analyses or bulk children were being saved, and
+  never turns a successful remote analysis into a failure; the affected
+  analyses keep `ephemeral`. An automatic save under a data directory whose
+  owner-only protection cannot be established or verified follows the same
+  one-warning rule. Explicit `--save` in that situation fails with
+  `insecure_history_permissions` and the process does not open or create the
+  database. Existing or raced terminal symbolic-link/reparse aliases at the
+  database WAL and shared-memory sidecar names inside that protected history
+  directory fail closed without mutating their targets. On Windows, pinned
+  no-follow sidecar handles exclude rename and deletion for the SQLite
+  connection lifetime and release immediately before SQLite closes. SQLite's
+  already-open sidecar handles also exclude delete sharing, preserving object
+  identity through that sequential handoff and final cleanup. This boundary
+  assumes the already-required owner-only history directory; it does not claim
+  protection from arbitrary operations by the same owner or from pre-existing
+  hard links (docs/history-contract.md).
+- When automatic history is disabled and no explicit `--save` is given, the
+  process does not open or create the history directory or database at all.
+- When automatic history is enabled, `detect --detach` likewise leaves its
+  accepted queued/running snapshot ephemeral and does not open or create the
+  history directory or database. It emits no history warning because no
+  persistence was attempted. The same rule applies to resumed task reads:
+  automatic history persists `task status` and `task wait` observations only
+  after the canonical analysis is terminal (`succeeded`, `failed`, or
+  `partial`). A queued or running `task status` snapshot remains ephemeral,
+  does not open history, and emits no history warning. `task wait` persists
+  only the terminal observation it returns. Manual `detect --save` semantics
+  are unchanged.
+
+`--save` exists only where the normative grammar lists it: the analysis
+commands (`detect`, and the planned `plagiarism`/`analyze` on their phase).
+The bulk and task surfaces carry no `--save`; their completed work persists
+only under the `history.enabled = true` automatic gate. There is no
+`history save` command: the section 14.5 grammar is closed, so that spelling
+is rejected as an unknown argument (Clap usage error, exit 2) before any
+billable work, exactly as any other unknown flag is.
+
+Retried and resumed work never duplicates rows: persistence keys on the local
+`anl_` identity generated for one invocation, a bulk child keys on its
+`(bulk_id, bulk_index)` pair, and observation updates for one check upsert
+the single `upstream_tasks` row keyed by `(analysis_id, check_kind)`
+(docs/history-contract.md schema v1). No API keys, auth headers, raw response
+bodies, or extra diagnostics are persisted; the stored JSON columns carry
+exactly the canonical schema-major-1 envelopes plus the contracted search
+payload (input text when included or available locally, filename, result
+headline, source URLs), nothing else.
+
+The durable row the store keeps and the envelope output of any one read are
+distinct layers, and their identities are never conflated:
+
+- Output identity. Every emission of one analysis or bulk collection keeps
+  the section 4.6 fresh-read identity: a read generates its envelope `anl_`
+  or `bulk_` identity fresh for that invocation, because with no retained
+  authorship record the read cannot claim the original submission's local
+  identity, and `submission_outcome` on a resumed emission stays `accepted`
+  exactly as section 4.6 locks.
+- Stored-row identity. One remote operation owns at most one stored row,
+  reconciled by the observed upstream identity: repeated `task status` or
+  `task wait` reads of one upstream task refresh the one analysis row keyed
+  by that task identity, and every `bulk submit`, `bulk submit --wait`,
+  `bulk status`, or `bulk wait` of one upstream bulk job refreshes the one
+  `bulk_collections` row keyed by `upstream_bulk_id` together with its
+  children (keyed by their `(bulk_id, bulk_index)` membership) and
+  observation rows, atomically and without duplicates. A first observation
+  inserts the row with the fresh `anl_` or `bulk_` identity minted for that
+  read. Output renders the fresh-read identity per section 4.6; persistence
+  reconciles onto the stored row without fabricating outbound save state.
+  The fresh `task status`/`task wait` emission itself carries the read's own
+  fresh-read identity and the read's own save outcome: it reports
+  `saved_history` when this observation persisted, and `ephemeral` when it
+  did not (automatic history disabled, or a warned automatic failure). It
+  never claims the prior row's `saved_manual` state, because this read did
+  not perform a manual save.
+- Atomic, database-enforced uniqueness. The reconciliation above is one
+  `HistoryStore`-owned atomic unit (docs/history-contract.md): the
+  prior-row lookup, the merge, and the insert-or-refresh commit inside one
+  immediate SQLite write transaction, and the schema v1 uniqueness
+  (`bulk_collections.upstream_bulk_id UNIQUE`, and `upstream_tasks`
+  `UNIQUE (check_kind, upstream_task_id)`) enforces the one-row rule at
+  the database. Two Pangram CLI processes observing the same upstream
+  task or bulk job concurrently therefore serialize on the write lock
+  and converge on exactly one stored row with its children and
+  observation rows exactly once; a conflicting write rolls its whole
+  batch back rather than duplicating a durable row. The automatic-history
+  one-warning rule binds a whole invocation across its phases (section
+  14.2 below): one bulk command in which both the observed-children read
+  and the store write fail still emits exactly one `warning:` line.
+  Exact-v1 validation includes the complete SQLite index semantics for
+  every primary-key, unique-identity, and named index: expected
+  uniqueness and origin, `partial = 0`, and only the contracted ordered
+  `key = 1` columns with `BINARY` collation and the contracted sort
+  direction. Partial, expression, extra-key, wrong-origin, wrong-direction,
+  `NOCASE`, or custom-collation near misses fail before mutation as
+  `history_corrupt`, preserving the database bytes.
+  The probe also compares the complete deterministic `sqlite_master.sql`
+  catalog with the catalog produced by executing the compiled schema-v1 body
+  in an isolated in-memory connection to the same bundled SQLite engine.
+  Comparison normalizes only SQL keyword case, insignificant whitespace and
+  comments, optional trailing semicolons, and equivalent quoting of the exact
+  contracted identifiers. It does not erase semantic tokens. Hidden
+  `MATCH`, `DEFERRABLE` / `INITIALLY`, primary-key or unique-constraint
+  `ON CONFLICT` policies, additional or changed FTS5 options, and any extra,
+  missing, or altered table, index, virtual-table, or SQLite-owned FTS object
+  therefore fail before mutation as `history_corrupt`.
+- Serialized first open. Before classifying or initializing the history
+  schema, every opener takes an `IMMEDIATE` SQLite transaction. From an
+  absent path, one process atomically commits the exact schema v1 together
+  with `user_version = 1`; concurrent processes wait and then validate that
+  committed schema instead of misclassifying the transient zero version as
+  corruption. A protected zero-byte file left before schema creation is
+  initialized through the same path. A `user_version = 0` database that
+  already contains any schema object is incompatible and fails closed before
+  mutation. Interrupted initialization rolls back the whole schema unit and
+  never exposes a partial v1 catalog.
+- Durable authorship invariance. An observation-based reconciliation
+  refresh moves only `status`, `updated_at`, terminal JSON bodies, and a
+  terminal-observed `completed_at`. It never overwrites the stored row's
+  original `submission_outcome` (a locally authored `terminal` row stays
+  `terminal`; it is never rewritten to the observation's `accepted`), never
+  rewrites `save_state`, and never discards existing locally stored content
+  (`input_json`, input text, filename, or search payload) when the
+  observation carries less local information than the stored row already
+  holds. A non-terminal refresh also never erases an attested terminal
+  body. A refresh carrying neither `result_json` nor `error_json` preserves
+  both stored body columns even when it carries `completed_at`; a result
+  replaces the stored result and clears a stale error, while an error
+  replaces the stored error and clears a stale result. A refresh carrying
+  terminal result metadata replaces an older search headline and source URL
+  payload when that newer observation supplies those fields; an absent
+  incoming field keeps the durable value. Input text and filename remain
+  durable-authorship fields: an observation may fill them only when the row
+  has none and can never erase or replace locally held input provenance.
+  Every typed terminal or observation update first verifies that the target
+  owns exactly one synchronized, well-typed FTS payload row. A missing,
+  duplicate, or malformed payload fails closed as `history_corrupt` before
+  the typed row changes, and the transaction rolls back without mutation.
+  A refresh carrying
+  both body branches is invalid and the atomic reconciliation fails closed
+  as `history_write_failed`. `completed_at` coalesces independently and can
+  never, by itself, erase a terminal result or check error. These same rules
+  bind standalone refresh, membership refresh, and task-key adoption.
+  A standalone task refresh that selects a row through one incoming task
+  key must also compare every other incoming key with all evidence already
+  owned by that row before mutation: a missing check kind may be added, the
+  same kind and ID may refresh, but a different ID for an already-owned
+  check kind fails closed and rolls back. Omitted existing kinds remain
+  untouched. The same invariant holds under concurrent refreshes because
+  lookup, comparison, and mutation share the immediate transaction.
+- Accepted bulk children are honest at submission (section 9): an item the
+  HTTP 202 acceptance attests with an upstream `task_id` persists as
+  `accepted` through the same fresh-read-identity rule of section 4.6 (the
+  task ID is real remote identity), with both the accepted task identity
+  and the observed upstream bulk identity recorded in evidence and one
+  `upstream_tasks` observation row per attested check; an item the
+  acceptance reports as failed persists as a terminal-failed child with
+  its canonical check error and the accepted upstream bulk identity (so
+  the child stays input-carrying and honestly outcome-bearing without
+  fabricating a task identity); an item the acceptance attests with no
+  task identity at all stays `not_submitted` and queued rather than
+  fabricating an identity. A `bulk submit` without `--wait` persists
+  exactly this acceptance snapshot (it never fabricates all-queued or
+  all-`not_submitted` children over an acceptance that already attests
+  task IDs or immediate failures). A later `bulk submit --wait`,
+  `bulk status`, or `bulk wait` observation refreshes those same stored
+  children in place: the read fetches the documented results window,
+  rebuilds each child from its observed state without discarding the
+  result document's attested input descriptor, upstream version, task
+  identity, or last stage. Running and failed result-page items may expose the
+  provider's diagnostic `stage` as canonical `last_stage`, but only after it
+  has been reduced to a bounded, single-line, printable ASCII, non-empty
+  value. Queued and succeeded items always omit `last_stage`. Domain
+  construction, JSON deserialization, and the generated output schema reject
+  an empty or unsanitized stage and reject `last_stage` on either inapplicable
+  state. Persistence copies a valid value into the child's
+  observation evidence when a task identity exists. The read reconciles onto the
+  stored `(bulk_id, bulk_index)` membership (the collection deduped by
+  `upstream_bulk_id`) so repeated reads never duplicate a collection or a
+  child and locally held metadata (identity, `submission_outcome`,
+  `save_state`, caller ID, input payload, and the original creation time)
+  is preserved exactly as first recorded; only observation fields move. A
+  held local JSONL plan may add its truthful `file` origin, basename, and
+  locally held plaintext to the child, but never replaces the result
+  document's attested hash/count evidence or upstream provenance.
+- Task/bulk reconciliation is evidence-driven (docs/history-contract.md
+  task-first/bulk-second rule). A standalone `task status`/`task wait`
+  read may already have reconciled the one stored row for a task identity
+  a later bulk read also attests for one of its children. The reverse
+  correlation exists only after a bulk observation has attached that same
+  attested task key to the membership child: a standalone task read has no
+  bulk membership or other documented correlation evidence, so it remains
+  a separate row while the child has no attested task key and must never
+  fabricate a match from status, order, content, or timing. After a later
+  bulk refresh attaches the task key, subsequent standalone reads reconcile
+  onto that membership row. Inside the one write transaction the store resolves each
+  bulk child by its membership AND by every attested
+  `(check_kind, upstream_task_id)` key together, then: **reuses** the one
+  existing durable row when the membership and the task keys agree (or the
+  task keys resolve one row and the membership is unoccupied), keeping its
+  first-recorded identity, authorship, `save_state`, local input and FTS
+  payload, and creation time, adding the `(bulk_id, bulk_index)`
+  membership to a previously standalone row, and moving only observation
+  fields; leaves a task-less membership child and an uncorrelated direct
+  task read separate; and **fails closed** with `history_corrupt` and a full
+  atomic batch rollback when a later bulk observation would assign the
+  direct row's task identity to that distinct task-less membership. This
+  ambiguous provenance must never transfer, delete, merge, or rekey either
+  row's evidence. Other candidate conflicts fail closed with
+  `history_write_failed` and a full atomic batch rollback (the task keys resolve more than
+  one distinct row, the task-key row differs from the membership row, or
+  the membership row already attests a different overlapping set of task
+  keys, including another task ID for the same check kind, or one candidate
+  itself attests two IDs for one check kind). The store never deletes,
+  merges, or rekeys an unrelated row to force a fit, and no duplicate
+  analysis or observation row ever persists.
+
+First enablement of durable plaintext storage is always acknowledged
+(ADR 0004). The transition of `history.enabled` from unset or `false` to
+`true` prints exactly one direct plaintext warning on stderr: that history
+stores submitted content and results unencrypted in the local data
+directory. The warning names the storage location class and the plaintext
+fact only; it never echoes submitted content, results, or credentials. It
+is an advisory stderr note, so the enabling command still exits 0 and
+stdout stays the canonical machine-readable envelope (noninteractive
+automation is never broken or prompted). Re-confirming an already-enabled
+`true` (idempotent re-set) prints nothing; disabling (`false`) prints nothing.
 
 Rules:
 
@@ -1227,7 +1516,8 @@ pangram task status ID
 pangram task wait ID [--timeout DURATION] [--progress ...]
 ```
 
-`ID` may be a local analysis ID when history resolves it or a Pangram task ID.
+`ID` is either an opaque non-empty upstream Pangram task ID or a canonical
+saved local `anl_` UUIDv7 ID resolved under section 4.6.
 
 ### 14.5 History
 
@@ -1240,6 +1530,122 @@ pangram history clear [--yes]
 pangram history export [--format jsonl|markdown] [--redact-content]
 pangram history rerun ID [--format FORMAT] [--progress ...]
 ```
+
+`history list` and `history search` return an ordered
+`AnalysisSummaryPage`, not fabricated `Analysis` values. Each summary contains
+only the stored local analysis ID, parent status, ordered check kinds,
+save-state, input kind, optional display name, and creation timestamp.
+`history show` is the only stage-1 read that returns one complete canonical
+analysis.
+
+Before list or search returns summaries, the store validates every
+authoritative check row in the same SQLite snapshot as the summary query. The
+check indexes and kinds must form the complete canonical order declared by
+the parent `check_count`; every status and kind must be known; queued/running
+rows have no body, succeeded rows have exactly one kind-correct result, and
+failed rows have exactly one canonical error. The parent status must equal the
+status derived from those complete rows. Missing, extra, malformed,
+misordered, or inconsistent rows fail closed as `history_corrupt`. Validation
+uses a bounded set query over the snapshot, not one query per summary.
+
+History reads do not consult `history.enabled`: disabling automatic writes
+stops future automatic retention but never hides records already stored.
+When the history database does not exist, list and search return an empty
+summary page and clear succeeds as an empty mutation without creating a
+database. Show and delete of an absent record fail with
+`history_unavailable`, the existing canonical mapping for a missing local
+history row. Reads never create a missing database.
+
+`--limit` is a strict positive ASCII decimal in `1..=1000`, defaults to 50,
+and is validated before configuration or database access. `STATUS` is one of
+`queued|running|succeeded|failed|partial`; `CHECK` is one of
+`ai_detection|plagiarism`. Results are ordered by `created_at` descending and
+then local analysis ID ascending, so timestamp ties are deterministic.
+
+`history search QUERY` treats QUERY as literal user text, tokenizes it with
+the FTS5 `unicode61` tokenizer used by the index itself, quotes and
+escapes every token, and joins the resulting terms with `AND`. Raw FTS5
+operators, column selectors, quotes, parentheses, prefix markers, and other
+syntax supplied by the caller never acquire query semantics. A query with no
+searchable token returns an empty page.
+
+`history show` redacts retained plaintext by default. `--include-input`
+restores the stored `text`, `path`, and `extracted_text` input fields; all
+other canonical fields and every ordered check remain present. Stored JSON is
+validated once on read; malformed input, check, result, or error values fail
+closed as `history_corrupt`. The parent row retains the expected check
+cardinality, so deleting one row from a two-check analysis is corruption
+rather than a valid one-check projection.
+An absent optional input descriptor is omitted from canonical output; it is
+never encoded as JSON `null`. The typed input discriminator and hash columns
+must agree with the canonical input JSON, and retained text must reproduce its
+recorded SHA-256, UTF-8 byte count, and Unicode-whitespace word count.
+Every task-evidence row must match exactly one authoritative check of the same
+kind; unmatched or malformed task evidence is `history_corrupt`. Bulk
+membership is valid only when both the collection ID and a nonnegative index
+within that collection's declared item range are present. A partial or
+out-of-range membership fails closed on full and summary reads.
+The complete reconstruction uses one deferred SQLite read snapshot for the
+parent, its one synchronized FTS row, ordered checks, task evidence, and bulk
+provenance. Export uses the same snapshot rule across its complete result.
+Normal WAL writers remain unblocked. The canonical
+`provenance.submitted_at` value is read from its independent nullable stored
+column exactly; it is never synthesized from `created_at`, and resumed
+observations without local authorship keep it absent.
+
+Before list or search returns any page, the same read snapshot proves that
+every analysis has exactly one well-typed FTS row and that no orphan FTS row
+exists. Missing, duplicate, or malformed search state fails closed as
+`history_corrupt` without mutation.
+
+Delete and clear require `--yes` unless stdin, stdout, and stderr are all
+TTYs. A noninteractive or CI invocation without `--yes` fails as a usage
+error before configuration resolution or database access. An interactive
+decline leaves the database unchanged and exits 130. A confirmed mutation
+first certifies every collection, analysis, authoritative check, task,
+membership, lineage link, input/provenance value, lifecycle timestamp, and
+exact FTS projection in the mutation transaction's snapshot. Any logical
+corruption fails closed as `history_corrupt`: no row changes and no
+post-commit checkpoint runs. A valid store then updates analyses, check rows,
+task evidence, bulk relationships, and FTS in one transaction and follows the
+WAL-truncation rule in the history contract.
+
+Deleting an analysis clears any dependent `retry_of` or `rerun_of` links
+atomically while preserving those dependent analyses, their authoritative
+checks, task evidence, bulk membership, and synchronized FTS rows. Schema v1
+therefore declares both lineage foreign keys `ON DELETE SET NULL`; there is no
+migration because Phase 4 has not shipped.
+
+Stage 2 export redaction removes submitted/extracted text, original paths,
+segment text, plagiarism matched text, and public dashboard links while
+retaining hashes, byte/word counts, filenames, segment classifications,
+numeric scores, offsets/counts and humanizer evidence, states, timestamps,
+and lineage. Each valid HTTP(S) plagiarism source URL is reduced to only its
+normalized hostname: userinfo, port, path, query, and fragment are discarded.
+Invalid URLs, non-HTTP(S) schemes, and hostless values are omitted rather than
+copied or partially sanitized. Stage 2 rerun
+requires retained plaintext, creates a fresh analysis with `rerun_of`, resets
+public-link creation, and follows the effective automatic-history policy:
+it is saved automatically only when `history.enabled = true`; an explicit
+rerun does not imply manual `--save`.
+Before credential resolution or any network operation, rerun reconstructs the
+retained text through the canonical text-input validator and verifies its
+input kind, SHA-256, UTF-8 byte count, and Unicode-whitespace word count.
+Corrupt or no-longer-resolvable local input fails locally and sends no POST.
+
+Export is a raw primary stdout surface. A stdout write or flush failure
+(including a closed pipe or full device) is therefore a primary output
+failure and exits 1. It is never classified as `history_write_failed` (exit
+7), and after any raw export byte may have been written the process emits no
+secondary JSON or text error envelope that could corrupt or misdescribe the
+stream.
+
+`history rerun` uses the shared SIGINT bridge and reset discipline used by
+`detect` and task waits. An interrupt before a billable send reports the
+canonical local interruption. Once the POST may have been issued, interruption
+exits 130 and reports the canonical ambiguous/reconciliation identity without
+replaying the POST. Primary-output write failure still takes precedence over
+the interruption exit.
 
 Export writes stdout. There is no general output-path flag.
 

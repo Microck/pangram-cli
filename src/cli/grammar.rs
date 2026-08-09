@@ -296,10 +296,10 @@ const DETECT_ARGUMENTS: &[ArgumentSpec] = &[
     flag("--detach", Phase::TextDetection).available(),
     option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::TextDetection).available(),
     flag("--include-input", Phase::TextDetection).available(),
-    // `--save` stays in the normative grammar (Phase 4 history) but is not an
-    // available Phase 2 capability: the compiled runtime does not advertise it
-    // and rejects it before any billable work.
-    flag("--save", Phase::History),
+    // Phase 4 Packet C: the contracted manual save path for completed
+    // detection work. Bulk/task surfaces have no `--save`; they persist only
+    // under the `history.enabled = true` automatic gate.
+    flag("--save", Phase::History).available(),
     flag("--public-link", Phase::TextDetection).available(),
     option("--timeout", "DURATION", &[], false, false, Phase::TextDetection).available(),
     option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::TextDetection).available(),
@@ -373,48 +373,48 @@ const BULK_RESULTS_ARGUMENTS: &[ArgumentSpec] = &[
 
 #[rustfmt::skip]
 const HISTORY_LIST_ARGUMENTS: &[ArgumentSpec] = &[
-    option("--status", "STATUS", &[], false, false, Phase::History),
-    option("--check", "CHECK", &[], false, false, Phase::History),
-    option("--limit", "N", &[], false, false, Phase::History),
+    option("--status", "STATUS", &["queued", "running", "succeeded", "failed", "partial"], false, false, Phase::History).available(),
+    option("--check", "CHECK", &["ai_detection", "plagiarism"], false, false, Phase::History).available(),
+    option("--limit", "N", &[], false, false, Phase::History).available(),
 ];
 
 #[rustfmt::skip]
 const HISTORY_SHOW_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("ID", &[], true, false, Phase::History),
-    flag("--include-input", Phase::History),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::History),
+    positional("ID", &[], true, false, Phase::History).available(),
+    flag("--include-input", Phase::History).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::History).available(),
 ];
 
 #[rustfmt::skip]
 const HISTORY_SEARCH_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("QUERY", &[], true, false, Phase::History),
-    option("--status", "STATUS", &[], false, false, Phase::History),
-    option("--check", "CHECK", &[], false, false, Phase::History),
-    option("--limit", "N", &[], false, false, Phase::History),
+    positional("QUERY", &[], true, false, Phase::History).available(),
+    option("--status", "STATUS", &["queued", "running", "succeeded", "failed", "partial"], false, false, Phase::History).available(),
+    option("--check", "CHECK", &["ai_detection", "plagiarism"], false, false, Phase::History).available(),
+    option("--limit", "N", &[], false, false, Phase::History).available(),
 ];
 
 #[rustfmt::skip]
 const HISTORY_DELETE_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("ID", &[], true, false, Phase::History),
-    flag("--yes", Phase::History),
+    positional("ID", &[], true, false, Phase::History).available(),
+    flag("--yes", Phase::History).available(),
 ];
 
 #[rustfmt::skip]
 const HISTORY_CLEAR_ARGUMENTS: &[ArgumentSpec] = &[
-    flag("--yes", Phase::History),
+    flag("--yes", Phase::History).available(),
 ];
 
 #[rustfmt::skip]
 const HISTORY_EXPORT_ARGUMENTS: &[ArgumentSpec] = &[
-    option("--format", "FORMAT", &["jsonl", "markdown"], false, false, Phase::History),
-    flag("--redact-content", Phase::History),
+    option("--format", "FORMAT", &["jsonl", "markdown"], false, false, Phase::History).available(),
+    flag("--redact-content", Phase::History).available(),
 ];
 
 #[rustfmt::skip]
 const HISTORY_RERUN_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("ID", &[], true, false, Phase::History),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::History),
-    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::History),
+    positional("ID", &[], true, false, Phase::History).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::History).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::History).available(),
 ];
 
 const API_KEY_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
@@ -525,14 +525,14 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         available_command(&["task"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
         available_command(&["task", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),
         available_command(&["task", "wait"], CommandKind::Command, WAIT_ARGUMENTS, &[], Phase::BulkAndTasks),
-        planned_command(&["history"], CommandKind::Namespace, &[], &[], Phase::History),
-        planned_command(&["history", "list"], CommandKind::Command, HISTORY_LIST_ARGUMENTS, &[], Phase::History),
-        planned_command(&["history", "show"], CommandKind::Command, HISTORY_SHOW_ARGUMENTS, &[], Phase::History),
-        planned_command(&["history", "search"], CommandKind::Command, HISTORY_SEARCH_ARGUMENTS, &[], Phase::History),
-        planned_command(&["history", "delete"], CommandKind::Command, HISTORY_DELETE_ARGUMENTS, &[], Phase::History),
-        planned_command(&["history", "clear"], CommandKind::Command, HISTORY_CLEAR_ARGUMENTS, &[], Phase::History),
-        planned_command(&["history", "export"], CommandKind::Command, HISTORY_EXPORT_ARGUMENTS, &[], Phase::History),
-        planned_command(&["history", "rerun"], CommandKind::Command, HISTORY_RERUN_ARGUMENTS, &[], Phase::History),
+        available_command(&["history"], CommandKind::Namespace, &[], &[], Phase::History),
+        available_command(&["history", "list"], CommandKind::Command, HISTORY_LIST_ARGUMENTS, &[], Phase::History),
+        available_command(&["history", "show"], CommandKind::Command, HISTORY_SHOW_ARGUMENTS, &[], Phase::History),
+        available_command(&["history", "search"], CommandKind::Command, HISTORY_SEARCH_ARGUMENTS, &[], Phase::History),
+        available_command(&["history", "delete"], CommandKind::Command, HISTORY_DELETE_ARGUMENTS, &[], Phase::History),
+        available_command(&["history", "clear"], CommandKind::Command, HISTORY_CLEAR_ARGUMENTS, &[], Phase::History),
+        available_command(&["history", "export"], CommandKind::Command, HISTORY_EXPORT_ARGUMENTS, &[], Phase::History),
+        available_command(&["history", "rerun"], CommandKind::Command, HISTORY_RERUN_ARGUMENTS, &[], Phase::History),
         available_command(&["auth"], CommandKind::Command, &[], &[], Phase::LocalSetup),
         available_command(&["auth", "set"], CommandKind::Command, AUTH_SET_ARGUMENTS, API_KEY_GROUP, Phase::LocalSetup),
         available_command(&["auth", "status"], CommandKind::Command, &[], &[], Phase::LocalSetup),
