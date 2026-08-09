@@ -330,12 +330,23 @@ pub(crate) fn execute(
     let (members, save_failure) =
         save::persist_analyses(members, &retained_texts, plan.history_gate, service);
     let mut outcome = success_outcome(output, started_at, members);
-    if let Some(error) = save_failure {
+    let required_save_exit = save_failure.and_then(|error| {
         outcome.attach_failure(command, output, started_at, error);
-    }
+        // A render failure owns exit 1. Otherwise retain the exact manual-save
+        // category so a later terminal flow can remain visible without
+        // replacing the caller's unfulfilled explicit save requirement.
+        outcome.primary_ok.then_some(outcome.exit_code)
+    });
     if let Some(flow) = terminal {
         match flow {
-            Flow::Failed(error) => outcome.attach_failure(command, output, started_at, error),
+            Flow::Failed(error) => {
+                outcome.attach_failure(command, output, started_at, error);
+                if outcome.primary_ok {
+                    if let Some(exit_code) = required_save_exit {
+                        outcome.exit_code = exit_code;
+                    }
+                }
+            }
             Flow::Interrupted(error, note) => {
                 render::note_stderr_raw(&note);
                 outcome.attach_failure(command, output, started_at, error);

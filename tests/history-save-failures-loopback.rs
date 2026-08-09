@@ -144,6 +144,75 @@ async fn repeated_file_manual_save_failure_preserves_the_ordered_tail() {
     fixture.shutdown().await;
 }
 
+/// An explicit save is a caller requirement, so its exact local failure keeps
+/// precedence even when the next input is rejected before billable work. Both
+/// failures remain visible in order; only the later category must not replace
+/// the unfulfilled save's exit 7.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_save_failure_keeps_precedence_over_a_later_rejection() {
+    let first_text = "First completed member whose required save fails";
+    let second_text = "Second member rejected before billable work begins";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": "task-prefix"})));
+    fixture.on_poll(Step::Json(harness::fixture::pangram4_success(first_text)));
+    fixture.on_submit(Step::Status(401, None, None));
+
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    std::fs::write(&first, first_text).unwrap();
+    std::fs::write(&second, second_text).unwrap();
+
+    let isolated = Isolated::new();
+    poison_data_dir(&isolated);
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "detect",
+            "--save",
+            "--file",
+            first.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run required save failure followed by an upstream rejection");
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "the unfulfilled explicit save keeps its local-history exit"
+    );
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "completed member, save failure, then terminal rejection"
+    );
+    let completed: Value = serde_json::from_str(lines[0]).unwrap();
+    let save_failure: Value = serde_json::from_str(lines[1]).unwrap();
+    let rejection: Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(completed["data"]["status"], "succeeded");
+    assert_eq!(completed["data"]["save_state"], "ephemeral");
+    assert_eq!(
+        save_failure["error"]["code"],
+        "insecure_history_permissions"
+    );
+    assert_eq!(save_failure["error"]["category"], "local_history");
+    assert_eq!(rejection["error"]["code"], "invalid_api_key");
+    assert!(stderr_text(&output).is_empty());
+    assert_no_leak(&output);
+    assert!(!isolated.database_path().exists());
+    assert_eq!(
+        fixture.post_count(),
+        2,
+        "the rejected request is not replayed"
+    );
+    fixture.shutdown().await;
+}
+
 // ---------------------------------------------------- automatic failures --
 
 /// An automatic history failure (an unprotectable data directory under the
