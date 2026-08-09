@@ -161,16 +161,13 @@ fn prepare_task_identity(
     ),
     DetectOutcome,
 > {
-    if !raw.starts_with("anl_") {
+    let Ok(local_id) = raw.parse::<AnalysisId>() else {
         let task_id = parse_upstream_task_id(raw)
             .map_err(|error| detect::failure_outcome(resolved, output, started, error))?;
         let (analyzer, service) = prepare(resolved, root_matches, output, started)?;
         return Ok((task_id, analyzer, service));
-    }
+    };
 
-    let local_id = raw.parse::<AnalysisId>().map_err(|_| {
-        detect::failure_outcome(resolved, output, started, local_task_unresolvable())
-    })?;
     let service = prepare_service(resolved, root_matches, output, started)?;
     let store = HistoryStore::open_existing(service.paths().data_dir())
         .map_err(|error| {

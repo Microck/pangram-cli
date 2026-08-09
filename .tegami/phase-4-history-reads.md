@@ -23,6 +23,8 @@ possibly partial raw stream.
 addition to upstream task IDs. Local resolution validates existing SQLite
 history before credentials or network access, works when automatic history is
 disabled, and fails locally without creating missing storage when the record
-cannot resolve exactly one task. History rerun now applies the same canonical
-text eligibility check as fresh detection, including Unicode-whitespace-only
-input rejection before credentials or billable work.
+cannot resolve exactly one task. Only a complete canonical local `anl_` UUIDv7
+ID enters that lookup; an opaque upstream task ID that starts with `anl_`
+passes through unchanged. History rerun now applies the same canonical text
+eligibility check as fresh detection, including Unicode-whitespace-only input
+rejection before credentials or billable work.

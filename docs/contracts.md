@@ -418,15 +418,17 @@ A command that observes a Pangram operation by its explicit upstream ID
 (`task status`, `task wait`, and every bulk status, wait, items, and results
 read of a job not submitted in the same invocation) reconciles a remote
 record it did not author. `task status` and `task wait` also accept a saved
-local `anl_` ID. Before credential resolution or network work, that spelling
-opens only an existing history database, validates the complete canonical
-record and task evidence, and resolves exactly one AI-detection upstream task
-ID. A malformed or absent local ID, a record with no applicable task, or
-ambiguous applicable task evidence is `local_task_unresolvable`; malformed
-stored canonical evidence retains its specific local-history error. Resolution
-never creates a missing history database and does not consult
+local `anl_` ID. Only a complete canonical local UUIDv7 ID selects this path;
+every other non-empty spelling is an opaque upstream ID and bypasses local
+lookup unchanged. Before credential resolution or network work, a canonical
+local ID opens only an existing history database, validates the complete
+canonical record and task evidence, and resolves exactly one AI-detection
+upstream task ID. An absent canonical local ID, a record with no applicable
+task, or ambiguous applicable task evidence is `local_task_unresolvable`;
+malformed stored canonical evidence retains its specific local-history error.
+Resolution never creates a missing history database and does not consult
 `history.enabled`, so disabling future automatic writes does not hide a saved
-task. An upstream ID bypasses this local lookup unchanged.
+task.
 
 With local history disabled, a process observing an explicit upstream ID
 retains no authorship record of earlier submissions, so the canonical analysis

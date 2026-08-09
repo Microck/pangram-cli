@@ -195,7 +195,7 @@ async fn local_wait_resolves_saved_task_through_nonterminal_to_terminal() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn malformed_missing_and_absent_local_ids_fail_before_auth_or_network() {
+async fn missing_and_absent_local_ids_fail_before_auth_or_network() {
     let fixture = ProtocolFixture::start().await;
 
     let missing = Isolated::new();
@@ -207,15 +207,6 @@ async fn malformed_missing_and_absent_local_ids_fail_before_auth_or_network() {
         .expect("missing database");
     assert_local_error(&output, "local_task_unresolvable");
     assert!(!missing.history_directory().exists());
-
-    let malformed = Isolated::new();
-    let output = malformed
-        .command(fixture.base_url())
-        .env_remove("PANGRAM_API_KEY")
-        .args(["task", "wait", "anl_not-a-canonical-id"])
-        .output()
-        .expect("malformed local ID");
-    assert_local_error(&output, "local_task_unresolvable");
 
     let absent = Isolated::new();
     drop(HistoryStore::open(&absent.data).expect("create empty real history"));
@@ -331,17 +322,26 @@ async fn local_record_without_task_evidence_is_unresolvable_without_a_request() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn opaque_upstream_task_id_still_bypasses_history_lookup() {
+async fn anl_prefixed_opaque_upstream_task_id_bypasses_history_lookup() {
+    const OPAQUE_UPSTREAM_TASK_ID: &str = "anl_external-task";
+
     let fixture = ProtocolFixture::start().await;
     fixture.on_poll(Step::Json(pangram4_success("upstream regression")));
     let isolated = Isolated::new();
     let output = isolated
         .command(fixture.base_url())
-        .args(["task", "status", TASK_ID])
+        .args(["task", "status", OPAQUE_UPSTREAM_TASK_ID])
         .output()
         .expect("status by upstream ID");
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(fixture.get_count(), 1);
+    let requests = fixture.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].path,
+        format!("/task/{OPAQUE_UPSTREAM_TASK_ID}"),
+        "the complete opaque task ID reaches the upstream route unchanged"
+    );
     assert!(!isolated.history_directory().exists());
     fixture.shutdown().await;
 }
