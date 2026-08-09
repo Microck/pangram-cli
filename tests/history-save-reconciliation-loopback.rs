@@ -463,6 +463,90 @@ async fn bulk_child_read_failure_leaves_existing_collection_untouched() {
     fixture.shutdown().await;
 }
 
+/// A parsed HTTP 202 may reject every item immediately. That acceptance is
+/// already terminal, so automatic history must persist the failed collection
+/// and both failed children with a completion timestamp instead of rolling the
+/// certified unit back as an incomplete terminal aggregate.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn all_failed_bulk_acceptance_persists_as_a_complete_terminal_collection() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_submit(Step::Status(
+        202,
+        None,
+        Some(serde_json::json!({
+            "bulk_id": "blk_all_failed_acceptance",
+            "status": "queued",
+            "total_items": 2,
+            "accepted_items": [],
+            "failed_items": [
+                {"index": 0, "id": "row-000", "task_id": null,
+                 "stage": "STAGE_FAILED", "error": "Text must contain at least one valid token"},
+                {"index": 1, "id": "row-001", "task_id": null,
+                 "stage": "STAGE_FAILED", "error": "Text must contain at least one valid token"}
+            ]
+        })),
+    ));
+    let isolated = Isolated::new();
+    isolated.enable_history();
+    let root = tempfile::tempdir().unwrap();
+    let items = root.path().join("all-failed-items.jsonl");
+    std::fs::write(
+        &items,
+        [
+            serde_json::json!({"id": "row-000", "text": "first invalid item"}).to_string(),
+            serde_json::json!({"id": "row-001", "text": "second invalid item"}).to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    let output = isolated
+        .command(fixture.base_url())
+        .args([
+            "bulk",
+            "submit",
+            items.to_str().unwrap(),
+            "--max-billable-units",
+            "5",
+        ])
+        .output()
+        .expect("run the all-failed accepted submission");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stderr.is_empty(),
+        "a valid terminal acceptance must save without warning: {}",
+        stderr_text(&output)
+    );
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["data"]["status"], "failed");
+    assert!(envelope["data"]["completed_at"].is_string());
+    assert_no_leak(&output);
+
+    let connection = isolated.open_database();
+    let collections = bulk_collection_rows(&connection);
+    assert_eq!(collections.len(), 1);
+    assert_eq!(collections[0].2, "failed");
+    assert_eq!(collections[0].3, (2, 0, 0, 2));
+    let completed_at: Option<String> = connection
+        .query_row(
+            "SELECT completed_at FROM bulk_collections WHERE upstream_bulk_id = ?1",
+            ["blk_all_failed_acceptance"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        completed_at.is_some(),
+        "terminal storage needs completed_at"
+    );
+    let rows = analyses_rows(&connection);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.1 == "failed"));
+    assert!(task_rows(&connection).is_empty());
+    fixture.shutdown().await;
+}
+
 /// A mixed acceptance with an armed automatic gate remains truthful when
 /// the store is blocked: the JSONL submission carries two items (one
 /// accepted with an attested task identity, one failed through immediate

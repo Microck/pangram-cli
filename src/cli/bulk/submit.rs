@@ -8,7 +8,7 @@ use clap::ArgMatches;
 use crate::analysis::{BulkAnalysisRequest, StopObserving, WaitOptions};
 use crate::cli::StreamTty;
 use crate::cli::detect::{self, DetectOutcome, GlobalFlags, ProgressMode};
-use crate::domain::{BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
+use crate::domain::{AnalysisStatus, BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
 use crate::output::{
     CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode, ExitCode, OutputFormat,
     ResolvedCommand,
@@ -378,6 +378,13 @@ fn submit_accepted_outcome(
     let estimated = plan.map(|plan| plan.estimated_billable_units());
     let (status, counters) = running.accepted_snapshot();
     let now = UtcTimestamp::now();
+    // A 202 may immediately reject every item. That accepted snapshot is
+    // already terminal, so its observation time is also its completion time.
+    let completed_at = matches!(
+        status,
+        AnalysisStatus::Succeeded | AnalysisStatus::Failed | AnalysisStatus::Partial
+    )
+    .then_some(now);
     let collection = match BulkCollection::new(
         identity.bulk_id,
         identity.upstream_bulk_id.clone(),
@@ -387,7 +394,7 @@ fn submit_accepted_outcome(
         estimated,
         now,
         now,
-        None,
+        completed_at,
     ) {
         Ok(collection) => collection,
         Err(_) => {
