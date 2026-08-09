@@ -128,7 +128,7 @@ jobs:
       - name: Run Windows history ACL and reparse integration tests
         run: cargo test --locked --test windows-history-security
       - name: Run Windows history sidecar lifetime tests
-        run: cargo test --locked --lib history::sidecars::
+        run: "cargo test --locked --lib history::sidecars::"
 
   supply-chain:
     name: Supply chain
