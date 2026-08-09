@@ -5,24 +5,57 @@
 //!
 //! Split out of `history-save-reconciliation-loopback.rs` so each suite stays
 //! under the source-size threshold while both exercise the exact same real
-//! store and fixture. This suite locks the latch semantics:
+//! store and fixture. This suite locks the accepted-wait save semantics:
 //! - one failed observed-children read in one bulk invocation emits exactly
 //!   one direct sanitized `warning:` line, never a doubled `note: warning:`,
 //!   and the remote outcome stays truthful (counters and exit preserved)
-//! - one invocation in which BOTH automatic-history phases fail (the
-//!   observed-children read AND the store open/write) still emits exactly
-//!   one `warning:` line: the latch binds across the phases
+//! - observation failure or interruption after HTTP 202 preserves the
+//!   independently certified acceptance unit before reporting the primary
+//!   local outcome
+//! - an acceptance-save failure emits one warning without replacing that
+//!   observation outcome
 
 #![cfg(feature = "dev-tools")]
 
 #[path = "support/history_save_env.rs"]
 mod harness;
 
+#[cfg(unix)]
+use std::process::Stdio;
+
 use harness::fixture::{ProtocolFixture, Step};
 use harness::{
     Isolated, analyses_rows, assert_no_leak, bulk_collection_rows, stderr_text, stdout_envelope,
     task_rows,
 };
+
+#[cfg(unix)]
+fn interrupt(child: &mut std::process::Child) {
+    let pid = i32::try_from(child.id()).expect("child PID fits i32");
+    // SAFETY: `pid` is a live child process and SIGINT is a valid signal.
+    assert_eq!(unsafe { kill(pid, 2) }, 0);
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+fn assert_accepted_unit(isolated: &Isolated, upstream_bulk_id: &str) {
+    let connection = isolated.open_database();
+    let collections = bulk_collection_rows(&connection);
+    assert_eq!(collections.len(), 1);
+    assert_eq!(collections[0].1.as_deref(), Some(upstream_bulk_id));
+    assert_eq!(collections[0].2, "queued");
+    assert_eq!(collections[0].3, (2, 2, 0, 0));
+    let rows = analyses_rows(&connection);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.1 == "queued"));
+    assert!(rows.iter().all(|row| row.2 == "accepted"));
+    assert!(rows.iter().all(|row| row.3 == "saved_history"));
+    assert_eq!(task_rows(&connection).len(), 2);
+}
 
 // ------------------------------------------------------ one-warning latch --
 
@@ -181,21 +214,84 @@ async fn bulk_submit_wait_observation_failure_persists_the_acceptance_unit() {
     );
     assert_no_leak(&output);
 
-    let connection = isolated.open_database();
-    let collections = bulk_collection_rows(&connection);
-    assert_eq!(collections.len(), 1);
-    assert_eq!(
-        collections[0].1.as_deref(),
-        Some("blk_wait_observation_fail")
-    );
-    assert_eq!(collections[0].2, "queued");
-    assert_eq!(collections[0].3, (2, 2, 0, 0));
-    let rows = analyses_rows(&connection);
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| row.1 == "queued"));
-    assert!(rows.iter().all(|row| row.2 == "accepted"));
-    assert!(rows.iter().all(|row| row.3 == "saved_history"));
-    assert_eq!(task_rows(&connection).len(), 2);
+    assert_accepted_unit(&isolated, "blk_wait_observation_fail");
+    fixture.shutdown().await;
+}
+
+/// SIGINT stops only local observation after HTTP 202. The accepted work may
+/// still be billable and remotely running, so automatic history must retain
+/// the certified acceptance unit before the command returns exit 130.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_submit_wait_sigint_persists_the_acceptance_unit() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_submit(Step::Status(
+        202,
+        None,
+        Some(serde_json::json!({
+            "bulk_id": "blk_wait_interrupted",
+            "status": "queued",
+            "total_items": 2,
+            "accepted_items": [
+                {"index": 0, "id": "row-000", "task_id": "task-000"},
+                {"index": 1, "id": "row-001", "task_id": "task-001"}
+            ],
+            "failed_items": []
+        })),
+    ));
+    fixture.on_bulk_status(Step::Json(serde_json::json!({
+        "bulk_id": "blk_wait_interrupted",
+        "status": "running",
+        "total_items": 2,
+        "accepted": 2,
+        "succeeded": 0,
+        "failed": 0,
+        "created_at": "1760000000.0",
+        "completed_at": null
+    })));
+    fixture.on_bulk_status(Step::Hang);
+    let isolated = Isolated::new();
+    isolated.enable_history();
+    let root = tempfile::tempdir().unwrap();
+    let items = root.path().join("interrupted-items.jsonl");
+    std::fs::write(
+        &items,
+        [
+            serde_json::json!({"id": "row-000", "text": "first accepted input"}).to_string(),
+            serde_json::json!({"id": "row-001", "text": "second accepted input"}).to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args([
+            "bulk",
+            "submit",
+            items.to_str().unwrap(),
+            "--max-billable-units",
+            "5",
+            "--wait",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn accepted bulk wait");
+    fixture.wait_for_gets(2).await;
+    interrupt(&mut child);
+    let output = child
+        .wait_with_output()
+        .expect("await interrupted bulk wait");
+
+    assert_eq!(output.status.code(), Some(130));
+    let stderr = stderr_text(&output);
+    assert!(stderr.contains("interrupted"), "{stderr}");
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    assert_no_leak(&output);
+
+    assert_accepted_unit(&isolated, "blk_wait_interrupted");
     fixture.shutdown().await;
 }
 

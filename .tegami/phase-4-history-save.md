@@ -66,10 +66,10 @@ snapshot now saves only with the complete child window retrieved from that
 same observation. If the child read fails, the command keeps the truthful
 remote result, emits one automatic-history warning, and leaves history
 untouched instead of combining terminal counters with queued acceptance
-children. If `bulk submit --wait` observation fails after HTTP 202 acceptance,
-the command first saves the independently certified accepted collection and
-children with their original acceptance timestamp, then returns the honest
-observation failure.
+children. If `bulk submit --wait` observation fails or is interrupted after
+HTTP 202 acceptance, the command first saves the independently certified
+accepted collection and children with their original acceptance timestamp,
+then returns the honest observation outcome.
 
 A stored `user_version = 1` alone no longer opens the history database: the
 store now verifies the exact schema-v1 structure on every open and fails

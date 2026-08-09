@@ -182,6 +182,26 @@ pub(super) fn bulk_submit(
         outcome
     });
     detect::reset_sigint_flag();
+    // Observation failures and interruptions do not invalidate the HTTP 202
+    // acceptance. Preserve that independently certified, potentially billable
+    // unit before returning the primary local outcome.
+    if let Analyzed::Observed {
+        outcome,
+        accepted,
+        accepted_at,
+        ..
+    } = &result
+    {
+        if history_armed && !matches!(outcome, Ok(Ok(_))) {
+            let _ = persist_accepted_snapshot(
+                accepted,
+                source_name.as_deref(),
+                *accepted_at,
+                &service,
+                &mut bulk_warning,
+            );
+        }
+    }
     match result {
         Analyzed::Accepted(running) => {
             submit_accepted_outcome(&running, source_name.as_deref(), &service, output, started)
@@ -209,22 +229,8 @@ pub(super) fn bulk_submit(
         }
         Analyzed::Observed {
             outcome: Ok(Err(failure)),
-            accepted,
-            accepted_at,
             ..
         } => {
-            // The observation error remains the primary outcome. Acceptance
-            // projection was already validated at HTTP 202, so an impossible
-            // local reprojection error cannot replace that honest failure.
-            if history_armed {
-                let _ = persist_accepted_snapshot(
-                    &accepted,
-                    source_name.as_deref(),
-                    accepted_at,
-                    &service,
-                    &mut bulk_warning,
-                );
-            }
             let error = failure.into_error();
             observed_failure_outcome(
                 "the bulk job was accepted but its local observation failed",
@@ -267,7 +273,7 @@ fn bulk_json_format_error() -> CanonicalError {
 /// the running handle for the enqueue projection; Observed carries the
 /// observe outcome, the optional observed-children read, and the independently
 /// certified acceptance snapshot and timestamp retained for an observation
-/// failure.
+/// failure or interruption.
 /// Failed/Interrupted carry a pre-acceptance canonical error.
 enum Analyzed {
     Accepted(crate::analysis::RunningBulk),
@@ -406,11 +412,12 @@ fn submit_accepted_outcome(
     )
 }
 
-/// Persists the independently certified HTTP 202 acceptance unit. A failed
-/// later observation may still save this earlier snapshot because its parent,
-/// children, local inputs, and task identities all come from the same
-/// acceptance response. `None` denotes the structurally impossible case where
-/// that already validated acceptance cannot be projected into its domain type.
+/// Persists the independently certified HTTP 202 acceptance unit. A failed or
+/// interrupted later observation may still save this earlier snapshot because
+/// its parent, children, local inputs, and task identities all come from the
+/// same acceptance response. `None` denotes the structurally impossible case
+/// where that already validated acceptance cannot be projected into its domain
+/// type.
 fn persist_accepted_snapshot(
     running: &crate::analysis::RunningBulk,
     source_name: Option<&str>,
