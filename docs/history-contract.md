@@ -125,6 +125,12 @@ reported by a locally authored analysis. It is nullable because resumed
 observations do not imply local authorship. Reads reproduce the stored value
 exactly: they never substitute `created_at`, erase a prior value during
 reconciliation, or fabricate one for a resumed observation.
+`completed_at` is present for remotely observed terminal analyses and absent
+for queued or running analyses. The one terminal-status exception is a failed
+`acceptance_unknown` analysis carrying `submission_outcome_unknown`: its local
+failure records an ambiguous issued POST, not a remote terminal observation,
+so history preserves the reconciliation record with no fabricated completion
+time.
 `result_json` is an immutable terminal snapshot. Current remote
 observation lives in `upstream_tasks`. Observation-refresh and bulk-child
 reconciliation writes coalesce `result_json`, `error_json`, and

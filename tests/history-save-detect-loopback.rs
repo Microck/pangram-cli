@@ -130,6 +130,128 @@ async fn save_persists_completed_detection_and_reports_saved_manual() {
     fixture.shutdown().await;
 }
 
+/// An issued POST whose response never arrives is locally failed but not
+/// remotely completed. Explicit history still preserves that reconciliation
+/// identity, with the canonical ambiguity error and no invented completion
+/// timestamp.
+#[tokio::test(flavor = "multi_thread")]
+async fn save_persists_ambiguous_submission_without_a_completion_timestamp() {
+    let text = "An ambiguous issued request must remain reconcilable";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Hang);
+    let isolated = Isolated::new();
+
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["detect", "--save", text])
+        .output()
+        .expect("run detect --save through an ambiguous issued POST");
+
+    assert_eq!(output.status.code(), Some(6));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["data"]["status"], "failed");
+    assert_eq!(envelope["data"]["submission_outcome"], "acceptance_unknown");
+    assert_eq!(envelope["data"]["save_state"], "saved_manual");
+    assert_eq!(
+        envelope["data"]["checks"][0]["error"]["code"],
+        "submission_outcome_unknown"
+    );
+    assert!(envelope["data"].get("completed_at").is_none());
+    assert_eq!(
+        fixture.post_count(),
+        1,
+        "the ambiguous POST is never replayed"
+    );
+
+    let connection = isolated.open_database();
+    let rows = analyses_rows(&connection);
+    assert_eq!(rows.len(), 1, "the reconciliation record is durable");
+    assert_eq!(rows[0].1, "failed");
+    assert_eq!(rows[0].2, "acceptance_unknown");
+    assert_eq!(rows[0].3, "saved_manual");
+    assert!(rows[0].6.is_none(), "no result is fabricated");
+    assert!(
+        rows[0].7.is_some(),
+        "the canonical ambiguity error is stored"
+    );
+    assert!(rows[0].8.is_none(), "no completion time is fabricated");
+    let analysis_id = rows[0].0.clone();
+    drop(connection);
+
+    let shown = isolated
+        .command(fixture.base_url())
+        .args(["history", "show", &analysis_id])
+        .output()
+        .expect("read the certified ambiguous history record");
+    assert_eq!(shown.status.code(), Some(0));
+    let shown = stdout_envelope(&shown);
+    assert_eq!(shown["data"]["submission_outcome"], "acceptance_unknown");
+    assert!(shown["data"].get("completed_at").is_none());
+
+    // The exception is exact: changing only the outcome to a definite
+    // terminal claim makes the missing completion timestamp corrupt.
+    isolated
+        .open_database()
+        .execute(
+            "UPDATE analyses SET submission_outcome = 'terminal' WHERE id = ?1",
+            [&analysis_id],
+        )
+        .expect("install a definite terminal outcome without completion");
+    let rejected = isolated
+        .command(fixture.base_url())
+        .args(["history", "show", &analysis_id])
+        .output()
+        .expect("reject the over-broad lifecycle shape");
+    assert_eq!(rejected.status.code(), Some(7));
+    assert_eq!(
+        stdout_envelope(&rejected)["error"]["code"],
+        "history_corrupt"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+/// Enabled automatic history follows the same exact lifecycle rule without
+/// downgrading the ambiguous record to ephemeral or warning about a valid
+/// canonical shape.
+#[tokio::test(flavor = "multi_thread")]
+async fn automatic_history_persists_ambiguous_submission_without_warning() {
+    let text = "Automatic history keeps an ambiguous request identity";
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Hang);
+    let isolated = Isolated::new();
+    isolated.enable_history();
+
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["detect", text])
+        .output()
+        .expect("run automatic history through an ambiguous issued POST");
+
+    assert_eq!(output.status.code(), Some(6));
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["data"]["submission_outcome"], "acceptance_unknown");
+    assert_eq!(envelope["data"]["save_state"], "saved_history");
+    assert!(envelope["data"].get("completed_at").is_none());
+    assert!(
+        stderr_text(&output).is_empty(),
+        "valid history emits no warning"
+    );
+    assert_eq!(
+        fixture.post_count(),
+        1,
+        "the ambiguous POST is never replayed"
+    );
+
+    let rows = analyses_rows(&isolated.open_database());
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].2, "acceptance_unknown");
+    assert_eq!(rows[0].3, "saved_history");
+    assert!(rows[0].8.is_none());
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
 /// The automatic gate persists every completed detection as `saved_history`
 /// without any `--save` flag, and the canonical JSON reports it.
 #[tokio::test(flavor = "multi_thread")]

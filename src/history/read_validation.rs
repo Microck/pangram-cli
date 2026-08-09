@@ -280,11 +280,14 @@ fn certify_canonical_projection(
     let projected_checks =
         super::save::stored_checks(analysis).map_err(|_| corrupt("certify check projection"))?;
     let projected_tasks = super::save::stored_observations(analysis);
-    let lifecycle_valid = record.completed_at.is_some()
-        == !matches!(
-            record.status,
-            crate::domain::AnalysisStatus::Queued | crate::domain::AnalysisStatus::Running
-        );
+    // An ambiguous issued POST is locally failed but never remotely observed
+    // as complete, so its reconciliation record must not invent a timestamp.
+    let has_no_remote_completion = matches!(
+        record.status,
+        crate::domain::AnalysisStatus::Queued | crate::domain::AnalysisStatus::Running
+    ) || (record.status == crate::domain::AnalysisStatus::Failed
+        && record.submission_outcome == crate::domain::SubmissionOutcome::AcceptanceUnknown);
+    let lifecycle_valid = record.completed_at.is_some() != has_no_remote_completion;
     let canonical_parent = record.input_kind == projected.input_kind
         && record.input_sha256 == projected.input_sha256
         && record.display_name == projected.display_name

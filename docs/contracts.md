@@ -216,6 +216,9 @@ represented in the ordered series by one synthesized analysis member whose:
 - `provenance` carries only upstream identity facts that actually exist; the
   synthesized member never fabricates `result`, upstream identity, or other
   remote detail, and carries no task id because acceptance was never reached
+- `completed_at` and `provenance.completed_at` are absent because no remote
+  terminal observation occurred; the local `failed` status records the
+  ambiguous submission outcome rather than claiming remote completion
 
 The envelope's parent `status` is `partial` (mixed succeeded and failed
 members; section 4.1), and the process exits 3. JSONL preserves the ordered
