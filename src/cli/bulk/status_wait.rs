@@ -52,44 +52,32 @@ pub(super) fn bulk_status(
         // Refresh the same stored children (contracts.md 14.2): the status
         // read fetched the counters; the children come from the documented
         // results window. A save-read failure never degrades the status
-        // read: the children best-effort fallback keeps the refresh honest
-        // (an empty window refreshes counters without child rows), and its
-        // one sanitized automatic warning surfaces below.
+        // read, but it leaves the entire collection-plus-members persistence
+        // unit untouched and surfaces one sanitized automatic warning below.
         let children = if detect::save::automatic_history_armed(&service) && collection.is_ok() {
             // Upstream children of a job this process did not submit
             // carry no locally held source name.
-            analyzer
-                .bulk_observed_children(&observed_running, None, &cancel)
-                .await
-                .map_err(|_| ())
+            Some(
+                analyzer
+                    .bulk_observed_children(&observed_running, None, &cancel)
+                    .await
+                    .map_err(|_| ()),
+            )
         } else {
-            Ok(Vec::new())
+            None
         };
         (collection, children)
     });
     let (result, children) = result;
-    let (children, children_read_failed) = match children {
-        Ok(children) => (children, false),
-        Err(()) => (Vec::new(), true),
-    };
     match result {
         Ok(collection) => {
             let exit = collection_exit(&collection);
-            if children_read_failed {
-                // The read phase failed first: it owns the one invocation
-                // warning; the persist phase below flows through the same
-                // latch and stays silent on its own failure.
-                *bulk_warning.latch() = true;
-                detect::warning_stderr(
-                    streams,
-                    "automatic history save failed (the observed bulk children could not be read)",
-                );
-            }
-            let (collection, _) = detect::save::persist_bulk_collection(
-                &collection,
+            let collection = persist_observed_collection(
+                collection,
                 children,
                 &service,
                 &mut bulk_warning,
+                streams,
             );
             succeed(
                 resolved,
@@ -159,40 +147,29 @@ pub(super) fn bulk_wait(
         let cancel = stop.token().child_token();
         let children =
             if detect::save::automatic_history_armed(&service) && matches!(outcome, Ok(Ok(_))) {
-                analyzer
-                    .bulk_observed_children(&observed_running, None, &cancel)
-                    .await
-                    .map_err(|_| ())
+                Some(
+                    analyzer
+                        .bulk_observed_children(&observed_running, None, &cancel)
+                        .await
+                        .map_err(|_| ()),
+                )
             } else {
-                Ok(Vec::new())
+                None
             };
         bridge.abort();
         (outcome, children)
     });
     detect::reset_sigint_flag();
     let (result, children) = result;
-    let (children, children_read_failed) = match children {
-        Ok(children) => (children, false),
-        Err(()) => (Vec::new(), true),
-    };
     match result {
         Ok(Ok(collection)) => {
             let exit = collection_exit(&collection);
-            if children_read_failed {
-                // The read phase failed first: it owns the one invocation
-                // warning; the persist phase below flows through the same
-                // latch and stays silent on its own failure.
-                *bulk_warning.latch() = true;
-                detect::warning_stderr(
-                    streams,
-                    "automatic history save failed (the observed bulk children could not be read)",
-                );
-            }
-            let (collection, _) = detect::save::persist_bulk_collection(
-                &collection,
+            let collection = persist_observed_collection(
+                collection,
                 children,
                 &service,
                 &mut bulk_warning,
+                streams,
             );
             succeed(
                 resolved,
@@ -215,6 +192,37 @@ pub(super) fn bulk_wait(
     }
 }
 
+/// Persists one bulk observation only when its complete child window was
+/// retrieved. A failed child read means the collection-plus-members unit is
+/// uncertified, so opening history would create a misleading memberless row.
+/// The primary status/wait result remains successful and the read phase owns
+/// the invocation's one automatic-history warning.
+fn persist_observed_collection(
+    collection: BulkCollection,
+    children: Option<Result<Vec<detect::save::BulkChild>, ()>>,
+    service: &crate::config::ConfigService,
+    warning: &mut detect::save::BulkSaveWarning,
+    streams: &dyn StreamTty,
+) -> BulkCollection {
+    match children {
+        Some(Ok(children)) => {
+            detect::save::persist_bulk_collection(&collection, children, service, warning).0
+        }
+        Some(Err(())) => {
+            *warning.latch() = true;
+            detect::warning_stderr(
+                streams,
+                "automatic history save failed (the observed bulk children could not be read)",
+            );
+            collection
+        }
+        // The first gate read was off, so no complete child window exists.
+        // A concurrent enable before the persistence-time gate check must
+        // not turn that skipped read into a memberless collection save.
+        None => collection,
+    }
+}
+
 /// The shared bulk collection exit precedence (contracts.md 12): a partial
 /// collection exits 3; a terminal failed collection failed every item through
 /// an upstream terminal analysis failure and exits 6 (the upstream category);
@@ -226,5 +234,56 @@ pub(super) fn collection_exit(collection: &BulkCollection) -> ExitCode {
         AnalysisStatus::Queued | AnalysisStatus::Running | AnalysisStatus::Succeeded => {
             ExitCode::Success
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+    use crate::config::{ConfigOverrides, ConfigService, Paths};
+    use crate::domain::{BulkCounters, BulkId, SubmissionOutcome, UpstreamBulkId};
+
+    #[test]
+    fn skipped_child_read_stays_unpersisted_if_history_becomes_enabled() {
+        let root = tempfile::tempdir().unwrap();
+        let config_dir = root.path().join("config");
+        let data_dir = root.path().join("data");
+        let service = ConfigService::for_test(
+            Paths::for_test(config_dir, data_dir.clone()),
+            ConfigOverrides::default(),
+        );
+        let timestamp = UtcTimestamp::from_str("2026-08-09T00:00:00Z").unwrap();
+        let collection = BulkCollection::new(
+            BulkId::new(),
+            Some(UpstreamBulkId::new("blk-gate-race").unwrap()),
+            AnalysisStatus::Succeeded,
+            SubmissionOutcome::Accepted,
+            BulkCounters::new(1, 1, 1, 0).unwrap(),
+            None,
+            timestamp,
+            timestamp,
+            Some(timestamp),
+        )
+        .unwrap();
+
+        // This enable occurs after the earlier gate read chose not to fetch
+        // children. The later persistence gate must not reinterpret that
+        // skipped read as a certified empty window.
+        service.set("history.enabled", "true").unwrap();
+        let persisted = persist_observed_collection(
+            collection.clone(),
+            None,
+            &service,
+            &mut detect::save::BulkSaveWarning::new(),
+            &crate::cli::RealStreams,
+        );
+
+        assert_eq!(persisted, collection);
+        assert!(
+            !data_dir.exists(),
+            "a skipped child read must never create history after a concurrent enable"
+        );
     }
 }

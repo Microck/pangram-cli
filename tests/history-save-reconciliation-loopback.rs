@@ -265,6 +265,204 @@ async fn bulk_submit_and_status_reconcile_one_collection_without_duplicates() {
     fixture.shutdown().await;
 }
 
+/// A successful bulk status snapshot is not enough evidence to refresh the
+/// collection atomically: persistence also requires the complete documented
+/// results window. If that child read fails, both `bulk status` and `bulk
+/// wait` keep the successful primary result and emit one warning, but create
+/// neither a memberless collection nor child rows in the hidden ledger.
+#[cfg(unix)]
+async fn assert_bulk_child_read_failure_skips_persistence(command: &str) {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_bulk_status(Step::Json(serde_json::json!({
+        "bulk_id": "blk_retrieval_gap",
+        "status": "succeeded",
+        "total_items": 1,
+        "accepted": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "created_at": "1760000000.0",
+        "completed_at": "1760000001.0"
+    })));
+    // A non-retryable miss on the documented results route proves the
+    // command cannot certify the collection-plus-children save unit.
+    fixture.on_bulk_results(Step::Status(404, None, None));
+    let isolated = Isolated::new();
+    isolated.enable_history();
+
+    let output = isolated
+        .command(fixture.base_url())
+        .args(["bulk", command, "blk_retrieval_gap"])
+        .output()
+        .unwrap_or_else(|error| panic!("run bulk {command}: {error}"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the successful bulk {command} snapshot still renders"
+    );
+    let envelope = stdout_envelope(&output);
+    assert_eq!(envelope["command"], format!("bulk_{command}"));
+    assert_eq!(envelope["data"]["status"], "succeeded");
+    let stderr = stderr_text(&output);
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.contains("warning:"))
+            .count(),
+        1,
+        "one child-read warning for bulk {command}: {stderr}"
+    );
+    assert!(
+        stderr.contains("observed bulk children could not be read"),
+        "the warning identifies the failed save-read phase: {stderr}"
+    );
+    assert!(
+        !isolated.database_path().exists(),
+        "bulk {command} must persist neither the collection nor members"
+    );
+    assert_no_leak(&output);
+    fixture.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_status_child_read_failure_warns_without_persisting() {
+    assert_bulk_child_read_failure_skips_persistence("status").await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_wait_child_read_failure_warns_without_persisting() {
+    assert_bulk_child_read_failure_skips_persistence("wait").await;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BulkStorageSnapshot {
+    collections: Vec<String>,
+    analyses: Vec<String>,
+    memberships: Vec<(String, Option<String>, Option<i64>, String)>,
+    tasks: Vec<(String, String, String, Option<String>)>,
+}
+
+fn bulk_storage_snapshot(connection: &rusqlite::Connection) -> BulkStorageSnapshot {
+    let collections = connection
+        .prepare(
+            "SELECT id, upstream_bulk_id, status, submission_outcome, total_items, accepted,
+                    succeeded, failed, estimated_billable_units, created_at, updated_at, completed_at
+             FROM bulk_collections ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok(format!(
+                "{:?}",
+                (
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                )
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let memberships = connection
+        .prepare("SELECT id, bulk_id, bulk_index, updated_at FROM analyses ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    BulkStorageSnapshot {
+        collections,
+        analyses: analyses_rows(connection)
+            .into_iter()
+            .map(|row| format!("{row:?}"))
+            .collect(),
+        memberships,
+        tasks: task_rows(connection),
+    }
+}
+
+/// A failed refresh leaves an existing collection-plus-members unit byte-for-
+/// byte unchanged. This catches a partial fix that skips only first insertion
+/// but still opens history and reconciles an empty window over durable rows.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_child_read_failure_leaves_existing_collection_untouched() {
+    let fixture = ProtocolFixture::start().await;
+    let status = serde_json::json!({
+        "bulk_id": "blk_existing_retrieval_gap",
+        "status": "succeeded",
+        "total_items": 1,
+        "accepted": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "created_at": "1760000000.0",
+        "completed_at": "1760000001.0"
+    });
+    fixture.on_bulk_status(Step::Json(status.clone()));
+    fixture.on_bulk_results(Step::Json(serde_json::json!({
+        "bulk_id": "blk_existing_retrieval_gap",
+        "offset": 0,
+        "limit": 100,
+        "total_items": 1,
+        "items": [
+            {"index": 0, "id": "row-000", "task_id": "task-existing",
+             "stage": "STAGE_SUCCESS", "error": null,
+             "result": harness::fixture::pangram4_success("existing stored child words")}
+        ],
+        "failed_items": []
+    })));
+    fixture.on_bulk_status(Step::Json(status));
+    fixture.on_bulk_results(Step::Status(404, None, None));
+    let isolated = Isolated::new();
+    isolated.enable_history();
+
+    let first = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "status", "blk_existing_retrieval_gap"])
+        .output()
+        .expect("seed the complete collection and child window");
+    assert_eq!(first.status.code(), Some(0));
+    assert!(first.stderr.is_empty());
+    assert_no_leak(&first);
+    let before = bulk_storage_snapshot(&isolated.open_database());
+
+    let failed_refresh = isolated
+        .command(fixture.base_url())
+        .args(["bulk", "status", "blk_existing_retrieval_gap"])
+        .output()
+        .expect("run the observation whose child read fails");
+    assert_eq!(failed_refresh.status.code(), Some(0));
+    assert_eq!(
+        stderr_text(&failed_refresh)
+            .lines()
+            .filter(|line| line.contains("warning:"))
+            .count(),
+        1
+    );
+    assert_no_leak(&failed_refresh);
+
+    let after = bulk_storage_snapshot(&isolated.open_database());
+    assert_eq!(
+        after, before,
+        "an uncertified refresh must not rewrite the collection, member, membership, or observation"
+    );
+    fixture.shutdown().await;
+}
+
 /// A mixed acceptance with an armed automatic gate remains truthful when
 /// the store is blocked: the JSONL submission carries two items (one
 /// accepted with an attested task identity, one failed through immediate
