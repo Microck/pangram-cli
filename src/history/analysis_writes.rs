@@ -108,6 +108,7 @@ impl HistoryStore {
     ) -> Result<(), HistoryError> {
         self.in_transaction(|transaction| {
             validate_check_rows(record.id, checks)?;
+            validate_observation_rows(record.id, checks, observations)?;
             insert_analysis_row(transaction, record)?;
             insert_search_row(transaction, record)?;
             insert_check_rows(transaction, checks)?;
@@ -120,10 +121,11 @@ impl HistoryStore {
         })
     }
 
-    /// Upserts the current remote observation of one check. The key is
-    /// `(analysis_id, check_kind)` per the locked schema.
+    /// Refreshes the current remote observation of one check or adds evidence
+    /// for a previously unowned kind. An owned kind's task identity is
+    /// immutable.
     pub fn record_observation(&mut self, task: &StoredUpstreamTask) -> Result<(), HistoryError> {
-        self.in_transaction(|transaction| {
+        self.in_immediate_transaction(|transaction| {
             // Preserve the existing orphan-observation write-failure
             // contract while ensuring a real owner cannot be repaired by
             // replacing corrupt task evidence.
@@ -140,10 +142,27 @@ impl HistoryStore {
                     )
                 })?;
             if owner_exists {
-                super::read_validation::certify_analysis_aggregate(transaction, &task.analysis_id)?;
+                super::read_validation::certify_analysis_projection(
+                    transaction,
+                    &task.analysis_id,
+                )?;
+                let observations = std::slice::from_ref(task);
+                if super::reconcile::task_lookup_targets(transaction, observations)?
+                    .is_some_and(|resolved| resolved != task.analysis_id)
+                {
+                    return Err(HistoryError::new(
+                        HistoryErrorCode::HistoryWriteFailed,
+                        "the observed task identity belongs to a different stored analysis",
+                    ));
+                }
+                super::reconcile::validate_owned_task_evidence(
+                    transaction,
+                    &task.analysis_id,
+                    observations,
+                )?;
             }
             upsert_observation_row(transaction, task)?;
-            super::read_validation::certify_analysis_aggregate(transaction, &task.analysis_id)
+            super::read_validation::certify_analysis_projection(transaction, &task.analysis_id)
         })
     }
 
@@ -171,7 +190,7 @@ impl HistoryStore {
         self.in_transaction(|transaction| {
             // Replacing any part of the aggregate must never silently repair
             // corruption in another part.
-            super::read_validation::certify_analysis_aggregate(transaction, id)?;
+            super::read_validation::certify_analysis_projection(transaction, id)?;
             let rebound_checks = checks
                 .iter()
                 .cloned()
@@ -227,7 +246,7 @@ impl HistoryStore {
                 &snapshot.search_headline,
                 &snapshot.search_source_urls,
             )?;
-            super::read_validation::certify_analysis_aggregate(transaction, id)
+            super::read_validation::certify_analysis_projection(transaction, id)
         })
     }
 
@@ -256,7 +275,7 @@ impl HistoryStore {
     ) -> Result<(), HistoryError> {
         let checks = legacy_checks_for_snapshot(*id, snapshot);
         self.in_immediate_transaction(|transaction| {
-            super::read_validation::certify_analysis_aggregate(transaction, id)?;
+            super::read_validation::certify_analysis_projection(transaction, id)?;
             super::reconcile::update_observation_snapshot_tx(
                 transaction,
                 id,
@@ -265,7 +284,7 @@ impl HistoryStore {
                 &checks,
                 false,
             )?;
-            super::read_validation::certify_analysis_aggregate(transaction, id)
+            super::read_validation::certify_analysis_projection(transaction, id)
         })
     }
 }
@@ -369,7 +388,6 @@ pub(super) fn upsert_observation_row(
             "INSERT INTO upstream_tasks (analysis_id, check_kind, upstream_task_id, last_stage, observed_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (analysis_id, check_kind) DO UPDATE SET
-                upstream_task_id = excluded.upstream_task_id,
                 last_stage = excluded.last_stage,
                 observed_at = excluded.observed_at",
             params![
@@ -502,15 +520,36 @@ pub(super) fn validate_check_rows(
     Ok(())
 }
 
-/// Certifies the complete authoritative check set already owned by one
-/// parent before an update performs its first write. Corruption is never
-/// repaired by replacement: missing rows, cardinality/order/kind drift, and
-/// malformed typed result/error JSON all fail closed and roll back.
-pub(super) fn certify_stored_check_rows(
-    transaction: &rusqlite::Transaction<'_>,
-    analysis_id: &AnalysisId,
+pub(super) fn validate_observation_rows(
+    analysis_id: AnalysisId,
+    checks: &[StoredCheck],
+    observations: &[StoredUpstreamTask],
 ) -> Result<(), HistoryError> {
-    load_stored_check_rows(transaction, analysis_id).map(drop)
+    let mut observed_kinds = std::collections::HashSet::with_capacity(observations.len());
+    for observation in observations {
+        if observation.analysis_id != analysis_id {
+            return Err(HistoryError::new(
+                HistoryErrorCode::HistoryWriteFailed,
+                "an observation does not belong to the analysis being saved",
+            ));
+        }
+        if !checks
+            .iter()
+            .any(|check| check.check_kind == observation.check_kind)
+        {
+            return Err(HistoryError::new(
+                HistoryErrorCode::HistoryWriteFailed,
+                "an observation check kind is not owned by the analysis",
+            ));
+        }
+        if !observed_kinds.insert(observation.check_kind) {
+            return Err(HistoryError::new(
+                HistoryErrorCode::HistoryWriteFailed,
+                "an analysis cannot have multiple observations for one check kind",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Loads the complete authoritative check set after proving that its stored
@@ -618,15 +657,6 @@ pub(super) fn legacy_checks_for_reconcile(
     record: &StoredAnalysis,
     observations: &[StoredUpstreamTask],
 ) -> Result<Vec<StoredCheck>, HistoryError> {
-    if observations
-        .iter()
-        .any(|task| task.analysis_id != record.id)
-    {
-        return Err(HistoryError::new(
-            HistoryErrorCode::HistoryWriteFailed,
-            "an observation does not belong to the analysis being saved",
-        ));
-    }
     let kinds = if observations.is_empty() {
         vec![crate::domain::CheckKind::AiDetection]
     } else {
@@ -669,6 +699,7 @@ pub(super) fn legacy_checks_for_reconcile(
             error_json: record.error_json.clone(),
         })
         .collect::<Vec<_>>();
+    validate_observation_rows(record.id, &checks, observations)?;
     Ok(checks)
 }
 

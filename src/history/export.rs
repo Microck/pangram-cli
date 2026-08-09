@@ -1,54 +1,26 @@
 //! Consistent, side-effect-free history export reads.
 
-use crate::domain::Analysis;
-use crate::output::CanonicalError;
-
-use super::reads::canonical_analysis_on;
 use super::{HistoryError, HistoryErrorCode, HistoryStore};
 
 impl HistoryStore {
     /// Reads every complete analysis newest-first from one SQLite snapshot.
-    /// The deferred transaction acquires its snapshot on the ID query and
-    /// holds it through every canonical reconstruction.
+    /// The deferred transaction holds its snapshot through whole-store
+    /// certification and export projection.
     pub fn export_analyses(
         &self,
         redact_content: bool,
     ) -> Result<Vec<serde_json::Value>, HistoryError> {
         self.with_read_snapshot(|transaction| {
-            super::search::certify_search_index(transaction)?;
-            let mut statement = transaction
-                .prepare("SELECT id FROM analyses ORDER BY created_at DESC, id")
-                .map_err(|_| {
-                    HistoryError::from_sqlite(
-                        HistoryErrorCode::HistoryUnavailable,
-                        "export history",
-                    )
-                })?;
-            let ids = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|_| {
-                    HistoryError::from_sqlite(
-                        HistoryErrorCode::HistoryUnavailable,
-                        "export history",
-                    )
-                })?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| {
-                    HistoryError::from_sqlite(HistoryErrorCode::HistoryCorrupt, "export history")
-                })?;
-            drop(statement);
+            let mut analyses = super::read_validation::certify_analysis_batch(transaction, true)?;
+            analyses.sort_by(|left, right| {
+                right
+                    .created_at
+                    .cmp(&left.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
 
-            let mut values = Vec::with_capacity(ids.len());
-            for id in ids {
-                let id = id.parse().map_err(|_| {
-                    HistoryError::new(
-                        HistoryErrorCode::HistoryCorrupt,
-                        "export history: a stored analysis identity is invalid",
-                    )
-                })?;
-                let record = super::reads::stored_analysis_on(transaction, &id)?;
-                let analysis: Analysis<CanonicalError> =
-                    canonical_analysis_on(transaction, &record, true)?;
+            let mut values = Vec::with_capacity(analyses.len());
+            for analysis in analyses {
                 let mut value = serde_json::to_value(analysis).map_err(|_| {
                     HistoryError::new(
                         HistoryErrorCode::HistoryCorrupt,

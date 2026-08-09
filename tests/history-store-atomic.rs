@@ -188,6 +188,81 @@ fn complete_save_rolls_back_a_noncanonical_written_aggregate() {
     );
 }
 
+#[test]
+fn complete_save_rejects_foreign_or_unowned_observations_without_mutation() {
+    let owner_id = "anl_01983c20-0180-7a80-a001-000000000004";
+    let fresh_id = "anl_01983c20-0180-7a80-a001-000000000005";
+    for (name, invalid) in [
+        (
+            "foreign owner",
+            observation(owner_id, CheckKind::AiDetection, "task-foreign"),
+        ),
+        (
+            "unowned kind",
+            observation(fresh_id, CheckKind::Plagiarism, "task-unowned"),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = HistoryStore::open(root.path()).expect("open history store");
+        let owner = analysis(owner_id);
+        let owner_observation =
+            observation(owner_id, CheckKind::AiDetection, "task-existing-owner");
+        store
+            .save_analysis_atomic(&owner, std::slice::from_ref(&owner_observation))
+            .expect("seed valid owner");
+        let before = row_counts(&root);
+        let fresh = analysis(fresh_id);
+        let check = StoredCheck {
+            analysis_id: fresh.id,
+            check_index: 0,
+            check_kind: CheckKind::AiDetection,
+            status: CheckStatus::Running,
+            result_json: None,
+            error_json: None,
+        };
+
+        let error = store
+            .save_analysis_complete(&fresh, &[check], &[invalid])
+            .expect_err(name);
+        assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed, "{name}");
+        assert_eq!(
+            row_counts(&root),
+            before,
+            "{name} must not mutate any SQLite aggregate table"
+        );
+    }
+}
+
+#[test]
+fn complete_save_rejects_duplicate_observation_kinds_without_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = HistoryStore::open(root.path()).expect("open history store");
+    let record_id = "anl_01983c20-0180-7a80-a001-000000000006";
+    let record = analysis(record_id);
+    let check = StoredCheck {
+        analysis_id: record.id,
+        check_index: 0,
+        check_kind: CheckKind::AiDetection,
+        status: CheckStatus::Running,
+        result_json: None,
+        error_json: None,
+    };
+    let mut first = observation(record_id, CheckKind::AiDetection, "task-first");
+    first.last_stage = Some("STAGE_FIRST".to_owned());
+    let mut second = observation(record_id, CheckKind::AiDetection, "task-second");
+    second.last_stage = Some("STAGE_SECOND".to_owned());
+
+    let error = store
+        .save_analysis_complete(&record, &[check], &[first, second])
+        .expect_err("same-kind observations must fail before either upsert");
+    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+    assert_eq!(
+        row_counts(&root),
+        (0, 0, 0, 0),
+        "duplicate identities and stages must not hybridize a persisted observation"
+    );
+}
+
 /// The legacy atomic API cannot express two distinct terminal result bodies.
 /// It therefore rejects malformed, duplicate, or noncanonical observation
 /// sets instead of committing orphan task evidence or an unreadable parent.

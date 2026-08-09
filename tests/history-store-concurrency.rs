@@ -116,6 +116,7 @@ fn child(id: &str, bulk_id: &str, index: i64) -> StoredAnalysis {
     record.status = AnalysisStatus::Queued;
     record.result_json = None;
     record.completed_at = None;
+    record.search_headline = None;
     record
 }
 
@@ -237,15 +238,20 @@ fn concurrent_one_check_refreshes_preserve_the_combined_analysis() {
     let plagiarism_result = serde_json::json!({
         "plagiarism_detected": false,
         "total_sentences": 1,
-        "plagiarized_sentence_count": 0,
-        "percent_plagiarized": 0.0,
-        "matches": []
+        "plagiarized_sentence_count": 1,
+        "percent_plagiarized": 100.0,
+        "matches": [{
+            "source_url": "https://example.invalid/retained",
+            "matched_text": "synthetic retained match",
+            "similarity_score": 1.0
+        }]
     })
     .to_string();
     seed.status = AnalysisStatus::Running;
     seed.submission_outcome = SubmissionOutcome::Accepted;
     seed.result_json = Some(plagiarism_result.clone());
     seed.completed_at = None;
+    seed.search_headline = None;
     seed.search_source_urls = Some("https://example.invalid/retained".to_owned());
     let checks = vec![
         StoredCheck {

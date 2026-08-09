@@ -100,6 +100,7 @@ fn child(id: &str, bulk_id: &str) -> StoredAnalysis {
     record.status = AnalysisStatus::Running;
     record.result_json = None;
     record.completed_at = None;
+    record.search_headline = None;
     record
 }
 

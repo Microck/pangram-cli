@@ -164,7 +164,7 @@ approved contracts.
 | 1 | Complete |
 | 2 | Complete |
 | 3 | Complete |
-| 4 | In progress |
+| 4 | Complete |
 | 5 | Not started |
 | 6 | Not started |
 | 7 | Not started |
@@ -982,7 +982,7 @@ local Docker, push, or PR were used; `AGENTS.md` stayed excluded and byte-exact.
   memory before mutation, with PRAGMAs retained as a second probe. Real SQLite
   tests reject hidden foreign-key, conflict-policy, and FTS5-option clauses
   byte-preservingly while harmless SQL spelling and first open stay green.
-- 2026-08-05: Packet D completes optional local history: exact ordered per-check persistence, typed list/show/literal-search/delete/clear, consistent JSONL/Markdown export with content redaction, and text AI-detection reruns with fresh identities and durable `rerun_of` lineage.
+- 2026-08-09: Phase 4 moves to Complete. Packet D delivers optional local history with exact ordered per-check persistence, typed list/show/literal-search/delete/clear, redacted and full export, fresh-identity reruns with durable lineage, narrowly scoped canonical certification, bounded 10,000-analysis search under 100 ms, linear fresh-bulk FTS writes, pre-merge evidence validation, and bounded retry for SQLite WAL activation locks. Remote strict all-target Clippy and the full locked all-feature suite pass, including generated drift, four consecutive first-open races, and the performance gate. No local Cargo build or Pangram credit was used. Rust 1.87, native Windows, supply-chain, and secret gates remain required on the delivery PR; `AGENTS.md` stays excluded as the user's uncommitted change.
 
 ## Out of scope
 

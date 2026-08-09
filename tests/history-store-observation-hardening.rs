@@ -21,10 +21,11 @@ use std::str::FromStr;
 
 use history_store_support::{ai_result, canonical_error, prepared_child};
 use microck_pangram_cli::domain::{
-    AnalysisId, AnalysisStatus, CheckKind, SaveState, Sha256Hash, SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisStatus, CheckKind, CheckStatus, SaveState, Sha256Hash, SubmissionOutcome,
+    UtcTimestamp,
 };
 use microck_pangram_cli::history::{
-    HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis,
+    HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis, StoredCheck,
     StoredUpstreamTask,
 };
 use microck_pangram_cli::output::ErrorCode;
@@ -240,16 +241,139 @@ fn observation_mutations_reject_corrupt_aggregates_without_repair() {
     assert_eq!(raw_state(&store, id), before);
 }
 
+#[test]
+fn record_observation_preserves_owned_task_identities_before_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = HistoryStore::open(root.path()).expect("open history store");
+    let id_text = "anl_01983c20-0180-7a80-a001-000000000004";
+    let id = AnalysisId::from_str(id_text).expect("analysis id");
+    let mut record = terminal_analysis(id_text);
+    record.search_source_urls = Some("https://example.invalid/source".to_owned());
+    let checks = [
+        StoredCheck {
+            analysis_id: id,
+            check_index: 0,
+            check_kind: CheckKind::AiDetection,
+            status: CheckStatus::Succeeded,
+            result_json: record.result_json.clone(),
+            error_json: None,
+        },
+        StoredCheck {
+            analysis_id: id,
+            check_index: 1,
+            check_kind: CheckKind::Plagiarism,
+            status: CheckStatus::Succeeded,
+            result_json: Some(
+                serde_json::json!({
+                    "plagiarism_detected": true,
+                    "total_sentences": 1,
+                    "plagiarized_sentence_count": 1,
+                    "percent_plagiarized": 100.0,
+                    "matches": [{
+                        "source_url": "https://example.invalid/source",
+                        "matched_text": "Synthetic match",
+                        "similarity_score": 1.0
+                    }]
+                })
+                .to_string(),
+            ),
+            error_json: None,
+        },
+    ];
+    store
+        .save_analysis_complete(
+            &record,
+            &checks,
+            &[observation(
+                id_text,
+                CheckKind::AiDetection,
+                "task-owned-ai",
+                Some("STAGE_COMPLETE"),
+            )],
+        )
+        .expect("seed aggregate");
+
+    let before = raw_state(&store, id);
+    let error = store
+        .record_observation(&StoredUpstreamTask {
+            analysis_id: id,
+            check_kind: CheckKind::AiDetection,
+            upstream_task_id: "task-replacement-ai".to_owned(),
+            last_stage: Some("STAGE_REPLACEMENT".to_owned()),
+            observed_at: timestamp("2026-08-02T10:00:00Z"),
+        })
+        .expect_err("a different task ID cannot replace owned evidence");
+    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+    assert_eq!(
+        raw_state(&store, id),
+        before,
+        "the identity conflict fails before any SQLite mutation"
+    );
+
+    store
+        .record_observation(&StoredUpstreamTask {
+            analysis_id: id,
+            check_kind: CheckKind::AiDetection,
+            upstream_task_id: "task-owned-ai".to_owned(),
+            last_stage: Some("STAGE_REFRESHED".to_owned()),
+            observed_at: timestamp("2026-08-02T10:01:00Z"),
+        })
+        .expect("the same task identity remains refreshable");
+    store
+        .record_observation(&StoredUpstreamTask {
+            analysis_id: id,
+            check_kind: CheckKind::Plagiarism,
+            upstream_task_id: "task-new-plagiarism".to_owned(),
+            last_stage: Some("STAGE_COMPLETE".to_owned()),
+            observed_at: timestamp("2026-08-02T10:02:00Z"),
+        })
+        .expect("an unowned check kind may add its first task identity");
+
+    let tasks = store
+        .with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT check_kind, upstream_task_id, last_stage
+                 FROM upstream_tasks WHERE analysis_id = ?1 ORDER BY check_kind",
+            )?;
+            let rows = statement
+                .query_map([id.to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, rusqlite::Error>(rows)
+        })
+        .expect("borrow database")
+        .expect("read task evidence");
+    assert_eq!(
+        tasks,
+        vec![
+            (
+                "ai_detection".to_owned(),
+                "task-owned-ai".to_owned(),
+                Some("STAGE_REFRESHED".to_owned()),
+            ),
+            (
+                "plagiarism".to_owned(),
+                "task-new-plagiarism".to_owned(),
+                Some("STAGE_COMPLETE".to_owned()),
+            ),
+        ]
+    );
+}
+
 /// Result-owned search metadata is observation state, not durable local
-/// authorship. A newer terminal observation replaces a stale headline and
-/// source URL payload when present, while input text and filename remain
-/// first-recorded local evidence.
+/// authorship. A newer terminal observation replaces the headline from its
+/// authoritative result, while input text and filename remain first-recorded
+/// local evidence.
 #[test]
 fn terminal_refresh_replaces_result_search_metadata_but_preserves_input_authorship() {
     let root = tempfile::tempdir().unwrap();
     let mut store = HistoryStore::open(root.path()).expect("open history store");
-    let mut record = terminal_analysis("anl_01983c20-0180-7a80-a001-000000000002");
-    record.search_source_urls = Some("https://old.example/source".to_owned());
+    let record = terminal_analysis("anl_01983c20-0180-7a80-a001-000000000002");
     store
         .save_analysis_atomic(&record, &[])
         .expect("terminal save commits");
@@ -265,7 +389,7 @@ fn terminal_refresh_replaces_result_search_metadata_but_preserves_input_authorsh
         search_input_text: Some("remote replacement must not win".to_owned()),
         search_filename: None,
         search_headline: Some("Refreshed result".to_owned()),
-        search_source_urls: Some("https://new.example/source".to_owned()),
+        search_source_urls: None,
     };
     store
         .update_observation_snapshot(
@@ -281,13 +405,9 @@ fn terminal_refresh_replaces_result_search_metadata_but_preserves_input_authorsh
     assert_eq!(stored.search_input_text.as_deref(), Some("authored"));
     assert_eq!(stored.search_filename, None);
     assert_eq!(stored.search_headline.as_deref(), Some("Refreshed result"));
-    assert_eq!(
-        stored.search_source_urls.as_deref(),
-        Some("https://new.example/source")
-    );
+    assert_eq!(stored.search_source_urls, None);
     assert_eq!(store.search("Refreshed", 10).unwrap().len(), 1);
     assert_eq!(store.search("old", 10).unwrap().len(), 0);
-    assert_eq!(store.search("new", 10).unwrap().len(), 1);
     assert_eq!(stored.upstream_version.as_deref(), Some("4.1"));
 
     let absent_metadata = ObservationSnapshot {
@@ -299,7 +419,7 @@ fn terminal_refresh_replaces_result_search_metadata_but_preserves_input_authorsh
         completed_at: Some(timestamp("2026-08-02T10:00:00Z")),
         search_input_text: None,
         search_filename: None,
-        search_headline: None,
+        search_headline: Some("No replacement metadata".to_owned()),
         search_source_urls: None,
     };
     store
@@ -316,12 +436,9 @@ fn terminal_refresh_replaces_result_search_metadata_but_preserves_input_authorsh
     assert_eq!(preserved.search_filename, None);
     assert_eq!(
         preserved.search_headline.as_deref(),
-        Some("Refreshed result")
+        Some("No replacement metadata")
     );
-    assert_eq!(
-        preserved.search_source_urls.as_deref(),
-        Some("https://new.example/source")
-    );
+    assert_eq!(preserved.search_source_urls, None);
     assert_eq!(
         preserved.upstream_version.as_deref(),
         Some("4.1"),
@@ -358,6 +475,7 @@ fn bulk_child_refresh_never_erases_the_attested_error_body() {
     failed_child.submission_outcome = SubmissionOutcome::Accepted;
     failed_child.save_state = SaveState::SavedHistory;
     failed_child.result_json = None;
+    failed_child.search_headline = None;
     let canonical_error = canonical_error(
         ErrorCode::UpstreamAnalysisFailed,
         "Upstream analysis failed.",
@@ -512,6 +630,7 @@ fn find_analysis_by_task_is_deterministic_across_kinds() {
         })
         .to_string(),
     );
+    ai2.search_headline = None;
     store
         .save_analysis_atomic(
             &ai,

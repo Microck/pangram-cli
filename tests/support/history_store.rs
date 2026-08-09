@@ -19,11 +19,10 @@ pub(crate) fn prepared_child(
 }
 
 fn complete_check(record: &StoredAnalysis) -> StoredCheck {
-    let result = ai_result("Human");
     let (status, result_json, error_json) = match record.status {
         AnalysisStatus::Queued => (CheckStatus::Queued, None, None),
         AnalysisStatus::Running => (CheckStatus::Running, None, None),
-        AnalysisStatus::Succeeded => (CheckStatus::Succeeded, Some(result), None),
+        AnalysisStatus::Succeeded => (CheckStatus::Succeeded, record.result_json.clone(), None),
         AnalysisStatus::Failed => (CheckStatus::Failed, None, record.error_json.clone()),
         _ => panic!("fixture helper supports queued, running, succeeded, or failed rows"),
     };

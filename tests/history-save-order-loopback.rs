@@ -151,9 +151,13 @@ async fn task_status_then_wait_merge_one_check_into_a_saved_combined_analysis() 
     let plagiarism_result = serde_json::json!({
         "plagiarism_detected": false,
         "total_sentences": 1,
-        "plagiarized_sentence_count": 0,
-        "percent_plagiarized": 0.0,
-        "matches": []
+        "plagiarized_sentence_count": 1,
+        "percent_plagiarized": 100.0,
+        "matches": [{
+            "source_url": "https://example.invalid/retained",
+            "matched_text": "synthetic retained match",
+            "similarity_score": 1.0
+        }]
     })
     .to_string();
     let record = StoredAnalysis {

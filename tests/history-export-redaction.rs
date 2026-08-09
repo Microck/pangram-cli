@@ -3,7 +3,8 @@
 use std::process::{Command, Output};
 
 use microck_pangram_cli::domain::{
-    AnalysisId, AnalysisStatus, SaveState, Sha256Hash, SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisInput, AnalysisStatus, SaveState, Sha256Hash, SubmissionOutcome, TextInput,
+    TextOrigin, UtcTimestamp,
 };
 use microck_pangram_cli::history::{HistoryStore, InputKind, StoredAnalysis};
 use serde_json::Value;
@@ -37,6 +38,17 @@ impl Env {
 
     fn seed(&self, id: &str, created_at: &str, text: &str) {
         let timestamp = created_at.parse::<UtcTimestamp>().expect("timestamp");
+        let input = AnalysisInput::Text(
+            TextInput::new(
+                TextOrigin::Literal,
+                None,
+                Sha256Hash::digest(text),
+                u64::try_from(text.len()).expect("input byte count"),
+                u64::try_from(text.split_whitespace().count()).expect("input word count"),
+                Some(text.to_owned()),
+            )
+            .expect("canonical text input"),
+        );
         let mut store = HistoryStore::open(self.0.path()).expect("open history");
         store
             .save_analysis(&StoredAnalysis {
@@ -49,15 +61,7 @@ impl Env {
                 input_kind: InputKind::Text,
                 input_sha256: Sha256Hash::digest(text),
                 display_name: None,
-                input_json: serde_json::json!({
-                    "type": "text",
-                    "origin": "literal",
-                    "sha256": Sha256Hash::digest(text).to_string(),
-                    "byte_count": text.len(),
-                    "word_count": text.split_whitespace().count(),
-                    "text": text
-                })
-                .to_string(),
+                input_json: serde_json::to_string(&input).expect("serialize canonical input"),
                 result_json: Some(valid_ai_result()),
                 error_json: None,
                 upstream_version: Some("4.0".to_owned()),
@@ -106,56 +110,80 @@ fn redacted_export_keeps_segment_evidence_and_only_safe_source_hostnames() {
     let store = HistoryStore::open(env.0.path()).expect("open real history");
     store
         .with_connection(|connection| {
+            let ai_result = serde_json::json!({
+                "classification": "mixed",
+                "headline": "Mixed",
+                "prediction": "Mixed",
+                "fraction_ai": 0.5,
+                "fraction_ai_assisted": 0.25,
+                "fraction_human": 0.25,
+                "num_ai_segments": 1,
+                "num_ai_assisted_segments": 0,
+                "num_human_segments": 0,
+                "segments": [{
+                    "text": "secret segment",
+                    "label": "AI",
+                    "ai_assistance_score": 0.8,
+                    "confidence": "high",
+                    "start_index": 4,
+                    "end_index": 18,
+                    "word_count": 2,
+                    "token_length": 3,
+                    "humanizer_score": 0.2,
+                    "is_humanized": false
+                }],
+                "dashboard_link": "https://dashboard.example/private"
+            })
+            .to_string();
             connection.execute(
                 "UPDATE analysis_checks SET result_json = ?1 WHERE analysis_id = ?2",
-                rusqlite::params![
-                    serde_json::json!({
-                        "classification": "mixed",
-                        "headline": "Mixed",
-                        "prediction": "Mixed",
-                        "fraction_ai": 0.5,
-                        "fraction_ai_assisted": 0.25,
-                        "fraction_human": 0.25,
-                        "num_ai_segments": 1,
-                        "num_ai_assisted_segments": 0,
-                        "num_human_segments": 0,
-                        "segments": [{
-                            "text": "secret segment",
-                            "label": "AI",
-                            "ai_assistance_score": 0.8,
-                            "confidence": "high",
-                            "start_index": 4,
-                            "end_index": 18,
-                            "word_count": 2,
-                            "token_length": 3,
-                            "humanizer_score": 0.2,
-                            "is_humanized": false
-                        }],
-                        "dashboard_link": "https://dashboard.example/private"
-                    })
-                    .to_string(),
-                    ai
-                ],
+                rusqlite::params![ai_result, ai],
             )?;
+            connection.execute(
+                "UPDATE analyses SET result_json = ?1 WHERE id = ?2",
+                rusqlite::params![ai_result, ai],
+            )?;
+            connection.execute(
+                "UPDATE analysis_search SET headline = 'Mixed' WHERE analysis_id = ?1",
+                [ai],
+            )?;
+            let plagiarism_result = serde_json::json!({
+                "plagiarism_detected": true,
+                "total_sentences": 6,
+                "plagiarized_sentence_count": 5,
+                "percent_plagiarized": 83.3,
+                "matches": [
+                    {"source_url": "https://user:pass@Example.COM:8443/private?q=secret#fragment", "matched_text": "secret match", "similarity_score": 0.9},
+                    {"source_url": "https://[2001:db8::1]:9443/path", "matched_text": "ipv6 match", "similarity_score": 0.8},
+                    {"source_url": "https://bücher.example/private", "matched_text": "idn match", "similarity_score": 0.7},
+                    {"source_url": "javascript:alert(secret)", "matched_text": "bad scheme", "similarity_score": 0.6},
+                    {"source_url": "https://exa\u{0000}mple.com/private", "matched_text": "control input", "similarity_score": 0.5}
+                ]
+            })
+            .to_string();
             connection.execute(
                 "UPDATE analysis_checks
                  SET check_kind = 'plagiarism', result_json = ?1
                  WHERE analysis_id = ?2",
+                rusqlite::params![plagiarism_result, plagiarism],
+            )?;
+            connection.execute(
+                "UPDATE analyses SET result_json = ?1 WHERE id = ?2",
+                rusqlite::params![plagiarism_result, plagiarism],
+            )?;
+            connection.execute(
+                "UPDATE analysis_search
+                 SET headline = NULL, source_urls = ?1
+                 WHERE analysis_id = ?2",
                 rusqlite::params![
-                    serde_json::json!({
-                        "plagiarism_detected": true,
-                        "total_sentences": 6,
-                        "plagiarized_sentence_count": 5,
-                        "percent_plagiarized": 83.3,
-                        "matches": [
-                            {"source_url": "https://user:pass@Example.COM:8443/private?q=secret#fragment", "matched_text": "secret match", "similarity_score": 0.9},
-                            {"source_url": "https://[2001:db8::1]:9443/path", "matched_text": "ipv6 match", "similarity_score": 0.8},
-                            {"source_url": "https://bücher.example/private", "matched_text": "idn match", "similarity_score": 0.7},
-                            {"source_url": "javascript:alert(secret)", "matched_text": "bad scheme", "similarity_score": 0.6},
-                            {"source_url": "https://exa\u{0000}mple.com/private", "matched_text": "control input", "similarity_score": 0.5}
-                        ]
-                    })
-                    .to_string(),
+                    [
+                        "https://user:pass@Example.COM:8443/private?q=secret#fragment",
+                        "https://[2001:db8::1]:9443/path",
+                        "https://bücher.example/private",
+                        "javascript:alert(secret)",
+                        "https://exa\u{0000}mple.com/private",
+                    ]
+                    .join("\n"),
                     plagiarism
                 ],
             )?;
@@ -214,4 +242,58 @@ fn redacted_export_keeps_segment_evidence_and_only_safe_source_hostnames() {
     assert_eq!(matches[1]["source_url"], "[2001:db8::1]");
     assert_eq!(matches[2]["source_url"], "xn--bcher-kva.example");
     assert!(matches.iter().all(|matched| matched["matched_text"] == ""));
+}
+
+#[test]
+fn every_export_mode_rejects_forged_fts_and_parent_projection() {
+    let corruptions = [
+        "UPDATE analysis_search
+         SET input_text = 'forged export search text'
+         WHERE analysis_id = ?1",
+        "UPDATE analyses
+         SET result_json = json_set(result_json, '$.headline', 'Forged export parent')
+         WHERE id = ?1",
+    ];
+
+    for corruption in corruptions {
+        let env = Env::new();
+        let corrupted = "anl_01983c20-0180-7a80-a001-000000000051";
+        env.seed(
+            corrupted,
+            "2026-08-05T10:00:00Z",
+            "private corrupted export row",
+        );
+        env.seed(
+            "anl_01983c20-0180-7a80-a001-000000000052",
+            "2026-08-05T11:00:00Z",
+            "newer valid export row",
+        );
+        let store = HistoryStore::open(env.0.path()).expect("open real history");
+        store
+            .with_connection(|connection| connection.execute(corruption, [corrupted]))
+            .expect("borrow connection")
+            .expect("install internally well-formed export corruption");
+        drop(store);
+
+        for format in ["jsonl", "markdown"] {
+            for redact in [false, true] {
+                let mut arguments = vec!["history", "export", "--format", format];
+                if redact {
+                    arguments.push("--redact-content");
+                }
+                let output = env.run(&arguments);
+                assert_eq!(
+                    output.status.code(),
+                    Some(7),
+                    "format={format} redact={redact} corruption={corruption}"
+                );
+                let body: Value =
+                    serde_json::from_slice(&output.stdout).expect("canonical failure envelope");
+                assert_eq!(body["error"]["code"], "history_corrupt");
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(!stdout.contains("private corrupted export row"));
+                assert!(!stdout.contains("# Pangram history export"));
+            }
+        }
+    }
 }

@@ -169,8 +169,11 @@ CREATE INDEX analyses_bulk_index
                id, status, submission_outcome, save_state, input_type,
                input_sha256, input_json, created_at, updated_at
              ) VALUES (
-               'seed-constraint-owner', 'running', 'accepted', 'saved_history',
-               'text', 'seed-sha256', '{}',
+               'anl_01983c20-0180-7a80-a001-00000000c100',
+               'running', 'accepted', 'saved_history',
+               'text',
+               '0000000000000000000000000000000000000000000000000000000000000000',
+               'null',
                '2026-08-04T00:00:00Z', '2026-08-04T00:00:00Z'
              )",
             [],
@@ -181,12 +184,29 @@ CREATE INDEX analyses_bulk_index
             "INSERT INTO upstream_tasks (
                analysis_id, check_kind, upstream_task_id, observed_at
              ) VALUES (
-               'seed-constraint-owner', 'ai_detection', ?1,
+               'anl_01983c20-0180-7a80-a001-00000000c100',
+               'ai_detection', ?1,
                '2026-08-04T00:00:00Z'
              )",
             [TASK_ID],
         )
         .expect("seed the first member's conflicting task identity");
+    connection
+        .execute_batch(
+            "INSERT INTO analysis_checks
+               (analysis_id, check_index, check_kind, status)
+             VALUES (
+               'anl_01983c20-0180-7a80-a001-00000000c100',
+               0, 'ai_detection', 'running'
+             );
+             INSERT INTO analysis_search
+               (analysis_id, input_text, filename, headline, source_urls)
+             VALUES (
+               'anl_01983c20-0180-7a80-a001-00000000c100',
+               NULL, NULL, NULL, NULL
+             );",
+        )
+        .expect("complete the constraint owner aggregate");
 
     connection
         .pragma_update(None, "user_version", 1u32)
@@ -331,8 +351,8 @@ async fn manual_mixed_outcome_one_member_insert_fails_later_member_persists_in_o
     let payloads = search_payload(&connection);
     assert_eq!(
         payloads.len(),
-        1,
-        "the later member's FTS payload exists; the failed member has none"
+        2,
+        "the valid seed and later member have FTS payloads; the failed member has none"
     );
     let tasks = task_rows(&connection);
     assert_eq!(

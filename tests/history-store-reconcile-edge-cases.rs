@@ -28,6 +28,9 @@ fn stamp(value: &str) -> UtcTimestamp {
 
 fn analysis(id: &str, result: Option<&str>, error: Option<&str>) -> StoredAnalysis {
     let input_sha256 = Sha256Hash::digest("durable");
+    let search_headline = result
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| value["headline"].as_str().map(str::to_owned));
     StoredAnalysis {
         id: AnalysisId::from_str(id).expect("analysis id"),
         bulk: None,
@@ -62,7 +65,7 @@ fn analysis(id: &str, result: Option<&str>, error: Option<&str>) -> StoredAnalys
         completed_at: Some(stamp("2026-08-01T10:05:00Z")),
         search_input_text: Some("durable".to_owned()),
         search_filename: None,
-        search_headline: Some("stored headline".to_owned()),
+        search_headline,
         search_source_urls: None,
     }
 }
@@ -730,21 +733,26 @@ fn terminal_body_branches_replace_opposites_and_both_present_fails_closed() {
             &[],
         )
         .expect("stored error");
-    let snapshot = |result: Option<&str>, error: Option<&str>| ObservationSnapshot {
-        status: if error.is_some() {
-            AnalysisStatus::Failed
-        } else {
-            AnalysisStatus::Succeeded
-        },
-        submission_outcome: SubmissionOutcome::Terminal,
-        result_json: result.map(str::to_owned),
-        error_json: error.map(str::to_owned),
-        upstream_version: None,
-        completed_at: Some(stamp("2026-08-02T10:00:00Z")),
-        search_input_text: None,
-        search_filename: None,
-        search_headline: None,
-        search_source_urls: None,
+    let snapshot = |result: Option<&str>, error: Option<&str>| {
+        let search_headline = result
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .and_then(|value| value["headline"].as_str().map(str::to_owned));
+        ObservationSnapshot {
+            status: if error.is_some() {
+                AnalysisStatus::Failed
+            } else {
+                AnalysisStatus::Succeeded
+            },
+            submission_outcome: SubmissionOutcome::Terminal,
+            result_json: result.map(str::to_owned),
+            error_json: error.map(str::to_owned),
+            upstream_version: None,
+            completed_at: Some(stamp("2026-08-02T10:00:00Z")),
+            search_input_text: None,
+            search_filename: None,
+            search_headline,
+            search_source_urls: None,
+        }
     };
     let new_result = ai_result("New result");
     let new_error = canonical_error(ErrorCode::UpstreamError, "new error");

@@ -5,8 +5,9 @@ use rusqlite::params;
 use crate::domain::BulkId;
 
 use super::super::analysis_writes::{
-    ANALYSES_INSERT, legacy_checks_for_reconcile, replace_check_rows, replace_search_row,
-    set_check_count, upsert_observation_row, validate_check_rows,
+    ANALYSES_INSERT, insert_search_row, legacy_checks_for_reconcile, replace_check_rows,
+    replace_search_row, set_check_count, upsert_observation_row, validate_check_rows,
+    validate_observation_rows,
 };
 use super::super::collections::BULK_INSERT;
 use super::super::records::{StoredAnalysis, StoredCheck, StoredUpstreamTask};
@@ -75,37 +76,19 @@ impl HistoryStore {
         authoritative_checks: bool,
     ) -> Result<ReconciledBulk, HistoryError> {
         self.in_immediate_transaction(|transaction| {
-            for (child, checks, _) in children {
+            for (child, checks, observations) in children {
+                validate_supplied_child_membership(collection, child)?;
                 incoming_body(&child.result_json, &child.error_json)?;
                 if authoritative_checks {
                     validate_check_rows(child.id, checks)?;
                 }
+                // Observation ownership is part of the incoming aggregate,
+                // not a value that identity reconciliation may rewrite.
+                // Validate it before task-key lookup can select a different
+                // durable child and before this transaction mutates anything.
+                validate_observation_rows(child.id, checks, observations)?;
             }
-            let stored_id: BulkId = match &collection.upstream_bulk_id {
-                Some(upstream) => {
-                    let found: Option<String> = transaction
-                        .query_row(
-                            "SELECT id FROM bulk_collections WHERE upstream_bulk_id = ?1",
-                            params![upstream],
-                            |row| row.get(0),
-                        )
-                        .map(Some)
-                        .or_else(|error| match error {
-                            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                            _ => Err(HistoryError::from_sqlite(
-                                HistoryErrorCode::HistoryUnavailable,
-                                "find bulk collection",
-                            )),
-                        })?;
-                    match found {
-                        Some(id) => id.parse().map_err(|_| {
-                            HistoryError::from_sqlite(HistoryErrorCode::HistoryCorrupt, "read row")
-                        })?,
-                        None => collection.id,
-                    }
-                }
-                None => collection.id,
-            };
+            let stored_id = resolve_bulk_identity_tx(transaction, collection, true)?;
             // The upstream identity is authoritative. If it resolves an
             // existing collection, certify that collection and all of its
             // members before the upsert can repair or overwrite anything.
@@ -224,6 +207,37 @@ impl HistoryStore {
     }
 }
 
+/// Validates the membership a caller supplied for one child before an
+/// owning bulk operation writes anything. Reconciliation may later rebind
+/// this valid provisional membership onto the durable collection identity
+/// selected by `upstream_bulk_id`, but it must never reinterpret a
+/// contradictory foreign collection or out-of-range position as belonging
+/// to the collection being refreshed.
+pub(in crate::history) fn validate_supplied_child_membership(
+    collection: &super::super::records::StoredBulkCollection,
+    child: &StoredAnalysis,
+) -> Result<(), HistoryError> {
+    let Some((bulk_id, bulk_index)) = child.bulk else {
+        return Err(HistoryError::new(
+            HistoryErrorCode::HistoryWriteFailed,
+            "a bulk child without its membership link cannot be reconciled",
+        ));
+    };
+    if bulk_id != collection.id {
+        return Err(HistoryError::new(
+            HistoryErrorCode::HistoryWriteFailed,
+            "a bulk child belongs to a different collection",
+        ));
+    }
+    if bulk_index < 0 || (bulk_index as u64) >= collection.counters.total_items() {
+        return Err(HistoryError::new(
+            HistoryErrorCode::HistoryWriteFailed,
+            "a bulk child index is outside its collection range",
+        ));
+    }
+    Ok(())
+}
+
 /// Validates every complete stored aggregate that one child reconciliation
 /// can involve. This preflight is read-only and runs before the bulk
 /// transaction's first write.
@@ -261,6 +275,7 @@ pub(in crate::history) fn upsert_bulk_row_tx(
     transaction: &rusqlite::Transaction<'_>,
     record: &super::super::records::StoredBulkCollection,
 ) -> Result<(), HistoryError> {
+    resolve_bulk_identity_tx(transaction, record, false)?;
     let row = BulkRow::of(record);
     transaction
         .execute(
@@ -312,6 +327,81 @@ pub(in crate::history) fn upsert_bulk_row_tx(
             )
         })?;
     Ok(())
+}
+
+/// Resolves and validates the collection's two durable identities before
+/// mutation. A newly minted local id may rebind to an existing upstream row
+/// only on the reconciliation surface. Once the local id itself is durable,
+/// its non-null upstream identity cannot change, and the two keys must never
+/// resolve different rows. A missing upstream identity may still be enriched.
+fn resolve_bulk_identity_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    record: &super::super::records::StoredBulkCollection,
+    allow_rebind: bool,
+) -> Result<BulkId, HistoryError> {
+    let local_upstream = transaction
+        .query_row(
+            "SELECT upstream_bulk_id FROM bulk_collections WHERE id = ?1",
+            [record.id.to_string()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            _ => Err(HistoryError::from_sqlite(
+                HistoryErrorCode::HistoryUnavailable,
+                "resolve bulk collection identity",
+            )),
+        })?;
+    let upstream_owner = match &record.upstream_bulk_id {
+        Some(upstream) => transaction
+            .query_row(
+                "SELECT id FROM bulk_collections WHERE upstream_bulk_id = ?1",
+                [upstream],
+                |row| row.get::<_, String>(0),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                _ => Err(HistoryError::from_sqlite(
+                    HistoryErrorCode::HistoryUnavailable,
+                    "resolve bulk collection identity",
+                )),
+            })?
+            .map(|id| {
+                id.parse().map_err(|_| {
+                    HistoryError::new(
+                        HistoryErrorCode::HistoryCorrupt,
+                        "the stored bulk collection identity is invalid",
+                    )
+                })
+            })
+            .transpose()?,
+        None => None,
+    };
+
+    if let Some(stored_upstream) = local_upstream {
+        if matches!(
+            (&stored_upstream, &record.upstream_bulk_id),
+            (Some(stored), Some(incoming)) if stored != incoming
+        ) || upstream_owner.is_some_and(|owner| owner != record.id)
+        {
+            return Err(HistoryError::new(
+                HistoryErrorCode::HistoryWriteFailed,
+                "the local and upstream bulk identities resolve different collections",
+            ));
+        }
+        return Ok(record.id);
+    }
+
+    match upstream_owner {
+        Some(owner) if allow_rebind => Ok(owner),
+        Some(_) => Err(HistoryError::new(
+            HistoryErrorCode::HistoryWriteFailed,
+            "the local and upstream bulk identities resolve different collections",
+        )),
+        None => Ok(record.id),
+    }
 }
 
 /// The child upsert resolved by both of its attested identities at once
@@ -503,9 +593,14 @@ pub(in crate::history) fn upsert_child_row_tx(
                     )
                 })?;
 
-            let search_id = prior_id.unwrap_or(record.id);
-            let terminal_dominates = prior_id.is_some()
-                && matches!(body, IncomingBody::Empty)
+            let Some(search_id) = prior_id else {
+                // A fresh membership has no FTS row to replace. Avoid a
+                // table scan through the contentless FTS table before every
+                // insert, which would make large first-time bulks quadratic.
+                insert_search_row(transaction, record)?;
+                return Ok(record.id);
+            };
+            let terminal_dominates = matches!(body, IncomingBody::Empty)
                 && stored_terminal_snapshot_tx(transaction, &search_id)?;
             let (input_text, filename, headline, source_urls) =
                 coalesce_search_tx(record, prior_search, terminal_dominates);
@@ -712,11 +807,10 @@ fn child_attested_task_keys_tx(
     Ok(keys)
 }
 
-/// The search payload of a refreshed child: every stored column wins when
-/// present for input authorship, while result-owned metadata is incoming
-/// first when the newer observation actually supplies it. This preserves
-/// first-recorded local input and lets a later terminal observation replace
-/// a stale headline or source URL.
+/// The search payload of a refreshed child: stored input authorship wins,
+/// while result-owned metadata exactly follows the incoming authoritative
+/// terminal projection. A body-less refresh of terminal evidence keeps the
+/// complete prior projection.
 fn coalesce_search_tx(
     record: &StoredAnalysis,
     prior: SearchColumns,
@@ -728,7 +822,7 @@ fn coalesce_search_tx(
     (
         prior.0.or_else(|| record.search_input_text.clone()),
         prior.1.or_else(|| record.search_filename.clone()),
-        record.search_headline.clone().or(prior.2),
-        record.search_source_urls.clone().or(prior.3),
+        record.search_headline.clone(),
+        record.search_source_urls.clone(),
     )
 }

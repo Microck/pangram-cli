@@ -6,7 +6,7 @@ use rusqlite::params;
 use crate::domain::AnalysisId;
 
 use super::super::analysis_writes::{
-    certify_stored_check_rows, replace_check_rows, replace_search_row, set_check_count,
+    load_stored_check_rows, replace_check_rows, replace_search_row, set_check_count,
     validate_check_rows,
 };
 use super::super::records::StoredCheck;
@@ -48,8 +48,8 @@ pub(in crate::history) fn update_observation_snapshot_tx(
 ) -> Result<(), HistoryError> {
     let prior_search = child_search_by_id_tx(transaction, id)?;
     let prior_terminal = stored_terminal_snapshot_tx(transaction, id)?;
-    certify_stored_check_rows(transaction, id)?;
-    let checks = authoritative_checks
+    let stored_checks = load_stored_check_rows(transaction, id)?;
+    let incoming_checks = authoritative_checks
         .iter()
         .cloned()
         .map(|check| StoredCheck {
@@ -61,6 +61,29 @@ pub(in crate::history) fn update_observation_snapshot_tx(
     let terminal_dominates = prior_terminal && matches!(incoming_body, IncomingBody::Empty);
     let replace_checks = !terminal_dominates
         && (replace_authoritative_checks || !matches!(incoming_body, IncomingBody::Empty));
+    let checks = if replace_checks && !replace_authoritative_checks {
+        validate_check_rows(*id, &incoming_checks)?;
+        let mut merged = stored_checks;
+        for incoming in incoming_checks {
+            let stored = merged
+                .iter_mut()
+                .find(|stored| stored.check_kind == incoming.check_kind)
+                .ok_or_else(|| {
+                    HistoryError::new(
+                        HistoryErrorCode::HistoryWriteFailed,
+                        "an observation cannot add a check kind not owned by the analysis",
+                    )
+                })?;
+            let check_index = stored.check_index;
+            *stored = StoredCheck {
+                check_index,
+                ..incoming
+            };
+        }
+        merged
+    } else {
+        incoming_checks
+    };
     if replace_checks {
         validate_check_rows(*id, &checks)?;
     }
@@ -125,8 +148,8 @@ pub(in crate::history) fn update_observation_snapshot_tx(
                 .0
                 .or_else(|| snapshot.search_input_text.clone()),
             prior_search.1.or_else(|| snapshot.search_filename.clone()),
-            snapshot.search_headline.clone().or(prior_search.2),
-            snapshot.search_source_urls.clone().or(prior_search.3),
+            snapshot.search_headline.clone(),
+            snapshot.search_source_urls.clone(),
         )
     };
     replace_search_row(
@@ -167,7 +190,7 @@ pub(super) fn certify_existing_analysis_tx(
     transaction: &rusqlite::Transaction<'_>,
     id: &AnalysisId,
 ) -> Result<(), HistoryError> {
-    super::super::read_validation::certify_analysis_aggregate(transaction, id)
+    super::super::read_validation::certify_analysis_projection(transaction, id)
 }
 
 /// The stored search payload columns synchronized with one analysis row.

@@ -15,10 +15,11 @@ use crate::domain::BulkId;
 
 use super::analysis_writes::{
     insert_check_rows, legacy_checks_for_reconcile, set_check_count, upsert_observation_row,
+    validate_observation_rows,
 };
 use super::records::{StoredAnalysis, StoredBulkCollection, StoredUpstreamTask};
 use super::store::HistoryStore;
-use super::wire::{BulkRow, row_to_analysis, row_to_bulk};
+use super::wire::{BulkRow, row_to_bulk};
 use super::{HistoryError, HistoryErrorCode};
 
 impl HistoryStore {
@@ -44,8 +45,8 @@ impl HistoryStore {
         &self,
         upstream_bulk_id: &str,
     ) -> Result<Option<StoredBulkCollection>, HistoryError> {
-        let found: Option<String> = self.with_connection_result(|connection| {
-            connection
+        self.with_read_snapshot(|connection| {
+            let found: Option<String> = connection
                 .query_row(
                     "SELECT id FROM bulk_collections WHERE upstream_bulk_id = ?1",
                     params![upstream_bulk_id],
@@ -58,17 +59,17 @@ impl HistoryStore {
                         HistoryErrorCode::HistoryUnavailable,
                         "find bulk collection",
                     )),
-                })
-        })?;
-        match found {
-            None => Ok(None),
-            Some(id) => {
-                let parsed = id.parse().map_err(|_| {
-                    HistoryError::from_sqlite(HistoryErrorCode::HistoryCorrupt, "read row")
                 })?;
-                self.get_bulk_collection(&parsed).map(Some)
+            match found {
+                None => Ok(None),
+                Some(id) => {
+                    let parsed = id.parse().map_err(|_| {
+                        HistoryError::from_sqlite(HistoryErrorCode::HistoryCorrupt, "read row")
+                    })?;
+                    get_bulk_collection_on(connection, &parsed).map(Some)
+                }
             }
-        }
+        })
     }
 
     /// Atomically refreshes one bulk collection with its children and their
@@ -97,6 +98,15 @@ impl HistoryStore {
         children: &[(StoredAnalysis, Vec<StoredUpstreamTask>)],
     ) -> Result<(), HistoryError> {
         self.in_immediate_transaction(|transaction| {
+            // Reject foreign-owner or wrong-kind observation vectors before
+            // task identities can resolve a child and before the collection
+            // or any member is mutated. Rebinding is only valid after the
+            // incoming child aggregate has proved its own ownership.
+            for (child, observations) in children {
+                super::reconcile::validate_supplied_child_membership(collection, child)?;
+                let checks = legacy_checks_for_reconcile(child, observations)?;
+                validate_observation_rows(child.id, &checks, observations)?;
+            }
             let mut existing = std::collections::BTreeSet::new();
             if transaction
                 .query_row(
@@ -200,14 +210,11 @@ impl HistoryStore {
     /// synchronized search entry is corruption, not an absent payload.
     pub fn list_bulk_analyses(&self, bulk: &BulkId) -> Result<Vec<StoredAnalysis>, HistoryError> {
         self.with_read_snapshot(|connection| {
-            super::search::certify_search_index(connection)?;
-            let mut statement = connection
-                .prepare(
-                    "SELECT id, bulk_id, bulk_index, caller_id, status, submission_outcome,
-                            save_state, input_type, input_sha256, display_name, input_json,
-                            result_json, error_json, upstream_version, retry_of, rerun_of,
-                            submitted_at, created_at, updated_at, completed_at
-                     FROM analyses WHERE bulk_id = ?1 ORDER BY bulk_index",
+            let bulk_exists = connection
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM bulk_collections WHERE id = ?1)",
+                    [bulk.to_string()],
+                    |row| row.get::<_, bool>(0),
                 )
                 .map_err(|_| {
                     HistoryError::from_sqlite(
@@ -215,55 +222,44 @@ impl HistoryStore {
                         "list bulk analyses",
                     )
                 })?;
-            let rows = statement
-                .query_map([bulk.to_string()], |row| row_to_analysis(row, connection))
-                .map_err(|_| {
-                    HistoryError::from_sqlite(
-                        HistoryErrorCode::HistoryUnavailable,
-                        "list bulk analyses",
-                    )
-                })?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| match error {
-                    rusqlite::Error::InvalidQuery => HistoryError::new(
-                        HistoryErrorCode::HistoryCorrupt,
-                        "the history database is structurally inconsistent. \
-                         Move the history directory aside and rerun the command; \
-                         the original file is preserved.",
-                    ),
-                    _ => HistoryError::from_sqlite(
-                        HistoryErrorCode::HistoryUnavailable,
-                        "list bulk analyses",
-                    ),
-                })?;
-            Ok(rows)
+            if bulk_exists {
+                super::read_validation::certify_bulk_analyses(connection, bulk)
+            } else {
+                Ok(Vec::new())
+            }
         })
     }
 
     /// Fetches one full bulk collection row by its canonical identity.
     pub fn get_bulk_collection(&self, id: &BulkId) -> Result<StoredBulkCollection, HistoryError> {
-        self.with_connection_result(|connection| {
-            connection
-                .query_row(
-                    "SELECT id, upstream_bulk_id, status, submission_outcome, total_items,
-                            accepted, succeeded, failed, estimated_billable_units, created_at,
-                            updated_at, completed_at
-                     FROM bulk_collections WHERE id = ?1",
-                    [id.to_string()],
-                    row_to_bulk,
-                )
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => HistoryError::new(
-                        HistoryErrorCode::NotFound,
-                        "no bulk collection with that identity is recorded",
-                    ),
-                    _ => HistoryError::from_sqlite(
-                        HistoryErrorCode::HistoryUnavailable,
-                        "read bulk collection",
-                    ),
-                })
-        })
+        self.with_read_snapshot(|connection| get_bulk_collection_on(connection, id))
     }
+}
+
+fn get_bulk_collection_on(
+    connection: &rusqlite::Connection,
+    id: &BulkId,
+) -> Result<StoredBulkCollection, HistoryError> {
+    super::read_validation::certify_bulk_aggregate(connection, id)?;
+    connection
+        .query_row(
+            "SELECT id, upstream_bulk_id, status, submission_outcome, total_items,
+                    accepted, succeeded, failed, estimated_billable_units, created_at,
+                    updated_at, completed_at
+             FROM bulk_collections WHERE id = ?1",
+            [id.to_string()],
+            row_to_bulk,
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::InvalidQuery => HistoryError::new(
+                HistoryErrorCode::HistoryCorrupt,
+                "the stored bulk collection is invalid",
+            ),
+            _ => HistoryError::from_sqlite(
+                HistoryErrorCode::HistoryUnavailable,
+                "read bulk collection",
+            ),
+        })
 }
 
 /// Inserts a new bulk collection row.

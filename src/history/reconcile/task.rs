@@ -101,6 +101,12 @@ impl HistoryStore {
             incoming_body(&record.result_json, &record.error_json)?;
             if matches!(mode, ReconcileMode::Authoritative { .. }) {
                 super::super::analysis_writes::validate_check_rows(record.id, checks)?;
+                super::super::analysis_writes::validate_observation_rows(
+                    record.id,
+                    checks,
+                    observations,
+                )?;
+                validate_standalone_task_shape(checks, observations)?;
             }
             let existing = task_lookup_targets(transaction, observations)?
                 .map(|id| super::super::reads::stored_analysis_opt_on(transaction, &id))
@@ -109,10 +115,10 @@ impl HistoryStore {
             match existing {
                 Some(prior) => {
                     let id = prior.id;
-                    // Validate the complete stored aggregate, including
-                    // parent/check agreement and unmatched task evidence,
-                    // before deriving or writing any merged state.
-                    super::super::read_validation::certify_analysis_aggregate(transaction, &id)?;
+                    // Selection by a task key only identifies the candidate.
+                    // Certify its complete aggregate before caller-owned
+                    // merge logic can inspect or derive a replacement from it.
+                    super::super::read_validation::certify_analysis_projection(transaction, &id)?;
                     // Selection by one exact task key does not authorize a
                     // later incoming key to replace other durable evidence
                     // owned by this row. Compare before snapshot mutation so
@@ -202,15 +208,7 @@ fn merge_matching_checks(
     observations: &[StoredUpstreamTask],
     analysis_id: crate::domain::AnalysisId,
 ) -> Result<Vec<StoredCheck>, HistoryError> {
-    if incoming.len() != 1
-        || observations.len() != 1
-        || incoming[0].check_kind != observations[0].check_kind
-    {
-        return Err(HistoryError::new(
-            HistoryErrorCode::HistoryWriteFailed,
-            "one standalone task observation must attest exactly one matching check kind",
-        ));
-    }
+    validate_standalone_task_shape(incoming, observations)?;
     super::super::analysis_writes::validate_check_rows(incoming[0].analysis_id, incoming)?;
     let incoming = &incoming[0];
     let mut merged = stored.to_vec();
@@ -250,6 +248,22 @@ fn merge_matching_checks(
     Ok(merged)
 }
 
+fn validate_standalone_task_shape(
+    checks: &[StoredCheck],
+    observations: &[StoredUpstreamTask],
+) -> Result<(), HistoryError> {
+    if checks.len() != 1
+        || observations.len() != 1
+        || checks[0].check_kind != observations[0].check_kind
+    {
+        return Err(HistoryError::new(
+            HistoryErrorCode::HistoryWriteFailed,
+            "one standalone task observation must attest exactly one matching check kind",
+        ));
+    }
+    Ok(())
+}
+
 /// Recomputes the denormalized parent projection from the merged complete
 /// check set. Check rows remain the reconstruction source of truth; these
 /// columns are maintained only so list/filter and legacy readers observe the
@@ -279,18 +293,17 @@ fn apply_merged_parent(
     } else {
         None
     };
-    snapshot.result_json = checks.iter().find_map(|check| check.result_json.clone());
-    snapshot.error_json = if snapshot.result_json.is_none() {
-        checks.iter().find_map(|check| check.error_json.clone())
-    } else {
-        None
-    };
+    let projection = super::super::save::project_stored_checks(checks)?;
+    snapshot.result_json = projection.result_json;
+    snapshot.error_json = projection.error_json;
+    snapshot.search_headline = projection.search_headline;
+    snapshot.search_source_urls = projection.search_source_urls;
     Ok(())
 }
 
 /// Resolves the one durable identity the attested task keys point at. A
 /// conflicting projection or keys resolving distinct rows fails closed.
-pub(super) fn task_lookup_targets(
+pub(in crate::history) fn task_lookup_targets(
     transaction: &rusqlite::Transaction<'_>,
     observations: &[StoredUpstreamTask],
 ) -> Result<Option<crate::domain::AnalysisId>, HistoryError> {
@@ -351,7 +364,7 @@ pub(super) fn task_lookup_targets(
 /// selected row. Missing kinds may be added, exact keys may refresh, omitted
 /// kinds remain untouched, and a different ID for an owned kind is a
 /// fail-closed evidence conflict.
-fn validate_owned_task_evidence(
+pub(in crate::history) fn validate_owned_task_evidence(
     transaction: &rusqlite::Transaction<'_>,
     id: &crate::domain::AnalysisId,
     observations: &[StoredUpstreamTask],

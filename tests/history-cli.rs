@@ -173,6 +173,10 @@ fn resumed_show_and_export_preserve_upstream_provenance_without_authorship() {
                 [bulk_id, id],
             )?;
             connection.execute(
+                "UPDATE analysis_search SET input_text = NULL WHERE analysis_id = ?1",
+                [id],
+            )?;
+            connection.execute(
                 "INSERT INTO upstream_tasks
                  (analysis_id, check_kind, upstream_task_id, last_stage, observed_at)
                  VALUES (?1, 'ai_detection', 'task-resumed', 'STAGE_SUCCESS', ?2)",
@@ -233,7 +237,8 @@ fn queued_resumed_show_and_export_omit_absent_input() {
             )?;
             connection.execute(
                 "UPDATE analysis_search
-                 SET input_text = NULL, filename = NULL
+                 SET input_text = NULL, filename = NULL,
+                     headline = NULL, source_urls = NULL
                  WHERE analysis_id = ?1",
                 [id],
             )?;
@@ -351,22 +356,30 @@ fn list_and_search_check_filters_use_authoritative_check_kinds() {
     let store = HistoryStore::open(env.data_dir()).expect("open real history");
     store
         .with_connection(|connection| {
+            let result_json = serde_json::json!({
+                "plagiarism_detected": false,
+                "total_sentences": 1,
+                "plagiarized_sentence_count": 0,
+                "percent_plagiarized": 0.0,
+                "matches": []
+            })
+            .to_string();
             connection.execute(
                 "UPDATE analysis_checks
                  SET check_kind = 'plagiarism',
                      result_json = ?1
                  WHERE analysis_id = ?2",
-                rusqlite::params![
-                    serde_json::json!({
-                        "plagiarism_detected": false,
-                        "total_sentences": 1,
-                        "plagiarized_sentence_count": 0,
-                        "percent_plagiarized": 0.0,
-                        "matches": []
-                    })
-                    .to_string(),
-                    plagiarism
-                ],
+                rusqlite::params![result_json, plagiarism],
+            )?;
+            connection.execute(
+                "UPDATE analyses
+                 SET result_json = ?1
+                 WHERE id = ?2",
+                rusqlite::params![result_json, plagiarism],
+            )?;
+            connection.execute(
+                "UPDATE analysis_search SET headline = NULL WHERE analysis_id = ?1",
+                [plagiarism],
             )
         })
         .expect("borrow connection")
@@ -528,7 +541,13 @@ fn rerun_rejects_missing_retained_text_before_credentials() {
     store
         .with_connection(|connection| {
             connection.execute(
-                "UPDATE analyses SET input_json = json_remove(input_json, '$.text') WHERE id = ?1",
+                "UPDATE analyses
+                 SET input_json = json_remove(input_json, '$.text')
+                 WHERE id = ?1",
+                [id],
+            )?;
+            connection.execute(
+                "UPDATE analysis_search SET input_text = NULL WHERE analysis_id = ?1",
                 [id],
             )
         })

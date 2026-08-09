@@ -14,8 +14,12 @@ mod task;
 use crate::domain::{AnalysisId, BulkId, SaveState};
 
 use super::records::{StoredAnalysis, StoredCheck, StoredUpstreamTask};
-pub(super) use bulk::{upsert_bulk_row_tx, upsert_child_row_tx, validate_existing_child_state_tx};
+pub(super) use bulk::{
+    upsert_bulk_row_tx, upsert_child_row_tx, validate_existing_child_state_tx,
+    validate_supplied_child_membership,
+};
 pub(super) use common::update_observation_snapshot_tx;
+pub(super) use task::{task_lookup_targets, validate_owned_task_evidence};
 
 /// The outcome of one atomic observed-analysis reconciliation: the stored
 /// row's identity, its untouched `save_state`, and whether this reconcile

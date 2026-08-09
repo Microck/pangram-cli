@@ -203,6 +203,7 @@ impl HistoryStore {
 
         // Classification and creation share one SQLite-owned write lock.
         store.initialize_or_validate_schema()?;
+        super::read_validation::certify_foreign_keys(&store.connection)?;
 
         store.prepare_connection()?;
 
@@ -286,15 +287,7 @@ impl HistoryStore {
             match transaction.commit() {
                 Ok(()) => return Ok(outcome),
                 Err(error) => {
-                    let is_busy = matches!(
-                        &error,
-                        rusqlite::Error::SqliteFailure(inner, _)
-                            if matches!(
-                                inner.code,
-                                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                            )
-                    );
-                    if is_busy && attempt < MAX_BUSY_RETRIES {
+                    if sqlite_is_busy_or_locked(&error) && attempt < MAX_BUSY_RETRIES {
                         attempt += 1;
                         std::thread::sleep(std::time::Duration::from_millis(
                             25 * u64::from(attempt),
@@ -341,11 +334,7 @@ impl HistoryStore {
         // Apply and then verify the runtime value: a filesystem that cannot
         // honor WAL or a foreign-key build flag must fail closed here, not
         // midway through a transaction.
-        self.connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .map_err(|_| {
-                HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "enable WAL")
-            })?;
+        self.enable_wal()?;
         let applied: String = self
             .connection
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
@@ -376,6 +365,29 @@ impl HistoryStore {
             })?;
         self.set_busy_timeout()?;
         Ok(())
+    }
+
+    fn enable_wal(&self) -> Result<(), HistoryError> {
+        const MAX_BUSY_RETRIES: u32 = 8;
+        let mut attempt = 0;
+        loop {
+            match self.connection.pragma_update(None, "journal_mode", "WAL") {
+                Ok(()) => return Ok(()),
+                Err(error) if sqlite_is_busy_or_locked(&error) && attempt < MAX_BUSY_RETRIES => {
+                    // SQLite can bypass the busy handler while another opener
+                    // activates or recovers WAL. Retry only that transient lock
+                    // class; every other failure remains an immediate fail-close.
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(25 * u64::from(attempt)));
+                }
+                Err(_) => {
+                    return Err(HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "enable WAL",
+                    ));
+                }
+            }
+        }
     }
 
     fn set_busy_timeout(&self) -> Result<(), HistoryError> {
@@ -482,6 +494,17 @@ impl HistoryStore {
             )),
         }
     }
+}
+
+fn sqlite_is_busy_or_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if matches!(
+                inner.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
 }
 
 fn unknown_schema_version(version: u32) -> HistoryError {

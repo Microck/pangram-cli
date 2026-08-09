@@ -120,9 +120,13 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
     let plagiarism_result = serde_json::json!({
         "plagiarism_detected": false,
         "total_sentences": 1,
-        "plagiarized_sentence_count": 0,
-        "percent_plagiarized": 0.0,
-        "matches": []
+        "plagiarized_sentence_count": 1,
+        "percent_plagiarized": 100.0,
+        "matches": [{
+            "source_url": "https://example.invalid/retained",
+            "matched_text": "synthetic retained match",
+            "similarity_score": 1.0
+        }]
     })
     .to_string();
     let succeeded_checks = vec![
@@ -156,7 +160,7 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
                 search_input_text: Some(text.to_owned()),
                 search_filename: None,
                 search_headline: Some("Human".to_owned()),
-                search_source_urls: None,
+                search_source_urls: Some("https://example.invalid/retained".to_owned()),
             },
             &succeeded_checks,
         )
@@ -277,7 +281,7 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
             .code(),
         HistoryErrorCode::HistoryCorrupt
     );
-    let before_status = store.get_analysis(&id).unwrap().status;
+    let before_status = raw_analysis_status(&store, id);
     let error = store
         .update_terminal_result_complete(
             &id,
@@ -297,7 +301,7 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
         )
         .expect_err("malformed stored checks must roll back");
     assert_eq!(error.code(), HistoryErrorCode::HistoryCorrupt);
-    assert_eq!(store.get_analysis(&id).unwrap().status, before_status);
+    assert_eq!(raw_analysis_status(&store, id), before_status);
     assert_eq!(
         store
             .canonical_analysis(&id, true)
@@ -315,6 +319,155 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
 }
 
 #[test]
+fn ai_terminal_refresh_preserves_an_omitted_plagiarism_check_without_task_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = HistoryStore::open(root.path()).expect("open history store");
+    let id = AnalysisId::from_str("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a13").unwrap();
+    let created_at = UtcTimestamp::from_str("2026-08-01T10:00:00Z").unwrap();
+    let observed_at = UtcTimestamp::from_str("2026-08-01T10:05:00Z").unwrap();
+    let text = "combined check without plagiarism task";
+    let plagiarism_result = serde_json::json!({
+        "plagiarism_detected": false,
+        "total_sentences": 1,
+        "plagiarized_sentence_count": 1,
+        "percent_plagiarized": 100.0,
+        "matches": [{
+            "source_url": "https://example.invalid/retained-without-task",
+            "matched_text": "synthetic retained match",
+            "similarity_score": 1.0
+        }]
+    })
+    .to_string();
+    let record = StoredAnalysis {
+        id,
+        bulk: None,
+        caller_id: None,
+        status: AnalysisStatus::Running,
+        submission_outcome: SubmissionOutcome::Accepted,
+        save_state: SaveState::SavedManual,
+        input_kind: InputKind::Text,
+        input_sha256: Sha256Hash::digest(text),
+        display_name: None,
+        input_json: serde_json::json!({
+            "type": "text",
+            "origin": "literal",
+            "sha256": Sha256Hash::digest(text),
+            "byte_count": text.len(),
+            "word_count": 5,
+            "text": text
+        })
+        .to_string(),
+        result_json: Some(plagiarism_result.clone()),
+        error_json: None,
+        upstream_version: Some("4.0".to_owned()),
+        retry_of: None,
+        rerun_of: None,
+        submitted_at: Some(created_at),
+        created_at,
+        updated_at: created_at,
+        completed_at: None,
+        search_input_text: Some(text.to_owned()),
+        search_filename: None,
+        search_headline: None,
+        search_source_urls: Some("https://example.invalid/retained-without-task".to_owned()),
+    };
+    let checks = vec![
+        StoredCheck {
+            analysis_id: id,
+            check_index: 0,
+            check_kind: CheckKind::AiDetection,
+            status: CheckStatus::Running,
+            result_json: None,
+            error_json: None,
+        },
+        StoredCheck {
+            analysis_id: id,
+            check_index: 1,
+            check_kind: CheckKind::Plagiarism,
+            status: CheckStatus::Succeeded,
+            result_json: Some(plagiarism_result.clone()),
+            error_json: None,
+        },
+    ];
+    let ai_task = StoredUpstreamTask {
+        analysis_id: id,
+        check_kind: CheckKind::AiDetection,
+        upstream_task_id: "task-ai-without-plagiarism-task".to_owned(),
+        last_stage: Some("STAGE_INFERENCE".to_owned()),
+        observed_at: created_at,
+    };
+    store
+        .save_analysis_complete(&record, &checks, &[ai_task])
+        .expect("seed combined row without plagiarism task evidence");
+
+    let ai_result = serde_json::json!({
+        "classification": "human",
+        "headline": "Human",
+        "prediction": "Human",
+        "fraction_ai": 0.0,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0,
+        "num_ai_segments": 0,
+        "num_ai_assisted_segments": 0,
+        "num_human_segments": 1,
+        "segments": []
+    })
+    .to_string();
+    store
+        .update_observation_snapshot(
+            &id,
+            observed_at,
+            &ObservationSnapshot {
+                status: AnalysisStatus::Succeeded,
+                submission_outcome: SubmissionOutcome::Accepted,
+                result_json: Some(ai_result),
+                error_json: None,
+                upstream_version: Some("4.1".to_owned()),
+                completed_at: Some(observed_at),
+                search_input_text: None,
+                search_filename: None,
+                search_headline: Some("Human".to_owned()),
+                search_source_urls: Some(
+                    "https://example.invalid/retained-without-task".to_owned(),
+                ),
+            },
+        )
+        .expect("refresh AI terminal result");
+
+    let canonical = store
+        .canonical_analysis(&id, true)
+        .expect("combined analysis remains reconstructable");
+    assert_eq!(
+        canonical
+            .checks()
+            .iter()
+            .map(OrderedCheck::check_kind)
+            .collect::<Vec<_>>(),
+        vec![CheckKind::AiDetection, CheckKind::Plagiarism],
+        "the AI-only refresh must not delete the omitted plagiarism check"
+    );
+    let canonical_value = serde_json::to_value(&canonical).expect("canonical JSON");
+    assert_eq!(
+        canonical_value["checks"][1]["result"],
+        serde_json::from_str::<serde_json::Value>(&plagiarism_result).unwrap(),
+        "the omitted plagiarism evidence remains unchanged"
+    );
+    let task_kinds = store
+        .with_connection(|connection| {
+            connection
+                .prepare(
+                    "SELECT check_kind FROM upstream_tasks
+                     WHERE analysis_id = ?1 ORDER BY check_kind",
+                )?
+                .query_map([id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .expect("borrow database")
+        .expect("read task evidence");
+    assert_eq!(task_kinds, vec!["ai_detection"]);
+}
+
+#[test]
 fn standalone_observations_merge_only_the_matching_check() {
     let root = tempfile::tempdir().unwrap();
     let mut store = HistoryStore::open(root.path()).expect("open history store");
@@ -324,9 +477,13 @@ fn standalone_observations_merge_only_the_matching_check() {
     let plagiarism_result = serde_json::json!({
         "plagiarism_detected": false,
         "total_sentences": 1,
-        "plagiarized_sentence_count": 0,
-        "percent_plagiarized": 0.0,
-        "matches": []
+        "plagiarized_sentence_count": 1,
+        "percent_plagiarized": 100.0,
+        "matches": [{
+            "source_url": "https://example.invalid/retained",
+            "matched_text": "synthetic retained match",
+            "similarity_score": 1.0
+        }]
     })
     .to_string();
     let record = StoredAnalysis {
@@ -582,9 +739,13 @@ fn corrupt_combined_rows_roll_back_a_standalone_refresh_unchanged() {
     let plagiarism_result = serde_json::json!({
         "plagiarism_detected": false,
         "total_sentences": 1,
-        "plagiarized_sentence_count": 0,
-        "percent_plagiarized": 0.0,
-        "matches": []
+        "plagiarized_sentence_count": 1,
+        "percent_plagiarized": 100.0,
+        "matches": [{
+            "source_url": "https://example.invalid/original",
+            "matched_text": "synthetic original match",
+            "similarity_score": 1.0
+        }]
     })
     .to_string();
     let record = StoredAnalysis {
@@ -734,4 +895,17 @@ fn raw_reconcile_state(store: &HistoryStore, id: AnalysisId) -> Vec<String> {
         })
         .expect("borrow database")
         .expect("read raw reconcile state")
+}
+
+fn raw_analysis_status(store: &HistoryStore, id: AnalysisId) -> String {
+    store
+        .with_connection(|connection| {
+            connection.query_row(
+                "SELECT status FROM analyses WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+        })
+        .expect("borrow database")
+        .expect("read raw analysis status")
 }

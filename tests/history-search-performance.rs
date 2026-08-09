@@ -87,16 +87,26 @@ fn representative_indexed_search_at_ten_thousand_analyses_stays_under_budget() {
     let children = (0..ANALYSIS_COUNT)
         .map(|index| (fixture_child(index, bulk_id), Vec::new()))
         .collect::<Vec<_>>();
+    let setup_started = Instant::now();
     store
         .reconcile_bulk_collection_atomic(&collection, &children)
         .expect("insert valid 10,000-analysis fixture");
+    eprintln!(
+        "history-search-10k setup_ms={}",
+        setup_started.elapsed().as_millis()
+    );
 
+    let warmup_started = Instant::now();
     for _ in 0..WARMUP_RUNS {
         let hits = store
             .search("representative indexed", 25)
             .expect("warm indexed search");
         assert_eq!(hits.len(), 25);
     }
+    eprintln!(
+        "history-search-10k warmup_ms={}",
+        warmup_started.elapsed().as_millis()
+    );
 
     let mut samples = Vec::with_capacity(MEASURED_RUNS);
     for _ in 0..MEASURED_RUNS {

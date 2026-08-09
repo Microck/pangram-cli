@@ -66,7 +66,7 @@ fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
         completed_at: Some(timestamp("2026-08-01T10:05:00Z")),
         search_input_text: Some(input_text.to_owned()),
         search_filename: None,
-        search_headline: None,
+        search_headline: Some("Human-written".to_owned()),
         search_source_urls: None,
     }
 }

@@ -2,7 +2,8 @@ use std::process::{Command, Output};
 use std::str::FromStr;
 
 use microck_pangram_cli::domain::{
-    AnalysisId, AnalysisStatus, SaveState, Sha256Hash, SubmissionOutcome, UtcTimestamp,
+    AnalysisId, AnalysisInput, AnalysisStatus, SaveState, Sha256Hash, SubmissionOutcome, TextInput,
+    TextOrigin, UtcTimestamp,
 };
 use microck_pangram_cli::history::{HistoryStore, InputKind, StoredAnalysis};
 use serde_json::Value;
@@ -48,18 +49,21 @@ impl Env {
 
     pub(crate) fn seed(&self, id: &str, created_at: &str, text: &str, display_name: Option<&str>) {
         let mut store = HistoryStore::open(self.data_dir()).expect("open real history");
-        let mut input = serde_json::json!({
-            "type": "text",
-            "origin": "literal",
-            "sha256": Sha256Hash::digest(text).to_string(),
-            "byte_count": text.len(),
-            "word_count": text.split_whitespace().count(),
-            "text": text
-        });
-        if let Some(name) = display_name {
-            input["origin"] = serde_json::Value::String("file".to_owned());
-            input["name"] = serde_json::Value::String(name.to_owned());
-        }
+        let input = AnalysisInput::Text(
+            TextInput::new(
+                if display_name.is_some() {
+                    TextOrigin::File
+                } else {
+                    TextOrigin::Literal
+                },
+                display_name.map(str::to_owned),
+                Sha256Hash::digest(text),
+                u64::try_from(text.len()).expect("input byte count"),
+                u64::try_from(text.split_whitespace().count()).expect("input word count"),
+                Some(text.to_owned()),
+            )
+            .expect("canonical text input"),
+        );
         let record = StoredAnalysis {
             id: AnalysisId::from_str(id).expect("analysis id"),
             bulk: None,
@@ -70,7 +74,7 @@ impl Env {
             input_kind: InputKind::Text,
             input_sha256: Sha256Hash::digest(text),
             display_name: display_name.map(str::to_owned),
-            input_json: input.to_string(),
+            input_json: serde_json::to_string(&input).expect("serialize canonical input"),
             result_json: Some(
                 serde_json::json!({
                     "classification": "human",

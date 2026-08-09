@@ -22,6 +22,13 @@ use super::records::{
 };
 use super::{HistoryError, HistoryErrorCode};
 
+pub(super) struct CanonicalCheckProjection {
+    pub result_json: Option<String>,
+    pub error_json: Option<String>,
+    pub search_headline: Option<String>,
+    pub search_source_urls: Option<String>,
+}
+
 /// Projects one canonical analysis onto its schema v1 row (typed columns,
 /// opaque canonical JSON, and the FTS payload).
 pub fn stored_analysis(
@@ -42,7 +49,9 @@ pub fn stored_analysis_with_retained_text(
     let mut input_value = serde_json::to_value(&analysis.input)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
     if let (Some(text), Some(input)) = (retained_text, input_value.as_object_mut()) {
-        if input.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+        if input.get("type").and_then(serde_json::Value::as_str) == Some("text")
+            && input.get("text").and_then(serde_json::Value::as_str) != Some(text)
+        {
             input.insert(
                 "text".to_owned(),
                 serde_json::Value::String(text.to_owned()),
@@ -52,49 +61,7 @@ pub fn stored_analysis_with_retained_text(
     let input_json = serde_json::to_string(&input_value)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
 
-    // Terminal payloads: a succeeded check stores its result; a failed check
-    // stores the complete canonical error object. Precedence matches a
-    // (defensively) multi-check partial analysis: result first, else the
-    // first error, else nothing while the analysis is still in flight.
-    let mut result_json: Option<String> = None;
-    let mut error_json: Option<String> = None;
-    let mut headline: Option<String> = None;
-    let mut source_urls: Vec<String> = Vec::new();
-    for check in analysis.checks() {
-        match check {
-            Check::AiDetection(CheckState::Succeeded { result, .. }) => {
-                if result_json.is_none() {
-                    result_json = Some(
-                        serde_json::to_string(result)
-                            .map_err(|_| serialization_failure("serialize terminal result"))?,
-                    );
-                }
-                if headline.is_none() {
-                    headline = Some(result.headline.clone());
-                }
-            }
-            Check::Plagiarism(CheckState::Succeeded { result, .. }) => {
-                if result_json.is_none() {
-                    result_json = Some(
-                        serde_json::to_string(result)
-                            .map_err(|_| serialization_failure("serialize terminal result"))?,
-                    );
-                }
-                source_urls.extend(result.matches.iter().map(|found| found.source_url.clone()));
-            }
-            Check::AiDetection(CheckState::Failed { error, .. })
-            | Check::Plagiarism(CheckState::Failed { error, .. }) => {
-                if error_json.is_none() {
-                    error_json =
-                        Some(serde_json::to_string(error).map_err(|_| {
-                            serialization_failure("serialize canonical check error")
-                        })?);
-                }
-            }
-            Check::AiDetection(CheckState::Queued { .. } | CheckState::Running { .. })
-            | Check::Plagiarism(CheckState::Queued { .. } | CheckState::Running { .. }) => {}
-        }
-    }
+    let check_projection = project_canonical_checks(analysis.checks())?;
 
     let (input_kind, input_sha256, display_name, mut search_input_text, search_filename) =
         project_input(analysis);
@@ -113,8 +80,8 @@ pub fn stored_analysis_with_retained_text(
         input_sha256,
         display_name,
         input_json,
-        result_json,
-        error_json,
+        result_json: check_projection.result_json,
+        error_json: check_projection.error_json,
         upstream_version: analysis.provenance().upstream_version.clone(),
         retry_of: analysis.retry_of(),
         rerun_of: analysis.rerun_of(),
@@ -124,13 +91,89 @@ pub fn stored_analysis_with_retained_text(
         completed_at: analysis.completed_at,
         search_input_text,
         search_filename,
-        search_headline: headline,
-        search_source_urls: if source_urls.is_empty() {
-            None
-        } else {
-            Some(source_urls.join("\n"))
-        },
+        search_headline: check_projection.search_headline,
+        search_source_urls: check_projection.search_source_urls,
     })
+}
+
+fn project_canonical_checks(
+    checks: &[Check<CanonicalError>],
+) -> Result<CanonicalCheckProjection, HistoryError> {
+    // Terminal payloads: the first succeeded check stores its result; only
+    // when no check succeeded does the first failed check store its complete
+    // canonical error object. This precedence is independent of check order
+    // and keeps the parent row's result/error body exactly-one invariant.
+    let mut projection = CanonicalCheckProjection {
+        result_json: None,
+        error_json: None,
+        search_headline: None,
+        search_source_urls: None,
+    };
+    let mut source_urls = Vec::new();
+    for check in checks {
+        match check {
+            Check::AiDetection(CheckState::Succeeded { result, .. }) => {
+                if projection.result_json.is_none() {
+                    projection.result_json = Some(
+                        serde_json::to_string(result)
+                            .map_err(|_| serialization_failure("serialize terminal result"))?,
+                    );
+                }
+                projection.error_json = None;
+                if projection.search_headline.is_none() {
+                    projection.search_headline = Some(result.headline.clone());
+                }
+            }
+            Check::Plagiarism(CheckState::Succeeded { result, .. }) => {
+                if projection.result_json.is_none() {
+                    projection.result_json = Some(
+                        serde_json::to_string(result)
+                            .map_err(|_| serialization_failure("serialize terminal result"))?,
+                    );
+                }
+                projection.error_json = None;
+                source_urls.extend(result.matches.iter().map(|found| found.source_url.clone()));
+            }
+            Check::AiDetection(CheckState::Failed { error, .. })
+            | Check::Plagiarism(CheckState::Failed { error, .. }) => {
+                if projection.result_json.is_none() && projection.error_json.is_none() {
+                    projection.error_json =
+                        Some(serde_json::to_string(error).map_err(|_| {
+                            serialization_failure("serialize canonical check error")
+                        })?);
+                }
+            }
+            Check::AiDetection(CheckState::Queued { .. } | CheckState::Running { .. })
+            | Check::Plagiarism(CheckState::Queued { .. } | CheckState::Running { .. }) => {}
+        }
+    }
+    projection.search_source_urls = (!source_urls.is_empty()).then(|| source_urls.join("\n"));
+    Ok(projection)
+}
+
+pub(super) fn project_stored_checks(
+    checks: &[StoredCheck],
+) -> Result<CanonicalCheckProjection, HistoryError> {
+    let checks = checks
+        .iter()
+        .map(|check| {
+            let mut value = serde_json::json!({
+                "kind": super::wire::wire_check_kind(check.check_kind),
+                "status": super::wire::wire_check_status(check.status),
+            });
+            if let Some(result) = &check.result_json {
+                value["result"] = serde_json::from_str(result)
+                    .map_err(|_| serialization_failure("decode stored check result"))?;
+            }
+            if let Some(error) = &check.error_json {
+                value["error"] = serde_json::from_str(error)
+                    .map_err(|_| serialization_failure("decode stored check error"))?;
+            }
+            serde_json::from_value(value)
+                .map_err(|_| serialization_failure("decode stored canonical check"))
+        })
+        .collect::<Result<Vec<Check<CanonicalError>>, _>>()?;
+    project_canonical_checks(&checks)
 }
 
 /// The current observation rows for one analysis: one row per check that
@@ -364,6 +407,17 @@ pub fn observation_merge(
     prior: &StoredAnalysis,
 ) -> Result<super::ObservationSnapshot, HistoryError> {
     let observed = stored_analysis(observation, prior.save_state)?;
+    let (search_headline, search_source_urls) = if observed.is_terminal_record() {
+        (
+            observed.search_headline.clone(),
+            observed.search_source_urls.clone(),
+        )
+    } else {
+        (
+            prior.search_headline.clone(),
+            prior.search_source_urls.clone(),
+        )
+    };
     Ok(super::ObservationSnapshot {
         status: observation.status(),
         submission_outcome: prior.submission_outcome,
@@ -379,12 +433,8 @@ pub fn observation_merge(
         search_filename: observed
             .search_filename
             .or_else(|| prior.search_filename.clone()),
-        search_headline: observed
-            .search_headline
-            .or_else(|| prior.search_headline.clone()),
-        search_source_urls: observed
-            .search_source_urls
-            .or_else(|| prior.search_source_urls.clone()),
+        search_headline,
+        search_source_urls,
     })
 }
 
@@ -398,7 +448,8 @@ fn serialization_failure(operation: &'static str) -> HistoryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AnalysisStatus, SubmissionOutcome, UtcTimestamp};
+    use crate::domain::{AnalysisStatus, CheckKind, CheckStatus, SubmissionOutcome, UtcTimestamp};
+    use crate::output::ErrorCode;
 
     // The row projection is covered end-to-end by the compiled-binary
     // loopback suite; these unit checks lock the pure projection edges the
@@ -582,5 +633,90 @@ mod tests {
         let tasks = stored_observations(&analysis);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].upstream_task_id, "task-123");
+    }
+
+    #[test]
+    fn mixed_terminal_checks_project_only_the_succeeded_parent_body_in_either_order() {
+        let error = serde_json::to_string(
+            &CanonicalError::new(
+                ErrorCode::UpstreamAnalysisFailed,
+                "The synthetic check failed.",
+            )
+            .expect("canonical error"),
+        )
+        .expect("serialize error");
+        let ai_result = serde_json::json!({
+            "classification": "human",
+            "headline": "Human",
+            "prediction": "Human",
+            "fraction_ai": 0.0,
+            "fraction_ai_assisted": 0.0,
+            "fraction_human": 1.0,
+            "num_ai_segments": 0,
+            "num_ai_assisted_segments": 0,
+            "num_human_segments": 1,
+            "segments": []
+        })
+        .to_string();
+        let plagiarism_result = serde_json::json!({
+            "plagiarism_detected": false,
+            "total_sentences": 1,
+            "plagiarized_sentence_count": 0,
+            "percent_plagiarized": 0.0,
+            "matches": []
+        })
+        .to_string();
+
+        let failed_then_succeeded = [
+            StoredCheck {
+                analysis_id: analysis_id(),
+                check_index: 0,
+                check_kind: CheckKind::AiDetection,
+                status: CheckStatus::Failed,
+                result_json: None,
+                error_json: Some(error.clone()),
+            },
+            StoredCheck {
+                analysis_id: analysis_id(),
+                check_index: 1,
+                check_kind: CheckKind::Plagiarism,
+                status: CheckStatus::Succeeded,
+                result_json: Some(plagiarism_result),
+                error_json: None,
+            },
+        ];
+        let projection =
+            project_stored_checks(&failed_then_succeeded).expect("project mixed checks");
+        assert!(projection.result_json.is_some());
+        assert!(
+            projection.error_json.is_none(),
+            "a later success must clear the earlier failed-check body"
+        );
+
+        let succeeded_then_failed = [
+            StoredCheck {
+                analysis_id: analysis_id(),
+                check_index: 0,
+                check_kind: CheckKind::AiDetection,
+                status: CheckStatus::Succeeded,
+                result_json: Some(ai_result),
+                error_json: None,
+            },
+            StoredCheck {
+                analysis_id: analysis_id(),
+                check_index: 1,
+                check_kind: CheckKind::Plagiarism,
+                status: CheckStatus::Failed,
+                result_json: None,
+                error_json: Some(error),
+            },
+        ];
+        let projection =
+            project_stored_checks(&succeeded_then_failed).expect("project mixed checks");
+        assert!(projection.result_json.is_some());
+        assert!(
+            projection.error_json.is_none(),
+            "a later failed check must not add a second parent body"
+        );
     }
 }

@@ -153,6 +153,280 @@ fn stored_tasks(connection: &rusqlite::Connection) -> Vec<(String, String, Optio
         .expect("collect task read")
 }
 
+#[derive(Clone, Copy, Debug)]
+enum TaskLookup {
+    ResolveAnalysisTask,
+    FindAnalysisByTask,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TaskLookupCorruption {
+    SearchProjection,
+    ParentProjection,
+    InputProjection,
+    Lifecycle,
+}
+
+fn install_task_lookup_corruption(
+    connection: &rusqlite::Connection,
+    id: &str,
+    corruption: TaskLookupCorruption,
+) {
+    let changed = match corruption {
+        TaskLookupCorruption::SearchProjection => connection.execute(
+            "UPDATE analysis_search SET headline = 'Forged task headline'
+             WHERE analysis_id = ?1",
+            [id],
+        ),
+        TaskLookupCorruption::ParentProjection => {
+            connection.execute("UPDATE analyses SET result_json = '{}' WHERE id = ?1", [id])
+        }
+        TaskLookupCorruption::InputProjection => {
+            connection.execute("UPDATE analyses SET input_json = '{}' WHERE id = ?1", [id])
+        }
+        TaskLookupCorruption::Lifecycle => connection.execute(
+            "UPDATE analyses SET completed_at = NULL WHERE id = ?1",
+            [id],
+        ),
+    }
+    .expect("install task lookup corruption");
+    assert_eq!(changed, 1);
+}
+
+#[test]
+fn public_task_lookups_certify_search_parent_input_and_lifecycle() {
+    let id = "anl_01983c20-0180-7a80-a001-00000000f081";
+    let upstream_task_id = "ai-certified-read";
+    for corruption in [
+        TaskLookupCorruption::SearchProjection,
+        TaskLookupCorruption::ParentProjection,
+        TaskLookupCorruption::InputProjection,
+        TaskLookupCorruption::Lifecycle,
+    ] {
+        for lookup in [
+            TaskLookup::ResolveAnalysisTask,
+            TaskLookup::FindAnalysisByTask,
+        ] {
+            let root = tempfile::tempdir().expect("temp root");
+            let mut store = HistoryStore::open(root.path()).expect("open store");
+            store
+                .save_analysis_complete(
+                    &analysis(id),
+                    &checks(id),
+                    &[task(
+                        id,
+                        CheckKind::AiDetection,
+                        upstream_task_id,
+                        "AI_DONE",
+                    )],
+                )
+                .expect("seed task aggregate");
+            install_task_lookup_corruption(&database(&root), id, corruption);
+            let id = AnalysisId::from_str(id).expect("analysis id");
+
+            let error = match lookup {
+                TaskLookup::ResolveAnalysisTask => store.resolve_analysis_task(&id).map(drop),
+                TaskLookup::FindAnalysisByTask => store
+                    .find_analysis_by_task(CheckKind::AiDetection, upstream_task_id)
+                    .map(drop),
+            }
+            .expect_err("public task lookup must reject forged aggregate");
+            assert_eq!(
+                error.code(),
+                HistoryErrorCode::HistoryCorrupt,
+                "corruption={corruption:?} lookup={lookup:?}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fresh_task_reconcile_rejects_foreign_or_unowned_observations_without_mutation() {
+    let owner_id = "anl_01983c20-0180-7a80-a001-00000000f091";
+    let fresh_id = "anl_01983c20-0180-7a80-a001-00000000f092";
+    for (name, incoming_checks, invalid) in [
+        (
+            "foreign owner",
+            checks(fresh_id),
+            task(owner_id, CheckKind::AiDetection, "ai-foreign", "BAD"),
+        ),
+        (
+            "unowned kind",
+            checks(fresh_id).into_iter().take(1).collect(),
+            task(fresh_id, CheckKind::Plagiarism, "plag-unowned", "BAD"),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = HistoryStore::open(root.path()).expect("open store");
+        store
+            .save_analysis_complete(
+                &analysis(owner_id),
+                &checks(owner_id),
+                &[task(
+                    owner_id,
+                    CheckKind::AiDetection,
+                    "ai-owned",
+                    "AI_SEED",
+                )],
+            )
+            .expect("seed valid owner");
+        let before_tasks = stored_tasks(&database(&root));
+
+        let error = store
+            .reconcile_observed_analysis_complete(
+                &analysis(fresh_id),
+                &incoming_checks,
+                &[invalid],
+                timestamp("2026-08-02T10:02:00Z"),
+                running_merge,
+            )
+            .expect_err(name);
+        assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed, "{name}");
+
+        let connection = database(&root);
+        let analysis_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM analyses", [], |row| row.get(0))
+            .expect("count analyses");
+        assert_eq!(analysis_count, 1, "{name} inserted a fresh analysis");
+        assert_eq!(
+            stored_tasks(&connection),
+            before_tasks,
+            "{name} mutated existing task evidence"
+        );
+    }
+}
+
+#[test]
+fn fresh_task_reconcile_rejects_duplicate_observation_kinds_without_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = HistoryStore::open(root.path()).expect("open store");
+    let fresh_id = "anl_01983c20-0180-7a80-a001-00000000f093";
+
+    let error = store
+        .reconcile_observed_analysis_complete(
+            &analysis(fresh_id),
+            &checks(fresh_id),
+            &[
+                task(
+                    fresh_id,
+                    CheckKind::AiDetection,
+                    "ai-first",
+                    "AI_STAGE_FIRST",
+                ),
+                task(
+                    fresh_id,
+                    CheckKind::AiDetection,
+                    "ai-second",
+                    "AI_STAGE_SECOND",
+                ),
+            ],
+            timestamp("2026-08-02T10:02:00Z"),
+            running_merge,
+        )
+        .expect_err("same-kind observations must fail before either upsert");
+    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+
+    let connection = database(&root);
+    for table in [
+        "analyses",
+        "analysis_checks",
+        "upstream_tasks",
+        "analysis_search",
+    ] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("count rows");
+        assert_eq!(count, 0, "duplicate identities and stages mutated {table}");
+    }
+}
+
+#[test]
+fn fresh_task_reconcile_rejects_multiple_matching_checks_and_observations() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = HistoryStore::open(root.path()).expect("open store");
+    let fresh_id = "anl_01983c20-0180-7a80-a001-00000000f094";
+
+    let error = store
+        .reconcile_observed_analysis_complete(
+            &analysis(fresh_id),
+            &checks(fresh_id),
+            &[
+                task(fresh_id, CheckKind::AiDetection, "ai-fresh", "AI_DONE"),
+                task(fresh_id, CheckKind::Plagiarism, "plag-fresh", "PLAG_DONE"),
+            ],
+            timestamp("2026-08-02T10:02:00Z"),
+            running_merge,
+        )
+        .expect_err("one task reconciliation cannot insert a combined payload");
+    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+
+    let connection = database(&root);
+    for table in [
+        "analyses",
+        "analysis_checks",
+        "upstream_tasks",
+        "analysis_search",
+    ] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("count rows");
+        assert_eq!(count, 0, "multi-check task reconcile mutated {table}");
+    }
+}
+
+#[test]
+fn replayed_task_reconcile_rejects_the_same_multiple_matching_shape() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = HistoryStore::open(root.path()).expect("open store");
+    let stored_id = "anl_01983c20-0180-7a80-a001-00000000f095";
+    store
+        .save_analysis_complete(
+            &analysis(stored_id),
+            &checks(stored_id),
+            &[
+                task(stored_id, CheckKind::AiDetection, "ai-replay", "AI_DONE"),
+                task(stored_id, CheckKind::Plagiarism, "plag-replay", "PLAG_DONE"),
+            ],
+        )
+        .expect("seed combined analysis");
+    let before_tasks = stored_tasks(&database(&root));
+
+    let replay_id = "anl_01983c20-0180-7a80-a001-00000000f096";
+    let error = store
+        .reconcile_observed_analysis_complete(
+            &analysis(replay_id),
+            &checks(replay_id),
+            &[
+                task(replay_id, CheckKind::AiDetection, "ai-replay", "AI_REFRESH"),
+                task(
+                    replay_id,
+                    CheckKind::Plagiarism,
+                    "plag-replay",
+                    "PLAG_REFRESH",
+                ),
+            ],
+            timestamp("2026-08-02T10:02:00Z"),
+            running_merge,
+        )
+        .expect_err("replay must enforce the same standalone task shape");
+    assert_eq!(error.code(), HistoryErrorCode::HistoryWriteFailed);
+
+    let connection = database(&root);
+    let analysis_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM analyses", [], |row| row.get(0))
+        .expect("count analyses");
+    assert_eq!(analysis_count, 1, "replay inserted a duplicate analysis");
+    assert_eq!(
+        stored_tasks(&connection),
+        before_tasks,
+        "replay mutated the combined analysis task evidence"
+    );
+}
+
 #[test]
 fn selection_by_one_key_cannot_replace_another_owned_kind() {
     let root = tempfile::tempdir().unwrap();

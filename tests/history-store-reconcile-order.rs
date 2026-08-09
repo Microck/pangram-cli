@@ -118,6 +118,7 @@ fn child(id: &str, bulk_id: &str, index: i64) -> StoredAnalysis {
     record.submission_outcome = SubmissionOutcome::Accepted;
     record.status = AnalysisStatus::Running;
     record.result_json = None;
+    record.search_headline = None;
     record.completed_at = None;
     record.updated_at = timestamp("2026-08-01T10:06:00Z");
     record

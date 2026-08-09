@@ -76,7 +76,7 @@ fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
         completed_at: Some(timestamp("2026-08-01T10:05:00Z")),
         search_input_text: Some(input_text.to_owned()),
         search_filename: None,
-        search_headline: None,
+        search_headline: Some("Human-written".to_owned()),
         search_source_urls: None,
     }
 }
@@ -385,6 +385,7 @@ fn record_observation_updates_tasks_and_result_atomically() {
     record.submission_outcome = SubmissionOutcome::AcceptanceUnknown;
     record.result_json = None;
     record.completed_at = None;
+    record.search_headline = None;
     store.save_analysis(&record).unwrap();
 
     store
@@ -402,7 +403,7 @@ fn record_observation_updates_tasks_and_result_atomically() {
             &TerminalResult {
                 status: AnalysisStatus::Succeeded,
                 submission_outcome: SubmissionOutcome::Terminal,
-                result_json: Some(ai_result("Observed result")),
+                result_json: Some(ai_result("mostly AI")),
                 error_json: None,
                 upstream_version: Some("4.1".to_owned()),
                 completed_at: timestamp("2026-08-01T10:06:00Z"),
@@ -418,7 +419,7 @@ fn record_observation_updates_tasks_and_result_atomically() {
     assert_eq!(stored.status, AnalysisStatus::Succeeded);
     assert_eq!(
         stored.result_json.as_deref(),
-        Some(ai_result("Observed result").as_str())
+        Some(ai_result("mostly AI").as_str())
     );
     assert_eq!(stored.completed_at, Some(timestamp("2026-08-01T10:06:00Z")));
     assert_eq!(stored.search_headline.as_deref(), Some("mostly AI"));

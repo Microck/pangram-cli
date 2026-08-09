@@ -26,8 +26,7 @@ impl HistoryStore {
         id: &AnalysisId,
     ) -> Result<Option<crate::domain::UpstreamTaskId>, HistoryError> {
         self.with_read_snapshot(|connection| {
-            let record = stored_analysis_on(connection, id)?;
-            canonical_analysis_on(connection, &record, false)?;
+            super::read_validation::certified_analysis_on(connection, id, false)?;
             let mut statement = connection
                 .prepare(
                     "SELECT check_kind, upstream_task_id
@@ -91,7 +90,11 @@ impl HistoryStore {
         upstream_task_id: &str,
     ) -> Result<Option<StoredAnalysis>, HistoryError> {
         self.with_read_snapshot(|connection| {
-            stored_analysis_by_task(connection, check_kind, upstream_task_id)
+            let found = stored_analysis_by_task(connection, check_kind, upstream_task_id)?;
+            if let Some(record) = &found {
+                super::read_validation::certified_analysis_on(connection, &record.id, false)?;
+            }
+            Ok(found)
         })
     }
 
@@ -102,7 +105,10 @@ impl HistoryStore {
     /// Absence therefore fails as `history_corrupt` with sanitized recovery
     /// guidance, never a silent `None` payload.
     pub fn get_analysis(&self, id: &AnalysisId) -> Result<StoredAnalysis, HistoryError> {
-        self.with_read_snapshot(|connection| stored_analysis_on(connection, id))
+        self.with_read_snapshot(|connection| {
+            super::read_validation::certified_analysis_on(connection, id, true)?;
+            stored_analysis_on(connection, id)
+        })
     }
 
     /// Reconstructs and validates the canonical analysis stored for `show`.
@@ -112,8 +118,7 @@ impl HistoryStore {
         include_input: bool,
     ) -> Result<crate::domain::Analysis<crate::output::CanonicalError>, HistoryError> {
         self.with_read_snapshot(|connection| {
-            let record = stored_analysis_on(connection, id)?;
-            canonical_analysis_on(connection, &record, include_input)
+            super::read_validation::certified_analysis_on(connection, id, include_input)
         })
     }
 
@@ -199,17 +204,6 @@ impl HistoryStore {
         self.checkpoint_truncate()
     }
 
-    /// Runs `operation` with the store's connection when the operation can
-    /// fail. Read helpers route every fallible raw query through this seam so
-    /// `with_connection` stays infallible for assertion-style access.
-    pub(super) fn with_connection_result<T>(
-        &self,
-        operation: impl FnOnce(&Connection) -> Result<T, HistoryError>,
-    ) -> Result<T, HistoryError> {
-        let connection: &Connection = self.connection_ref();
-        operation(connection)
-    }
-
     /// Runs a complete logical read inside one deferred SQLite transaction.
     /// The first statement fixes a WAL snapshot while ordinary writers remain
     /// free to commit. Every dependent parent/FTS/check/task query therefore
@@ -221,6 +215,7 @@ impl HistoryStore {
         let transaction = self.connection_ref().unchecked_transaction().map_err(|_| {
             HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "begin read snapshot")
         })?;
+        super::read_validation::certify_foreign_keys(&transaction)?;
         let outcome = operation(&transaction)?;
         transaction.commit().map_err(|_| {
             HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "commit read snapshot")
@@ -229,9 +224,32 @@ impl HistoryStore {
     }
 }
 
-pub(super) fn canonical_analysis_on(
-    connection: &Connection,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CanonicalCheckRow {
+    pub index: i64,
+    pub kind: String,
+    pub status: String,
+    pub result_json: Option<String>,
+    pub error_json: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CanonicalTaskRow {
+    pub kind: String,
+    pub upstream_task_id: String,
+    pub last_stage: Option<String>,
+    pub observed_at: String,
+}
+
+/// Reconstructs one canonical analysis from an already fetched parent and
+/// its ordered child rows. Batch certification uses this pure owner after
+/// loading the complete table surfaces with three set queries.
+pub(super) fn canonical_analysis_from_rows(
     record: &StoredAnalysis,
+    expected_check_count: i64,
+    observations: &[CanonicalCheckRow],
+    tasks: &[CanonicalTaskRow],
+    upstream_bulk_id: Option<&str>,
     include_input: bool,
 ) -> Result<crate::domain::Analysis<crate::output::CanonicalError>, HistoryError> {
     let mut input: serde_json::Value = serde_json::from_str(&record.input_json)
@@ -245,109 +263,82 @@ pub(super) fn canonical_analysis_on(
         }
     }
 
-    let expected_check_count = connection
-        .query_row(
-            "SELECT check_count FROM analyses WHERE id = ?1",
-            [record.id.to_string()],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|_| {
-            HistoryError::from_sqlite(HistoryErrorCode::HistoryCorrupt, "read check count")
-        })?;
-    let mut statement = connection
-        .prepare(
-            "SELECT c.check_index, c.check_kind, c.status, c.result_json, c.error_json,
-                    t.upstream_task_id, t.last_stage
-             FROM analysis_checks c
-             LEFT JOIN upstream_tasks t
-               ON t.analysis_id = c.analysis_id AND t.check_kind = c.check_kind
-             WHERE c.analysis_id = ?1
-             ORDER BY c.check_index",
-        )
-        .map_err(|_| {
-            HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "read checks")
-        })?;
-    let observations = statement
-        .query_map([record.id.to_string()], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-            ))
-        })
-        .map_err(|_| {
-            HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "read checks")
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| {
-            HistoryError::from_sqlite(HistoryErrorCode::HistoryUnavailable, "read checks")
-        })?;
-
     if observations.is_empty() || observations.len() > 2 {
         return Err(corrupt_stored_value("read stored checks"));
     }
     if expected_check_count != i64::try_from(observations.len()).unwrap_or(-1) {
         return Err(corrupt_stored_value("read stored check count"));
     }
-    let task_count = super::read_validation::validated_task_evidence_count(connection, &record.id)?;
-    let joined_task_count = observations
-        .iter()
-        .filter(|(_, _, _, _, _, task_id, _)| task_id.is_some())
-        .count();
-    if task_count != joined_task_count {
-        return Err(corrupt_stored_value("read stored task evidence"));
-    }
     let mut kinds = Vec::with_capacity(observations.len());
     let mut checks = Vec::with_capacity(observations.len());
-    for (expected_index, (index, kind, status, result, error, task_id, last_stage)) in
-        observations.iter().enumerate()
-    {
-        if *index != i64::try_from(expected_index).unwrap_or(-1) {
+    for (expected_index, observation) in observations.iter().enumerate() {
+        if observation.index != i64::try_from(expected_index).unwrap_or(-1) {
             return Err(corrupt_stored_value("read stored check order"));
         }
-        let parsed_kind = super::wire::unwire_check_kind(kind)?;
+        let parsed_kind = super::wire::unwire_check_kind(&observation.kind)?;
         kinds.push(parsed_kind);
-        let parsed_status = super::wire::unwire_check_status(status)?;
+        let parsed_status = super::wire::unwire_check_status(&observation.status)?;
         let bodies_ok = match parsed_status {
-            crate::domain::CheckStatus::Succeeded => result.is_some() && error.is_none(),
-            crate::domain::CheckStatus::Failed => result.is_none() && error.is_some(),
+            crate::domain::CheckStatus::Succeeded => {
+                observation.result_json.is_some() && observation.error_json.is_none()
+            }
+            crate::domain::CheckStatus::Failed => {
+                observation.result_json.is_none() && observation.error_json.is_some()
+            }
             crate::domain::CheckStatus::Queued | crate::domain::CheckStatus::Running => {
-                result.is_none() && error.is_none()
+                observation.result_json.is_none() && observation.error_json.is_none()
             }
         };
         if !bodies_ok {
             return Err(corrupt_stored_value("read stored check payload"));
         }
-        let mut check = serde_json::json!({"kind": kind, "status": status});
-        if let Some(task_id) = task_id {
-            let mut upstream = serde_json::json!({"task_id": task_id});
-            if let Some(stage) = last_stage {
-                upstream["last_stage"] = serde_json::Value::String(stage.clone());
+        let mut check = serde_json::json!({"kind": observation.kind, "status": observation.status});
+        let matching_tasks = tasks
+            .iter()
+            .filter(|task| task.kind == observation.kind)
+            .collect::<Vec<_>>();
+        match matching_tasks.as_slice() {
+            [task] => {
+                task.observed_at
+                    .parse::<crate::domain::UtcTimestamp>()
+                    .map_err(|_| corrupt_stored_value("read stored task evidence"))?;
+                task.upstream_task_id
+                    .parse::<crate::domain::UpstreamTaskId>()
+                    .map_err(|_| corrupt_stored_value("read stored task evidence"))?;
+                let mut upstream = serde_json::json!({"task_id": task.upstream_task_id});
+                if let Some(stage) = &task.last_stage {
+                    stage
+                        .parse::<crate::domain::NonEmptyString>()
+                        .map_err(|_| corrupt_stored_value("read stored task evidence"))?;
+                    upstream["last_stage"] = serde_json::Value::String(stage.clone());
+                }
+                check["upstream"] = upstream;
             }
-            check["upstream"] = upstream;
-        } else if last_stage.is_some() {
-            return Err(corrupt_stored_value("read stored task evidence"));
+            [] => {}
+            _ => return Err(corrupt_stored_value("read stored task evidence")),
         }
-        if let Some(result) = result {
+        if let Some(result) = &observation.result_json {
             check["result"] = serde_json::from_str(result)
                 .map_err(|_| corrupt_stored_value("read stored check result"))?;
         }
-        if let Some(error) = error {
+        if let Some(error) = &observation.error_json {
             check["error"] = serde_json::from_str(error)
                 .map_err(|_| corrupt_stored_value("read stored check error"))?;
         }
         checks.push(check);
     }
+    if tasks
+        .iter()
+        .any(|task| !observations.iter().any(|check| check.kind == task.kind))
+    {
+        return Err(corrupt_stored_value("read stored task evidence"));
+    }
     crate::domain::OrderedChecks::new(kinds)
         .map_err(|_| corrupt_stored_value("read stored check order"))?;
 
-    let task_ids = observations
+    let task_ids = tasks
         .iter()
-        .filter_map(|(_, _, _, _, _, id, _)| id.as_ref())
+        .map(|task| task.upstream_task_id.as_str())
         .collect::<Vec<_>>();
     let mut provenance = serde_json::json!({"provider": "pangram"});
     if let Some(version) = &record.upstream_version {
@@ -359,17 +350,8 @@ pub(super) fn canonical_analysis_on(
     if let Some(submitted_at) = record.submitted_at {
         provenance["submitted_at"] = serde_json::json!(submitted_at);
     }
-    if let Some((bulk_id, _)) = record.bulk {
-        let upstream_bulk_id = connection
-            .query_row(
-                "SELECT upstream_bulk_id FROM bulk_collections WHERE id = ?1",
-                [bulk_id.to_string()],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|_| corrupt_stored_value("read stored bulk provenance"))?;
-        if let Some(upstream_bulk_id) = upstream_bulk_id {
-            provenance["upstream_bulk_id"] = serde_json::Value::String(upstream_bulk_id);
-        }
+    if let Some(upstream_bulk_id) = upstream_bulk_id {
+        provenance["upstream_bulk_id"] = serde_json::Value::String(upstream_bulk_id.to_owned());
     }
     if let Some(completed) = record.completed_at {
         provenance["completed_at"] = serde_json::json!(completed);

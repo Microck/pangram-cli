@@ -13,7 +13,7 @@ use microck_pangram_cli::domain::{
 };
 use microck_pangram_cli::history::{
     HistoryErrorCode, HistoryStore, InputKind, StoredAnalysis, StoredBulkCollection,
-    StoredUpstreamTask,
+    StoredUpstreamTask, TerminalResult,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -103,6 +103,22 @@ fn observation(id: &str, task: &str) -> StoredUpstreamTask {
     }
 }
 
+fn ai_result(headline: &str) -> String {
+    serde_json::json!({
+        "classification": "human",
+        "headline": headline,
+        "prediction": "Human",
+        "fraction_ai": 0.0,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0,
+        "num_ai_segments": 0,
+        "num_ai_assisted_segments": 0,
+        "num_human_segments": 1,
+        "segments": []
+    })
+    .to_string()
+}
+
 fn database(root: &tempfile::TempDir) -> rusqlite::Connection {
     rusqlite::Connection::open(root.path().join("history/pangram-history.db"))
         .expect("open database")
@@ -165,7 +181,10 @@ fn logical_state(connection: &rusqlite::Connection) -> Vec<String> {
     let mut statement = connection
         .prepare(
             "SELECT 'b|' || quote(id) || '|' || quote(upstream_bulk_id) || '|' ||
-                    quote(status) || '|' || quote(total_items) || '|' || quote(updated_at)
+                    quote(status) || '|' || quote(total_items) || '|' ||
+                    quote(accepted) || '|' || quote(succeeded) || '|' ||
+                    quote(failed) || '|' || quote(estimated_billable_units) || '|' ||
+                    quote(updated_at)
              FROM bulk_collections
              UNION ALL
              SELECT 'a|' || quote(id) || '|' || quote(bulk_id) || '|' ||
@@ -196,6 +215,329 @@ fn logical_state(connection: &rusqlite::Connection) -> Vec<String> {
         .expect("query logical state")
         .collect::<Result<Vec<_>, _>>()
         .expect("collect logical state")
+}
+
+#[test]
+fn batch_certification_preserves_observation_only_task_timestamp_changes() {
+    let root = tempfile::tempdir().expect("temp root");
+    let mut store = HistoryStore::open(root.path()).expect("store");
+    let bulk_id = "bulk_01983c20-0180-7a80-a001-00000000f100";
+    let member_id = "anl_01983c20-0180-7a80-a001-00000000f101";
+    store
+        .reconcile_bulk_collection_atomic(
+            &collection(bulk_id, "observation-only-timestamp"),
+            &[(
+                analysis(member_id, Some((bulk_id, 0))),
+                vec![observation(member_id, "task-observation-only")],
+            )],
+        )
+        .expect("seed bulk aggregate");
+
+    let mut refreshed = observation(member_id, "task-observation-only");
+    refreshed.last_stage = Some("SCORING".to_owned());
+    refreshed.observed_at = stamp("2026-08-01T10:06:00Z");
+    store
+        .record_observation(&refreshed)
+        .expect("refresh task evidence independently");
+
+    let id = BulkId::from_str(bulk_id).expect("bulk id");
+    let members = store
+        .list_bulk_analyses(&id)
+        .expect("batch certification accepts independent task time");
+    assert_eq!(members.len(), 1);
+    assert_eq!(
+        members[0].updated_at,
+        stamp("2026-08-01T10:05:00Z"),
+        "task-only refresh does not rewrite the parent observation time"
+    );
+    let (stage, observed_at): (String, String) = store
+        .with_connection(|connection| {
+            connection.query_row(
+                "SELECT last_stage, observed_at FROM upstream_tasks
+                 WHERE analysis_id = ?1 AND check_kind = 'ai_detection'",
+                [member_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
+        .expect("read exact task row")
+        .expect("task row");
+    assert_eq!(stage, "SCORING");
+    assert_eq!(observed_at, "2026-08-01T10:06:00Z");
+}
+
+#[test]
+fn batch_certification_preserves_task_timestamp_across_parent_terminal_update() {
+    let root = tempfile::tempdir().expect("temp root");
+    let mut store = HistoryStore::open(root.path()).expect("store");
+    let bulk_id = "bulk_01983c20-0180-7a80-a001-00000000f110";
+    let member_id = "anl_01983c20-0180-7a80-a001-00000000f111";
+    store
+        .reconcile_bulk_collection_atomic(
+            &collection(bulk_id, "parent-terminal-timestamp"),
+            &[(
+                analysis(member_id, Some((bulk_id, 0))),
+                vec![observation(member_id, "task-parent-terminal")],
+            )],
+        )
+        .expect("seed bulk aggregate");
+
+    let headline = "Canonical terminal headline";
+    let member = AnalysisId::from_str(member_id).expect("analysis id");
+    store
+        .update_terminal_result(
+            &member,
+            &TerminalResult {
+                status: AnalysisStatus::Succeeded,
+                submission_outcome: SubmissionOutcome::Terminal,
+                result_json: Some(ai_result(headline)),
+                error_json: None,
+                upstream_version: Some("4.1".to_owned()),
+                completed_at: stamp("2026-08-01T10:06:00Z"),
+                search_input_text: Some(format!("canonical input {member_id}")),
+                search_filename: None,
+                search_headline: Some(headline.to_owned()),
+                search_source_urls: None,
+            },
+        )
+        .expect("write parent terminal snapshot independently");
+
+    let id = BulkId::from_str(bulk_id).expect("bulk id");
+    let members = store
+        .list_bulk_analyses(&id)
+        .expect("batch certification accepts independent parent time");
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].updated_at, stamp("2026-08-01T10:06:00Z"));
+    assert_eq!(members[0].completed_at, Some(stamp("2026-08-01T10:06:00Z")));
+    let observed_at: String = store
+        .with_connection(|connection| {
+            connection.query_row(
+                "SELECT observed_at FROM upstream_tasks
+                 WHERE analysis_id = ?1 AND check_kind = 'ai_detection'",
+                [member_id],
+                |row| row.get(0),
+            )
+        })
+        .expect("read exact task row")
+        .expect("task row");
+    assert_eq!(
+        observed_at, "2026-08-01T10:05:00Z",
+        "parent terminal update does not rewrite task observation time"
+    );
+}
+
+#[test]
+fn public_bulk_reads_reject_negative_aggregates_without_mutation() {
+    for column in [
+        "total_items",
+        "accepted",
+        "succeeded",
+        "failed",
+        "estimated_billable_units",
+    ] {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store = HistoryStore::open(root.path()).expect("store");
+        let bulk_id = "bulk_01983c20-0180-7a80-a001-00000000f060";
+        let member_id = "anl_01983c20-0180-7a80-a001-00000000f061";
+        store
+            .reconcile_bulk_collection_atomic(
+                &collection(bulk_id, "negative-bulk-aggregate"),
+                &[(
+                    analysis(member_id, Some((bulk_id, 0))),
+                    vec![observation(member_id, "task-negative-bulk")],
+                )],
+            )
+            .expect("seed bulk aggregate");
+        store
+            .with_connection(|connection| {
+                connection.execute(
+                    &format!("UPDATE bulk_collections SET {column} = -1 WHERE id = ?1"),
+                    [bulk_id],
+                )
+            })
+            .expect("raw corruption connection")
+            .expect("corrupt signed bulk value");
+        let before = logical_state(&database(&root));
+        let id = BulkId::from_str(bulk_id).expect("bulk id");
+
+        let error = store
+            .get_bulk_collection(&id)
+            .expect_err("canonical bulk getter must reject corruption");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "column={column}"
+        );
+        assert_eq!(logical_state(&database(&root)), before, "column={column}");
+
+        let error = store
+            .find_bulk_collection_by_upstream("negative-bulk-aggregate")
+            .expect_err("upstream bulk getter must reject corruption");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "column={column}"
+        );
+        assert_eq!(logical_state(&database(&root)), before, "column={column}");
+
+        let error = store
+            .list_bulk_analyses(&id)
+            .expect_err("bulk member getter must reject parent corruption");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "column={column}"
+        );
+        assert_eq!(logical_state(&database(&root)), before, "column={column}");
+    }
+}
+
+#[test]
+fn public_bulk_reads_certify_each_members_canonical_parent_and_fts_projection() {
+    for corruption in ["parent", "fts"] {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store = HistoryStore::open(root.path()).expect("store");
+        let bulk_id = "bulk_01983c20-0180-7a80-a001-00000000f070";
+        let member_id = "anl_01983c20-0180-7a80-a001-00000000f071";
+        let upstream = "forged-member-projection";
+        store
+            .reconcile_bulk_collection_atomic(
+                &collection(bulk_id, upstream),
+                &[(
+                    analysis(member_id, Some((bulk_id, 0))),
+                    vec![observation(member_id, "task-forged-member")],
+                )],
+            )
+            .expect("seed bulk aggregate");
+        store
+            .with_connection(|connection| match corruption {
+                "parent" => connection.execute(
+                    "UPDATE analyses SET status = 'succeeded' WHERE id = ?1",
+                    [member_id],
+                ),
+                "fts" => connection.execute(
+                    "UPDATE analysis_search SET input_text = 'forged text' WHERE analysis_id = ?1",
+                    [member_id],
+                ),
+                _ => unreachable!("fixed corruption table"),
+            })
+            .expect("raw corruption connection")
+            .expect("forge member projection");
+        let id = BulkId::from_str(bulk_id).expect("bulk id");
+
+        let error = store
+            .get_bulk_collection(&id)
+            .expect_err("bulk getter must certify its member");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "corruption={corruption}"
+        );
+
+        let error = store
+            .find_bulk_collection_by_upstream(upstream)
+            .expect_err("upstream getter must certify its member");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "corruption={corruption}"
+        );
+
+        let error = store
+            .list_bulk_analyses(&id)
+            .expect_err("member list must certify its member");
+        assert_eq!(
+            error.code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "corruption={corruption}"
+        );
+    }
+}
+
+#[test]
+fn public_bulk_reads_reject_counter_and_member_corruption() {
+    for corruption in ["counter", "member"] {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut store = HistoryStore::open(root.path()).expect("store");
+        let bulk_id = "bulk_01983c20-0180-7a80-a001-00000000f080";
+        let member_id = "anl_01983c20-0180-7a80-a001-00000000f081";
+        let upstream = "counter-member-corruption";
+        store
+            .reconcile_bulk_collection_atomic(
+                &collection(bulk_id, upstream),
+                &[(
+                    analysis(member_id, Some((bulk_id, 0))),
+                    vec![observation(member_id, "task-counter-member")],
+                )],
+            )
+            .expect("seed bulk aggregate");
+        store
+            .with_connection(|connection| match corruption {
+                "counter" => connection.execute(
+                    "UPDATE bulk_collections SET accepted = 2 WHERE id = ?1",
+                    [bulk_id],
+                ),
+                "member" => connection.execute(
+                    "UPDATE analyses SET bulk_index = 1 WHERE id = ?1",
+                    [member_id],
+                ),
+                _ => unreachable!("fixed corruption table"),
+            })
+            .expect("raw corruption connection")
+            .expect("forge bulk aggregate");
+        let id = BulkId::from_str(bulk_id).expect("bulk id");
+
+        assert_eq!(
+            store
+                .get_bulk_collection(&id)
+                .expect_err("bulk getter must reject aggregate corruption")
+                .code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "corruption={corruption}"
+        );
+        assert_eq!(
+            store
+                .find_bulk_collection_by_upstream(upstream)
+                .expect_err("upstream getter must reject aggregate corruption")
+                .code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "corruption={corruption}"
+        );
+        assert_eq!(
+            store
+                .list_bulk_analyses(&id)
+                .expect_err("member list must reject aggregate corruption")
+                .code(),
+            HistoryErrorCode::HistoryCorrupt,
+            "corruption={corruption}"
+        );
+    }
+}
+
+#[test]
+fn missing_public_bulk_reads_preserve_not_found_none_and_empty_semantics() {
+    let root = tempfile::tempdir().expect("temp root");
+    let store = HistoryStore::open(root.path()).expect("store");
+    let missing = BulkId::from_str("bulk_01983c20-0180-7a80-a001-00000000f090").expect("bulk id");
+
+    assert_eq!(
+        store
+            .get_bulk_collection(&missing)
+            .expect_err("canonical identity lookup must report absence")
+            .code(),
+        HistoryErrorCode::NotFound
+    );
+    assert!(
+        store
+            .find_bulk_collection_by_upstream("missing-upstream-bulk")
+            .expect("missing upstream lookup remains a successful read")
+            .is_none()
+    );
+    assert!(
+        store
+            .list_bulk_analyses(&missing)
+            .expect("missing bulk member list remains empty")
+            .is_empty()
+    );
 }
 
 #[test]

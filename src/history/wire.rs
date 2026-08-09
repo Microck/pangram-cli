@@ -95,7 +95,7 @@ pub(super) fn unwire_outcome(value: &str) -> Result<SubmissionOutcome, HistoryEr
     }
 }
 
-fn unwire_save_state(value: &str) -> Result<SaveState, HistoryError> {
+pub(super) fn unwire_save_state(value: &str) -> Result<SaveState, HistoryError> {
     match value {
         "ephemeral" => Ok(SaveState::Ephemeral),
         "saved_manual" => Ok(SaveState::SavedManual),
@@ -360,23 +360,23 @@ pub(super) fn row_to_bulk(
     let created_at: String = row.get(9)?;
     let updated_at: String = row.get(10)?;
     let completed_at: Option<String> = row.get(11)?;
+    let total_items = u64::try_from(total_items).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let accepted = u64::try_from(accepted).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let succeeded = u64::try_from(succeeded).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let failed = u64::try_from(failed).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let estimated = u64::try_from(estimated).map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     Ok(StoredBulkCollection {
         id: id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
         upstream_bulk_id,
         status: unwire_status(&status).map_err(|_| rusqlite::Error::InvalidQuery)?,
         submission_outcome: unwire_outcome(&outcome).map_err(|_| rusqlite::Error::InvalidQuery)?,
-        counters: crate::domain::BulkCounters::new(
-            total_items as u64,
-            accepted as u64,
-            succeeded as u64,
-            failed as u64,
-        )
-        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        counters: crate::domain::BulkCounters::new(total_items, accepted, succeeded, failed)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
         estimated_billable_units: if estimated == 0 {
             None
         } else {
-            Some(estimated as u64)
+            Some(estimated)
         },
         created_at: created_at
             .parse()
