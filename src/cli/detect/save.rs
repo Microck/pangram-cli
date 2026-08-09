@@ -45,19 +45,17 @@ pub(crate) fn resolve_gate(manual: bool) -> SaveStoreGate {
 
 /// The one invocation-scoped automatic-history warning latch (contracts.md
 /// 14.2 note). One bulk command (`bulk submit --wait`, `bulk status`,
-/// `bulk wait`) shares it across its observed-children read phase and its
-/// persistence phase, so a run in which both phases fail still emits
-/// exactly one direct sanitized `warning:` line; a repeated-file detect
-/// run shares one across every member. The latch is a plain flag the
-/// adapter passes by mutable reference into the store seams; it never
-/// touches storage itself.
+/// `bulk wait`) owns one across its observed-children read and persistence
+/// branches, so whichever branch fails emits at most one direct sanitized
+/// `warning:` line; a repeated-file detect run shares one across every member.
+/// The latch is a plain flag the adapter passes by mutable reference into the
+/// store seams; it never touches storage itself.
 pub(crate) type InvocationWarningLatch = bool;
 
 /// The bulk command's latch owner. `bulk submit --wait`/`bulk status`/
-/// `bulk wait` create one at invocation start, lend it to the observed-
-/// children read failure branch, and then hand it to
-/// [`persist_bulk_collection`], so the first failure emits and every later
-/// failure in the same invocation is silent.
+/// `bulk wait` create one at invocation start and lend it to the applicable
+/// observed-children read or [`persist_bulk_collection`] branch, so the first
+/// failure emits and every later failure in the same invocation is silent.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct BulkSaveWarning {
     warned: InvocationWarningLatch,

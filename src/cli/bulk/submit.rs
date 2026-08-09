@@ -119,8 +119,7 @@ pub(super) fn bulk_submit(
     // The automatic-history gate decides before the runtime: the observed
     // children fetch runs only when persistence is armed (contracts.md 14.2;
     // bulk carries no `--save`). The one invocation warning latch is shared
-    // from the children-read phase through the persist phase, so a run in
-    // which both fail still emits exactly one `warning:` line.
+    // by whichever certified unit reaches persistence.
     let history_armed = detect::save::automatic_history_armed(&service);
     let mut bulk_warning = detect::save::BulkSaveWarning::new();
     let result = runtime.block_on(async {
@@ -129,6 +128,7 @@ pub(super) fn bulk_submit(
         let outcome = match analyzer.submit_bulk(request, &cancel).await {
             Ok(running) => {
                 if wait_mode {
+                    let accepted_at = UtcTimestamp::now();
                     let observed_running = running.clone();
                     let observed = running
                         .observe(
@@ -141,37 +141,30 @@ pub(super) fn bulk_submit(
                             stop.clone(),
                         )
                         .await;
-                    // Refresh the same stored children (contracts.md 14.2):
-                    // fetch the documented results window and rebuild each
-                    // child from its observed truth. A save-read failure
-                    // never degrades the observed collection: its one
-                    // sanitized automatic warning surfaces at the outcome,
-                    // and the children fall back to the acceptance truth the
-                    // 202 already attested (never a dropped or fabricated
-                    // series).
-                    let (children, children_read_failed) =
-                        if history_armed && matches!(observed, Ok(Ok(_))) {
-                            match analyzer
+                    // A terminal collection may reconcile only with the
+                    // complete results window from that same observation.
+                    // Keep a failed or skipped read distinct from an empty
+                    // successful window so no mixed-time snapshot can save.
+                    let children = if history_armed && matches!(observed, Ok(Ok(_))) {
+                        Some(
+                            analyzer
                                 .bulk_observed_children(
                                     &observed_running,
                                     source_name.as_deref(),
                                     &cancel,
                                 )
                                 .await
-                            {
-                                Ok(children) => (children, false),
-                                Err(_) => (
-                                    observed_running.acceptance_children(
-                                        source_name.as_deref(),
-                                        UtcTimestamp::now(),
-                                    ),
-                                    true,
-                                ),
-                            }
-                        } else {
-                            (Vec::new(), false)
-                        };
-                    Analyzed::Observed(observed, children, children_read_failed)
+                                .map_err(|_| ()),
+                        )
+                    } else {
+                        None
+                    };
+                    Analyzed::Observed {
+                        outcome: observed,
+                        children,
+                        accepted: Box::new(observed_running),
+                        accepted_at,
+                    }
                 } else {
                     Analyzed::Accepted(running)
                 }
@@ -193,23 +186,18 @@ pub(super) fn bulk_submit(
         Analyzed::Accepted(running) => {
             submit_accepted_outcome(&running, source_name.as_deref(), &service, output, started)
         }
-        Analyzed::Observed(Ok(Ok(collection)), children, children_read_failed) => {
+        Analyzed::Observed {
+            outcome: Ok(Ok(collection)),
+            children,
+            ..
+        } => {
             let exit = super::status_wait::collection_exit(&collection);
-            if children_read_failed {
-                // The read phase failed first: it owns the one invocation
-                // warning. The persist phase below flows through the same
-                // latch, so its failure can never emit a second line.
-                *bulk_warning.latch() = true;
-                detect::warning_stderr(
-                    streams,
-                    "automatic history save failed (the observed bulk children could not be read)",
-                );
-            }
-            let (collection, _) = detect::save::persist_bulk_collection(
-                &collection,
+            let collection = super::status_wait::persist_observed_collection(
+                collection,
                 children,
                 &service,
                 &mut bulk_warning,
+                streams,
             );
             succeed(
                 resolved,
@@ -219,7 +207,24 @@ pub(super) fn bulk_submit(
                 started,
             )
         }
-        Analyzed::Observed(Ok(Err(failure)), _, _) => {
+        Analyzed::Observed {
+            outcome: Ok(Err(failure)),
+            accepted,
+            accepted_at,
+            ..
+        } => {
+            // The observation error remains the primary outcome. Acceptance
+            // projection was already validated at HTTP 202, so an impossible
+            // local reprojection error cannot replace that honest failure.
+            if history_armed {
+                let _ = persist_accepted_snapshot(
+                    &accepted,
+                    source_name.as_deref(),
+                    accepted_at,
+                    &service,
+                    &mut bulk_warning,
+                );
+            }
             let error = failure.into_error();
             observed_failure_outcome(
                 "the bulk job was accepted but its local observation failed",
@@ -228,7 +233,10 @@ pub(super) fn bulk_submit(
                 started,
             )
         }
-        Analyzed::Observed(Err(interrupted), _, _) => {
+        Analyzed::Observed {
+            outcome: Err(interrupted),
+            ..
+        } => {
             let note = bulk_identity_note(&interrupted.identity);
             detect::interrupted_outcome(
                 ResolvedCommand::BulkWait,
@@ -257,20 +265,21 @@ fn bulk_json_format_error() -> CanonicalError {
 
 /// The intermediate flow states for a bulk submission run. Accepted keeps
 /// the running handle for the enqueue projection; Observed carries the
-/// observe outcome, the observed children fetched for the history seam, and
-/// whether that fetch failed (the one automatic warning surfaces at the
-/// outcome, never degrading the remote read); Failed/Interrupted carry the
-/// canonical error.
+/// observe outcome, the optional observed-children read, and the independently
+/// certified acceptance snapshot and timestamp retained for an observation
+/// failure.
+/// Failed/Interrupted carry a pre-acceptance canonical error.
 enum Analyzed {
     Accepted(crate::analysis::RunningBulk),
-    Observed(
-        Result<
+    Observed {
+        outcome: Result<
             Result<BulkCollection, crate::analysis::BulkAnalysisError>,
             crate::analysis::InterruptedBulk,
         >,
-        Vec<(crate::domain::Analysis<CanonicalError>, Option<String>)>,
-        bool,
-    ),
+        children: Option<Result<Vec<detect::save::BulkChild>, ()>>,
+        accepted: Box<crate::analysis::RunningBulk>,
+        accepted_at: UtcTimestamp,
+    },
     Interrupted(CanonicalError, String),
     Failed(CanonicalError),
 }
@@ -373,43 +382,21 @@ fn submit_accepted_outcome(
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
 ) -> DetectOutcome {
-    let identity = running.identity();
-    let plan = running.plan();
-    let estimated = plan.map(|plan| plan.estimated_billable_units());
-    let (status, counters) = running.accepted_snapshot();
-    let now = UtcTimestamp::now();
-    // A 202 may immediately reject every item. That accepted snapshot is
-    // already terminal, so its observation time is also its completion time.
-    let completed_at = matches!(
-        status,
-        AnalysisStatus::Succeeded | AnalysisStatus::Failed | AnalysisStatus::Partial
-    )
-    .then_some(now);
-    let collection = match BulkCollection::new(
-        identity.bulk_id,
-        identity.upstream_bulk_id.clone(),
-        status,
-        SubmissionOutcome::Accepted,
-        counters,
-        estimated,
-        now,
-        now,
-        completed_at,
-    ) {
-        Ok(collection) => collection,
-        Err(_) => {
-            return detect::failure_outcome(
-                ResolvedCommand::BulkSubmit,
-                output,
-                started,
-                detect::internal_error("the accepted bulk state could not be projected"),
-            );
-        }
-    };
-    let children = running.acceptance_children(source_name, now);
     let mut bulk_warning = detect::save::BulkSaveWarning::new();
-    let (collection, _) =
-        detect::save::persist_bulk_collection(&collection, children, service, &mut bulk_warning);
+    let Some(collection) = persist_accepted_snapshot(
+        running,
+        source_name,
+        UtcTimestamp::now(),
+        service,
+        &mut bulk_warning,
+    ) else {
+        return detect::failure_outcome(
+            ResolvedCommand::BulkSubmit,
+            output,
+            started,
+            detect::internal_error("the accepted bulk state could not be projected"),
+        );
+    };
     succeed(
         ResolvedCommand::BulkSubmit,
         CommandData::BulkSubmit(crate::output::BulkSubmitOutput::collection(collection)),
@@ -417,6 +404,45 @@ fn submit_accepted_outcome(
         output,
         started,
     )
+}
+
+/// Persists the independently certified HTTP 202 acceptance unit. A failed
+/// later observation may still save this earlier snapshot because its parent,
+/// children, local inputs, and task identities all come from the same
+/// acceptance response. `None` denotes the structurally impossible case where
+/// that already validated acceptance cannot be projected into its domain type.
+fn persist_accepted_snapshot(
+    running: &crate::analysis::RunningBulk,
+    source_name: Option<&str>,
+    accepted_at: UtcTimestamp,
+    service: &crate::config::ConfigService,
+    warning: &mut detect::save::BulkSaveWarning,
+) -> Option<BulkCollection> {
+    let identity = running.identity();
+    let plan = running.plan();
+    let estimated = plan.map(|plan| plan.estimated_billable_units());
+    let (status, counters) = running.accepted_snapshot();
+    // A 202 may immediately reject every item. That accepted snapshot is
+    // already terminal, so its observation time is also its completion time.
+    let completed_at = matches!(
+        status,
+        AnalysisStatus::Succeeded | AnalysisStatus::Failed | AnalysisStatus::Partial
+    )
+    .then_some(accepted_at);
+    let collection = BulkCollection::new(
+        identity.bulk_id,
+        identity.upstream_bulk_id.clone(),
+        status,
+        SubmissionOutcome::Accepted,
+        counters,
+        estimated,
+        accepted_at,
+        accepted_at,
+        completed_at,
+    )
+    .ok()?;
+    let children = running.acceptance_children(source_name, accepted_at);
+    Some(detect::save::persist_bulk_collection(&collection, children, service, warning).0)
 }
 
 /// The dry-run outcome: the canonical typed reconciliation shape at exit 0

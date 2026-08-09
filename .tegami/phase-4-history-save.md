@@ -61,10 +61,15 @@ reconcile (prior-row lookup, merge, insert-or-refresh) inside one immediate
 SQLite write transaction, so two Pangram CLI processes observing the same
 remote task or bulk job concurrently converge on exactly one stored row with
 its children and observations exactly once instead of risking duplicate
-durable rows. One bulk command (`bulk submit --wait`, `bulk status`, `bulk
-wait`) now shares one invocation-scoped automatic-history warning across its
-observed-children read and persistence phases, so a run in which both fail
-emits exactly one `warning:` line.
+durable rows. A terminal `bulk submit --wait`, `bulk status`, or `bulk wait`
+snapshot now saves only with the complete child window retrieved from that
+same observation. If the child read fails, the command keeps the truthful
+remote result, emits one automatic-history warning, and leaves history
+untouched instead of combining terminal counters with queued acceptance
+children. If `bulk submit --wait` observation fails after HTTP 202 acceptance,
+the command first saves the independently certified accepted collection and
+children with their original acceptance timestamp, then returns the honest
+observation failure.
 
 A stored `user_version = 1` alone no longer opens the history database: the
 store now verifies the exact schema-v1 structure on every open and fails

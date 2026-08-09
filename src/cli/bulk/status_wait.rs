@@ -197,7 +197,7 @@ pub(super) fn bulk_wait(
 /// uncertified, so opening history would create a misleading memberless row.
 /// The primary status/wait result remains successful and the read phase owns
 /// the invocation's one automatic-history warning.
-fn persist_observed_collection(
+pub(super) fn persist_observed_collection(
     collection: BulkCollection,
     children: Option<Result<Vec<detect::save::BulkChild>, ()>>,
     service: &crate::config::ConfigService,
