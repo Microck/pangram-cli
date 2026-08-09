@@ -41,12 +41,63 @@ mod store;
 mod wire;
 
 pub use analysis_writes::{ObservationSnapshot, TerminalResult};
+pub use export::{HistoryExportError, HistoryExportFormat, export_history};
 pub use reconcile::{ReconciledAnalysis, ReconciledBulk};
 pub use records::{
     InputKind, StoredAnalysis, StoredBulkCollection, StoredCheck, StoredSearchHit,
     StoredUpstreamTask,
 };
 pub use store::{DATABASE_DIRECTORY_NAME, DATABASE_FILE_NAME, HistoryStore, SCHEMA_VERSION};
+
+/// Projects storage rows onto the privacy-bounded summary type shared by
+/// CLI, TUI, and MCP adapters.
+pub(crate) fn summary_page(
+    hits: Vec<StoredSearchHit>,
+) -> Result<crate::domain::AnalysisSummaryPage, HistoryError> {
+    use crate::domain::{AnalysisInputKind, AnalysisSummary, OrderedChecks};
+
+    let items = hits
+        .into_iter()
+        .map(|hit| {
+            let checks = OrderedChecks::new(hit.checks).map_err(|_| {
+                HistoryError::new(
+                    HistoryErrorCode::HistoryCorrupt,
+                    "a stored history summary has invalid check ordering",
+                )
+            })?;
+            Ok(AnalysisSummary {
+                id: hit.analysis_id,
+                status: hit.status,
+                checks,
+                save_state: hit.save_state,
+                input_kind: match hit.input_kind {
+                    InputKind::Text => AnalysisInputKind::Text,
+                    InputKind::File => AnalysisInputKind::File,
+                },
+                display_name: hit.display_name,
+                created_at: hit.created_at,
+            })
+        })
+        .collect::<Result<Vec<_>, HistoryError>>()?;
+    Ok(crate::domain::AnalysisSummaryPage { items })
+}
+
+/// Persists one canonical analysis with its ordered checks and observation
+/// evidence in the store's single atomic write. Adapters decide the retention
+/// policy; this history-owned seam decides the exact durable projection.
+pub(crate) fn save_complete_analysis(
+    store: &mut HistoryStore,
+    analysis: &crate::domain::Analysis<crate::output::CanonicalError>,
+    save_state: crate::domain::SaveState,
+    retained_text: Option<&str>,
+) -> Result<(), HistoryError> {
+    let record = save::stored_analysis_with_retained_text(analysis, save_state, retained_text)?;
+    store.save_analysis_complete(
+        &record,
+        &save::stored_checks(analysis)?,
+        &save::stored_observations(analysis),
+    )
+}
 
 use std::fmt;
 

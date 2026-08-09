@@ -7,10 +7,21 @@ use microck_pangram_cli::domain::{
     Sha256Hash, SubmissionOutcome, TextInput, TextOrigin, UtcTimestamp,
 };
 use microck_pangram_cli::history::{
-    HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis, StoredCheck,
-    StoredUpstreamTask, TerminalResult,
+    HistoryErrorCode, HistoryExportError, HistoryExportFormat, HistoryStore, InputKind,
+    ObservationSnapshot, StoredAnalysis, StoredCheck, StoredUpstreamTask, TerminalResult,
+    export_history,
 };
 use microck_pangram_cli::output::{CanonicalError, ErrorCode};
+
+fn export_jsonl(store: &HistoryStore) -> Result<Vec<serde_json::Value>, HistoryExportError> {
+    let mut output = Vec::new();
+    export_history(Some(store), &mut output, HistoryExportFormat::Jsonl, false)?;
+    Ok(String::from_utf8(output)
+        .expect("export emits UTF-8 JSONL")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("export emits valid JSONL records"))
+        .collect())
+}
 
 #[test]
 fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
@@ -185,7 +196,7 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
             .len(),
         1
     );
-    let exported = store.export_analyses(false).expect("export multi-check");
+    let exported = export_jsonl(&store).expect("export multi-check");
     assert_eq!(exported[0]["checks"].as_array().unwrap().len(), 2);
 
     store
@@ -239,13 +250,17 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
             .code(),
         HistoryErrorCode::HistoryCorrupt
     );
-    assert_eq!(
-        store
-            .export_analyses(false)
-            .expect_err("export must not silently omit unmatched evidence")
-            .code(),
-        HistoryErrorCode::HistoryCorrupt
+    let mut output = Vec::new();
+    let export_error = export_history(Some(&store), &mut output, HistoryExportFormat::Jsonl, false)
+        .expect_err("export must not silently omit unmatched evidence");
+    let HistoryExportError::History(export_error) = export_error else {
+        panic!("canonical certification failure must be a history error")
+    };
+    assert!(
+        output.is_empty(),
+        "a failed certified export must not write partial output"
     );
+    assert_eq!(export_error.code(), HistoryErrorCode::HistoryCorrupt);
     store
         .with_connection(|connection| {
             connection.execute(
@@ -309,13 +324,17 @@ fn complete_rows_reconstruct_filter_export_rollback_and_fail_closed() {
             .code(),
         HistoryErrorCode::HistoryCorrupt
     );
-    assert_eq!(
-        store
-            .export_analyses(false)
-            .expect_err("corrupt export must fail closed")
-            .code(),
-        HistoryErrorCode::HistoryCorrupt
+    let mut output = Vec::new();
+    let export_error = export_history(Some(&store), &mut output, HistoryExportFormat::Jsonl, false)
+        .expect_err("corrupt export must fail closed");
+    let HistoryExportError::History(export_error) = export_error else {
+        panic!("canonical certification failure must be a history error")
+    };
+    assert!(
+        output.is_empty(),
+        "a failed certified export must not write partial output"
     );
+    assert_eq!(export_error.code(), HistoryErrorCode::HistoryCorrupt);
 }
 
 #[test]
@@ -656,9 +675,7 @@ fn standalone_observations_merge_only_the_matching_check() {
             .len(),
         1
     );
-    let exported = store
-        .export_analyses(false)
-        .expect("export remains readable");
+    let exported = export_jsonl(&store).expect("export remains readable");
     assert_eq!(exported[0]["checks"].as_array().unwrap().len(), 2);
     assert_eq!(
         exported[0]["input"]["text"], "retained combined input",

@@ -375,7 +375,7 @@ fn persist_series(
             saved.push(analysis);
             continue;
         }
-        match save_one(
+        match crate::history::save_complete_analysis(
             &mut store,
             &analysis,
             save_state,
@@ -406,24 +406,6 @@ fn persist_series(
 }
 
 /// Persists one local top analysis (no bulk membership link).
-fn save_one(
-    store: &mut HistoryStore,
-    analysis: &Analysis<CanonicalError>,
-    save_state: SaveState,
-    retained_text: Option<&str>,
-) -> Result<(), HistoryError> {
-    let record = crate::history::save::stored_analysis_with_retained_text(
-        analysis,
-        save_state,
-        retained_text,
-    )?;
-    store.save_analysis_complete(
-        &record,
-        &crate::history::save::stored_checks(analysis)?,
-        &crate::history::save::stored_observations(analysis),
-    )
-}
-
 /// Store-open failure: the manual path surfaces the canonical error; the
 /// automatic path warns once and keeps the analyses ephemeral.
 fn persist_open_failure(

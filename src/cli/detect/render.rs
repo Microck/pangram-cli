@@ -13,7 +13,7 @@ use std::io::Write;
 use crate::output::{self};
 use crate::output::{
     AnalysisOutput, CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode,
-    ExitCode, Recovery, ResolvedCommand,
+    ExitCode, ResolvedCommand,
 };
 
 use super::ErrorSurface;
@@ -766,19 +766,6 @@ pub(crate) fn internal_error(message: &str) -> CanonicalError {
 
 pub(crate) fn usage_error(code: ErrorCode, message: &str) -> CanonicalError {
     CanonicalError::new(code, message).expect("usage messages are non-empty")
-}
-
-/// The missing-credential failure with its canonical recovery guidance.
-pub(crate) fn missing_api_key_error() -> CanonicalError {
-    let recovery = Recovery::new("Configure a persistent key or set PANGRAM_API_KEY.")
-        .and_then(|recovery| recovery.with_command("pangram auth"))
-        .expect("fixed recovery text is non-empty");
-    CanonicalError::new(
-        ErrorCode::MissingApiKey,
-        "No Pangram API key is configured.",
-    )
-    .and_then(|error| error.with_recovery(recovery))
-    .expect("recovery is valid for missing_api_key")
 }
 
 /// Milliseconds between `started_at` and now, for canonical `duration_ms`.

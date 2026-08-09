@@ -6,3 +6,4 @@ pub mod diagnostics;
 pub mod domain;
 pub mod history;
 pub mod output;
+pub(crate) mod tui;

@@ -59,3 +59,89 @@ pub use upstream::{
 
 pub use crate::config::MAX_REQUESTS_PER_SECOND;
 pub use tokio::time::{Duration, Instant};
+
+use secrecy::SecretString;
+
+use crate::config::{ConfigError, ConfigService};
+use crate::output::{CanonicalError, ErrorCode};
+
+/// Maps configuration failures into the canonical categories shared by every
+/// adapter that constructs an analyzer or resolves credentials.
+pub(crate) fn config_error(error: ConfigError) -> CanonicalError {
+    let code = match &error {
+        ConfigError::InsecurePermissions | ConfigError::RestrictionFailed => {
+            ErrorCode::InsecureConfigPermissions
+        }
+        ConfigError::InvalidValue { .. } => ErrorCode::InvalidApiKey,
+        _ => ErrorCode::InvalidConfig,
+    };
+    CanonicalError::new(code, error.to_string()).unwrap_or_else(|_| {
+        CanonicalError::new(code, "credential resolution failed").expect("fixed message")
+    })
+}
+
+/// Builds the one adapter-facing analyzer from effective configuration.
+/// Production endpoints stay fixed inside `UpstreamClient`; the environment
+/// override exists only in test/dev-tools builds and accepts loopback hosts.
+#[allow(clippy::result_large_err)]
+pub(crate) fn build_analyzer(
+    service: &ConfigService,
+    api_key: SecretString,
+) -> Result<Analyzer, CanonicalError> {
+    let config = service.effective().map_err(config_error)?;
+    let rate = config
+        .network
+        .as_ref()
+        .and_then(|network| network.max_requests_per_second);
+    let client = configured_client(api_key, AnalysisConfig::production(rate))?;
+    Ok(Analyzer::from_client(client))
+}
+
+#[cfg(any(test, feature = "dev-tools", doctest))]
+#[allow(clippy::result_large_err)]
+fn configured_client(
+    api_key: SecretString,
+    config: AnalysisConfig,
+) -> Result<UpstreamClient, CanonicalError> {
+    let base = std::env::var("PANGRAM_DETECT_ENDPOINT").ok();
+    let endpoints = base
+        .as_deref()
+        .map(str::trim)
+        .filter(|base| !base.is_empty())
+        .map(UpstreamEndpoints::loopback);
+    let client = match endpoints {
+        Some(Ok(endpoints)) => UpstreamClient::for_loopback(api_key, config, endpoints),
+        Some(Err(error)) => {
+            return Err(CanonicalError::new(
+                ErrorCode::InvalidConfig,
+                format!("PANGRAM_DETECT_ENDPOINT is not a loopback fixture address: {error}"),
+            )
+            .expect("static template"));
+        }
+        None => UpstreamClient::production(api_key, config),
+    };
+    map_client(client)
+}
+
+#[cfg(not(any(test, feature = "dev-tools", doctest)))]
+#[allow(clippy::result_large_err)]
+fn configured_client(
+    api_key: SecretString,
+    config: AnalysisConfig,
+) -> Result<UpstreamClient, CanonicalError> {
+    map_client(UpstreamClient::production(api_key, config))
+}
+
+#[allow(clippy::result_large_err)]
+fn map_client(
+    client: Result<UpstreamClient, AnalysisError>,
+) -> Result<UpstreamClient, CanonicalError> {
+    client.map_err(|error| {
+        CanonicalError::new(
+            ErrorCode::UpstreamError,
+            format!("could not build the Pangram client: {error}"),
+        )
+        .and_then(|error| error.with_contextual_retryability(false))
+        .expect("static template")
+    })
+}

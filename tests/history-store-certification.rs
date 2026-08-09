@@ -14,8 +14,9 @@ use microck_pangram_cli::domain::{
     Sha256Hash, SubmissionOutcome, UtcTimestamp,
 };
 use microck_pangram_cli::history::{
-    HistoryError, HistoryErrorCode, HistoryStore, InputKind, ObservationSnapshot, StoredAnalysis,
-    StoredBulkCollection, StoredCheck, StoredUpstreamTask, TerminalResult,
+    HistoryError, HistoryErrorCode, HistoryExportError, HistoryExportFormat, HistoryStore,
+    InputKind, ObservationSnapshot, StoredAnalysis, StoredBulkCollection, StoredCheck,
+    StoredUpstreamTask, TerminalResult, export_history,
 };
 use microck_pangram_cli::output::{CanonicalError, ErrorCode};
 use rusqlite::Connection;
@@ -827,17 +828,41 @@ fn export_rejects_forged_fts_and_parent_projection_with_or_without_redaction() {
             ["ok"],
             "the forged FTS index remains internally valid"
         );
-        let error = store
-            .export_analyses(redact_content)
-            .expect_err("export must certify every canonical FTS projection");
+        let mut output = Vec::new();
+        let error = export_history(
+            Some(&store),
+            &mut output,
+            HistoryExportFormat::Jsonl,
+            redact_content,
+        )
+        .expect_err("export must certify every canonical FTS projection");
+        let HistoryExportError::History(error) = error else {
+            panic!("canonical certification failure must be a history error")
+        };
+        assert!(
+            output.is_empty(),
+            "a failed certified export must not write partial output"
+        );
         assert_canonical_search_corruption(&error);
 
         let root = tempfile::tempdir().expect("temp root");
         let store = seed_store(&root, false);
         install_aggregate_corruption(&store, AggregateCorruption::ResultMismatch);
-        let error = store
-            .export_analyses(redact_content)
-            .expect_err("export must certify every canonical parent projection");
+        let mut output = Vec::new();
+        let error = export_history(
+            Some(&store),
+            &mut output,
+            HistoryExportFormat::Jsonl,
+            redact_content,
+        )
+        .expect_err("export must certify every canonical parent projection");
+        let HistoryExportError::History(error) = error else {
+            panic!("canonical certification failure must be a history error")
+        };
+        assert!(
+            output.is_empty(),
+            "a failed certified export must not write partial output"
+        );
         assert_canonical_search_corruption(&error);
     }
 }

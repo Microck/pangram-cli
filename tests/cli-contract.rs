@@ -10,7 +10,7 @@ use serde_json::Value;
 mod harness;
 
 use harness::{
-    FORBIDDEN_NETWORK_APIS, FORBIDDEN_NETWORK_ENDPOINTS, HELP, PHASE_4_RUNTIME_DEPENDENCIES,
+    FORBIDDEN_NETWORK_APIS, FORBIDDEN_NETWORK_ENDPOINTS, HELP, PHASE_5_RUNTIME_DEPENDENCIES,
     PLANNED_TOP_LEVEL_COMMANDS, argument, code_before_line_comment, command, pangram,
     rust_source_paths,
 };
@@ -480,7 +480,7 @@ fn cargo_metadata_reports_the_exact_runtime_dependencies() {
         .filter(|dependency| dependency["kind"].is_null())
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
-    let expected: BTreeSet<_> = PHASE_4_RUNTIME_DEPENDENCIES.iter().copied().collect();
+    let expected: BTreeSet<_> = PHASE_5_RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
 }
 

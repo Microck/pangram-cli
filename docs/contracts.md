@@ -1104,6 +1104,74 @@ Bare dispatch evaluates the source before any help or usage surface: a bare
 piped stdin never prints help, and only the all-TTY bare launch uses the
 pre-TUI successful-help fallback.
 
+When the TUI is compiled, an all-TTY bare launch enters the alternate-screen
+Analyze route instead of the pre-TUI help fallback. The initial interactive
+surface has these observable boundaries:
+
+- `Analyze`, `Active`, `History`, and `Settings` are reachable through the
+  regular keymap with `Analyze` selected first. The Vim keymap adds its
+  documented navigation keys without stealing printable input from the text
+  composer.
+- text AI detection is the first positive analysis capability and must enter
+  the shared `Analyzer`. File input, plagiarism, and combined analysis remain
+  visible but unavailable until their owning implementation phases; activating
+  an unavailable control makes no request and spends no Pangram credit.
+- terminals at least 120 columns wide render route rail, center workspace, and
+  inspector as three stable areas. Widths 80 through 119 render top tabs and
+  place inspector content below the center content. Any viewport below 80x24
+  renders a resize overlay without changing application state.
+- normal keyboard exit is the focusable `Quit` command-bar action. Ctrl+C is
+  always an interruption. No unlisted single-key quit shortcut is implied by
+  this contract.
+- Settings changes commit through the same typed configuration service used by
+  the CLI and become visible only after persistence succeeds. Enabling local
+  history requires an explicit plaintext-retention warning and confirmation;
+  cancelling that overlay leaves the disabled default unchanged.
+- eligible intro playback remains unconsumed while the viewport is below
+  80x24. Missing approved source geometry or logo rights suppresses generated
+  intro frames but does not block the reducer, Analyze workflow, layout, or
+  terminal restoration.
+
+The TUI History route uses the same certified SQLite records and closed filters
+as the noninteractive history commands. Disabling automatic history does not
+hide records already stored. It shows at most the newest 50 matching records,
+labels that value as `Showing N` rather than a total count, and includes each
+record's status, ordered checks, save state, display name, and timestamp.
+Status cycles through all, queued, running, succeeded, failed, and partial;
+check cycles through all, AI detection, and plagiarism. Filter changes reload
+immediately. Search applies the literal query only when Enter is pressed. One
+history operation may be pending at a time, so repeated activation cannot
+duplicate reads, mutations, exports, or billable reruns. Selection is owned by
+analysis ID and survives a reload when that ID remains present.
+
+Opening a selected record loads `canonical_analysis(ID, false)`. Retained text,
+original paths, and extracted text never enter TUI state or rendered cells.
+Detail and every diagnostic still pass through terminal sanitization. Rerun is
+a focused action labeled as billable; activating it is the explicit request and
+does not add a second confirmation. It reconstructs and validates the retained
+text inside the shared history/analysis module before credential resolution,
+creates a fresh analysis with `rerun_of`, always requests no public dashboard
+link, and never implies manual save. The current automatic-history setting
+still determines whether a successful rerun is saved automatically.
+
+Delete exists only in the selected record's contextual action menu. Enter on
+Delete opens a confirmation whose default is Cancel, a second Enter therefore
+cancels, `Y` confirms, and `N` or Escape cancels. A bare `d` never mutates
+history. The selected row remains visible until the real deletion returns.
+After either a clean deletion or a deletion that committed before a WAL
+checkpoint warning, History reloads the current criteria so the screen matches
+the committed database. A pre-commit failure preserves the row and shows one
+sanitized notice.
+
+Export means all certified history records. Its overlay defaults to JSONL,
+redacted content, and Cancel; Markdown is the other format. Full content
+requires a separate explicit confirmation. Confirming an export restores the
+terminal and leaves the interactive loop before writing any stdout byte, then
+uses the same certified streaming exporter as `history export`. A history
+failure before output exits 7 with no export prefix. An output or flush failure
+exits 1 and emits no secondary stdout document. Cancelling stays in History and
+writes nothing.
+
 Source-category and content rules:
 
 - `word_count` is the adapter-computed count of Unicode whitespace-separated

@@ -15,6 +15,12 @@ dev-tools = []
 
 [dependencies]
 clap = { version = "=4.6.4", features = ["derive"] }
+# Ratatui 0.29 keeps its calendar widget, and therefore `time`, outside the
+# default terminal feature graph. This preserves the Rust 1.87 floor without
+# retaining the vulnerable pre-0.3.47 `time` line pulled by Ratatui 0.30. Its
+# matching Crossterm release also keeps one terminal backend version.
+crossterm = "=0.28.1"
+ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm"] }
 directories = "=6.0.0"
 # Cross-process serialization for read-modify-write config mutations. The
 # separate sidecar lock remains stable while atomic rename replaces config.toml.
@@ -97,6 +103,14 @@ axum = { version = "=0.8.9", default-features = false, features = [
     "json",
 ] }
 jsonschema = { version = "=0.49.2", default-features = false }
+# Real cross-platform pseudo-terminal boundary for compiled TUI lifecycle
+# tests. This stays dev-only; the release binary uses crossterm directly.
+portable-pty = "=0.9.0"
+# Reconstructs the visible screen from real PTY byte streams. Ratatui emits
+# incremental cursor patches, so raw transcript substrings are not a valid
+# oracle for rendered multiword labels. Version 0.15 keeps this test-only
+# parser independent of Ratatui 0.29's exact terminal-width dependency.
+vt100 = "=0.15.2"
 proptest = "=1.11.0"
 tempfile = "=3.27.0"
 # Paused-time deterministic protocol tests. `test-util` stays out of every

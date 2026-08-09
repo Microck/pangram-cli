@@ -494,10 +494,19 @@ where
         return outcome;
     }
 
-    // Only a literally bare invocation behaves like `--help`. Explicit help
-    // anywhere else is Clap-owned, including after a subcommand. This is the
-    // pre-TUI fallback for the all-TTY bare launch (piped stdin was already
-    // claimed by bare_dispatch above).
+    // A literally bare process-facing launch owns the interactive adapter
+    // only when every standard stream is a terminal. Library parsing keeps
+    // its historical no-I/O behavior through `render_clap = false`.
+    if render_clap && arguments.len() == 1 && streams.all_interactive() {
+        return RunOutcome {
+            exit_code: crate::tui::run(),
+            clap_error: None,
+        };
+    }
+
+    // Only a literally bare non-rendering parse behaves like `--help` here.
+    // The process-facing all-TTY path entered the TUI above; piped stdin was
+    // already claimed by `bare_dispatch`. Explicit help remains Clap-owned.
     if arguments.len() == 1 {
         arguments.push("--help".into());
     }

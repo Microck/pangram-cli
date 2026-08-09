@@ -26,10 +26,8 @@ pub(crate) mod inputs;
 mod render;
 pub(crate) mod save;
 
-pub(crate) use client::{
-    bridge_sigint, build_analyzer, credential_error, install_sigint_driver, reset_sigint_flag,
-    resolve_api_key,
-};
+pub(crate) use crate::analysis::{build_analyzer, config_error as credential_error};
+pub(crate) use client::{bridge_sigint, install_sigint_driver, reset_sigint_flag, resolve_api_key};
 pub(crate) use render::{
     DetectOutcome, analysis_command_outcome, analysis_exit_code, early_failure, elapsed_ms,
     failure_outcome, identity_note, internal_error, interrupted_outcome, note_stderr,
