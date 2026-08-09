@@ -377,50 +377,89 @@ impl From<HistoryError> for ExportError {
     }
 }
 
+fn export_json_error(error: serde_json::Error) -> ExportError {
+    if error.is_io() {
+        ExportError::Output
+    } else {
+        ExportError::History(HistoryError::new(
+            HistoryErrorCode::HistoryCorrupt,
+            "export history: a canonical analysis could not be encoded",
+        ))
+    }
+}
+
+/// Escapes Markdown fence characters while `serde_json` writes a record.
+/// The adapter consumes every input byte or returns the underlying I/O error,
+/// so the serializer never needs a record-sized intermediate string.
+struct MarkdownJsonWriter<'a, W> {
+    inner: &'a mut W,
+}
+
+impl<W: std::io::Write> std::io::Write for MarkdownJsonWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let mut start = 0;
+        for (index, byte) in bytes.iter().enumerate() {
+            if *byte == b'`' {
+                self.inner.write_all(&bytes[start..index])?;
+                self.inner.write_all(b"\\u0060")?;
+                start = index + 1;
+            }
+        }
+        self.inner.write_all(&bytes[start..])?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 fn run_export(request: Request, store: Option<HistoryStore>) -> Result<(), ExportError> {
+    // Certify the whole SQLite snapshot before stdout receives a prefix: a
+    // corrupt later row must fail closed without leaking an earlier record.
+    // Rendering below then writes one certified value at a time, so export
+    // never allocates a second buffer proportional to total history size.
     let values = match store {
         Some(store) => store.export_analyses(request.redact_content)?,
         None => Vec::new(),
     };
-    let mut bytes = Vec::new();
-    if request.export_markdown {
-        bytes.extend_from_slice(b"# Pangram history export\n");
+    let mut stdout = std::io::stdout().lock();
+    write_export(&mut stdout, values.into_iter(), request.export_markdown)
+}
+
+fn write_export(
+    writer: &mut impl std::io::Write,
+    values: impl Iterator<Item = serde_json::Value>,
+    markdown: bool,
+) -> Result<(), ExportError> {
+    if markdown {
+        writer
+            .write_all(b"# Pangram history export\n")
+            .map_err(|_| ExportError::Output)?;
         for value in values {
             let id = value
                 .get("id")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("invalid");
-            bytes.extend_from_slice(format!("\n## `{id}`\n\n```json\n").as_bytes());
-            let rendered = serde_json::to_string_pretty(&value)
-                .map_err(|_| {
-                    HistoryError::new(
-                        HistoryErrorCode::HistoryCorrupt,
-                        "export history: a canonical analysis could not be encoded",
-                    )
-                })?
-                .replace('`', "\\u0060");
-            bytes.extend_from_slice(rendered.as_bytes());
-            bytes.extend_from_slice(b"\n```\n");
+            write!(writer, "\n## `{id}`\n\n```json\n").map_err(|_| ExportError::Output)?;
+            serde_json::to_writer_pretty(
+                MarkdownJsonWriter {
+                    inner: &mut *writer,
+                },
+                &value,
+            )
+            .map_err(export_json_error)?;
+            writer
+                .write_all(b"\n```\n")
+                .map_err(|_| ExportError::Output)?;
         }
     } else {
         for value in values {
-            let rendered = serde_json::to_vec(&value).map_err(|_| {
-                HistoryError::new(
-                    HistoryErrorCode::HistoryCorrupt,
-                    "export history: a canonical analysis could not be encoded",
-                )
-            })?;
-            bytes.extend_from_slice(&rendered);
-            bytes.push(b'\n');
+            serde_json::to_writer(&mut *writer, &value).map_err(export_json_error)?;
+            writer.write_all(b"\n").map_err(|_| ExportError::Output)?;
         }
     }
-    let mut stdout = std::io::stdout().lock();
-    write_export(&mut stdout, &bytes).map_err(|_| ExportError::Output)
-}
-
-fn write_export(writer: &mut impl std::io::Write, bytes: &[u8]) -> std::io::Result<()> {
-    writer.write_all(bytes)?;
-    writer.flush()
+    writer.flush().map_err(|_| ExportError::Output)
 }
 
 fn unresolvable() -> CanonicalError {
@@ -578,9 +617,13 @@ fn confirm(operation: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io::{self, Write};
+    use std::rc::Rc;
 
-    use super::write_export;
+    use serde_json::json;
+
+    use super::{ExportError, write_export};
 
     struct ShortWriter {
         remaining: usize,
@@ -613,10 +656,11 @@ mod tests {
                 remaining: 3,
                 flush_fails: false,
             },
-            b"long export",
+            vec![json!({"id": "long-export"})].into_iter(),
+            false,
         )
         .expect_err("short writer eventually closes");
-        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(error, ExportError::Output));
     }
 
     #[test]
@@ -626,9 +670,92 @@ mod tests {
                 remaining: usize::MAX,
                 flush_fails: true,
             },
-            b"complete export",
+            vec![json!({"id": "complete-export"})].into_iter(),
+            false,
         )
         .expect_err("flush fails");
-        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(error, ExportError::Output));
+    }
+
+    struct CountingWriter {
+        writes: Rc<Cell<usize>>,
+        bytes: Vec<u8>,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.writes.set(self.writes.get() + 1);
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct StreamingProbe {
+        writes: Rc<Cell<usize>>,
+        values: std::vec::IntoIter<serde_json::Value>,
+        last_write_count: Option<usize>,
+    }
+
+    impl Iterator for StreamingProbe {
+        type Item = serde_json::Value;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if let Some(previous) = self.last_write_count {
+                assert!(
+                    self.writes.get() > previous,
+                    "each record must reach the writer before the next is requested"
+                );
+            }
+            let value = self.values.next()?;
+            self.last_write_count = Some(self.writes.get());
+            Some(value)
+        }
+    }
+
+    #[test]
+    fn export_serializes_each_record_incrementally_to_the_writer() {
+        let writes = Rc::new(Cell::new(0));
+        let mut writer = CountingWriter {
+            writes: Rc::clone(&writes),
+            bytes: Vec::new(),
+        };
+
+        let outcome = write_export(
+            &mut writer,
+            StreamingProbe {
+                writes,
+                values: vec![json!({"id": "one"}), json!({"id": "two"})].into_iter(),
+                last_write_count: None,
+            },
+            false,
+        );
+
+        assert!(outcome.is_ok(), "the streaming export succeeds");
+        assert_eq!(writer.bytes, b"{\"id\":\"one\"}\n{\"id\":\"two\"}\n");
+
+        let writes = Rc::new(Cell::new(0));
+        let mut writer = CountingWriter {
+            writes: Rc::clone(&writes),
+            bytes: Vec::new(),
+        };
+        let outcome = write_export(
+            &mut writer,
+            StreamingProbe {
+                writes,
+                values: vec![json!({"id": "one", "text": "`"}), json!({"id": "two"})].into_iter(),
+                last_write_count: None,
+            },
+            true,
+        );
+
+        assert!(outcome.is_ok(), "the streaming Markdown export succeeds");
+        assert_eq!(
+            String::from_utf8(writer.bytes).unwrap(),
+            "# Pangram history export\n\n## `one`\n\n```json\n{\n  \"id\": \"one\",\n  \"text\": \"\\u0060\"\n}\n```\n\n## `two`\n\n```json\n{\n  \"id\": \"two\"\n}\n```\n"
+        );
     }
 }
