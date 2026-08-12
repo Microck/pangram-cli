@@ -112,48 +112,49 @@ fn bare_all_tty_launches_analyze_and_ctrl_c_restores_the_terminal() {
     });
 
     let mut transcript = Vec::new();
-    let launched = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
-        let visible = screen_contents(bytes);
-        ["Analyze", "Active", "History", "Settings"]
-            .iter()
-            .all(|label| visible.contains(label))
-    });
-    if !launched {
-        let _ = child.kill();
-        let _ = child.wait();
-        drop(writer);
-        let _ = reader_thread.join();
-        panic!(
+    let interaction = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let launched = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
+            let visible = screen_contents(bytes);
+            ["Analyze", "Active", "History", "Settings"]
+                .iter()
+                .all(|label| visible.contains(label))
+        });
+        assert!(
+            launched,
             "bare all-TTY launch did not reach the four-route TUI:\n{}",
             String::from_utf8_lossy(&transcript)
         );
-    }
 
-    writer.write_all(&[0x03]).expect("send Ctrl+C");
-    writer.flush().expect("flush Ctrl+C");
+        writer.write_all(&[0x03]).expect("send Ctrl+C");
+        writer.flush().expect("flush Ctrl+C");
+    }));
     let mut killer = child.clone_killer();
+    if interaction.is_err() {
+        let _ = killer.kill();
+    }
     let (status_tx, status_rx) = mpsc::channel();
     let wait_thread = std::thread::spawn(move || {
         let _ = status_tx.send(child.wait());
     });
-    let status = match status_rx.recv_timeout(EXIT_TIMEOUT) {
-        Ok(status) => status,
-        Err(error) => {
-            let _ = killer.kill();
-            let _ = wait_thread.join();
-            drop(writer);
-            let _ = reader_thread.join();
-            panic!("TUI did not exit after Ctrl+C: {error}");
-        }
-    };
-    wait_thread.join().expect("join child waiter");
+    let status = status_rx.recv_timeout(EXIT_TIMEOUT);
+    if status.is_err() {
+        let _ = killer.kill();
+    }
+    let wait_join = wait_thread.join();
     drop(writer);
-    reader_thread.join().expect("join PTY reader");
+    let reader_join = reader_thread.join();
     while let Ok(chunk) = output_rx.try_recv() {
         transcript.extend_from_slice(&chunk);
     }
+    if let Err(payload) = interaction {
+        std::panic::resume_unwind(payload);
+    }
 
-    let status = status.expect("wait for TUI exit");
+    wait_join.expect("join child waiter");
+    reader_join.expect("join PTY reader");
+    let status = status
+        .unwrap_or_else(|error| panic!("TUI did not exit after Ctrl+C: {error}"))
+        .expect("wait for TUI exit");
     assert_eq!(status.exit_code(), 130, "Ctrl+C uses the interruption exit");
     assert!(
         transcript
@@ -178,7 +179,7 @@ fn bare_all_tty_launches_analyze_and_ctrl_c_restores_the_terminal() {
 #[test]
 fn ci_suppressed_all_tty_launch_and_clean_quit_leave_intro_unseen() {
     let isolated = tempfile::tempdir().unwrap();
-    let marker = isolated.path().join("data/tui-state.json");
+    let data_dir = isolated.path().join("data");
     let mut command = isolated_command(isolated.path());
     // This synthetic value only resolves credential onboarding. The test
     // never submits analysis or sends the value outside the child process.
@@ -188,7 +189,11 @@ fn ci_suppressed_all_tty_launch_and_clean_quit_leave_intro_unseen() {
         "config_version = 1\n\n[updates]\ncheck_on_tui_start = false\n",
     )
     .expect("preconfigure the non-secret update preference");
-    assert!(!marker.exists(), "the isolated launch starts unseen");
+    assert_eq!(
+        std::fs::read_dir(&data_dir).unwrap().count(),
+        0,
+        "the production-selected data directory starts empty"
+    );
 
     let pair = NativePtySystem::default()
         .openpty(PtySize {
@@ -222,72 +227,73 @@ fn ci_suppressed_all_tty_launch_and_clean_quit_leave_intro_unseen() {
     });
 
     let mut transcript = Vec::new();
-    let launched = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
-        let visible = screen_contents(bytes);
-        ["Analyze", "Active", "History", "Settings"]
-            .iter()
-            .all(|label| visible.contains(label))
-    });
-    if !launched {
-        let _ = child.kill();
-        let _ = child.wait();
-        drop(writer);
-        let _ = reader_thread.join();
-        panic!(
+    let interaction = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let launched = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
+            let visible = screen_contents(bytes);
+            ["Analyze", "Active", "History", "Settings"]
+                .iter()
+                .all(|label| visible.contains(label))
+        });
+        assert!(
+            launched,
             "CI-suppressed all-TTY launch did not reach the TUI:\n{}",
             String::from_utf8_lossy(&transcript)
         );
-    }
-    assert!(
-        !marker.exists(),
-        "CI suppression must not consume intro state during startup"
-    );
+        assert!(
+            std::fs::read_dir(&data_dir).unwrap().next().is_none(),
+            "CI suppression must not write state during startup"
+        );
 
-    // Composer -> Public link -> Manual save -> Submit -> Quit.
-    transcript.clear();
-    writer
-        .write_all(b"\t\t\t\t")
-        .expect("focus the normal Quit action");
-    writer.flush().expect("flush Quit navigation");
-    let quit_focused = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
-        screen_contents(bytes).contains("> [Enter] Quit <")
-    });
-    if !quit_focused {
-        let _ = child.kill();
-        let _ = child.wait();
-        drop(writer);
-        let _ = reader_thread.join();
-        panic!(
+        // Composer -> Public link -> Manual save -> Submit -> Quit.
+        transcript.clear();
+        writer
+            .write_all(b"\t\t\t\t")
+            .expect("focus the normal Quit action");
+        writer.flush().expect("flush Quit navigation");
+        let quit_focused = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
+            screen_contents(bytes).contains("> [Enter] Quit <")
+        });
+        assert!(
+            quit_focused,
             "the normal Quit action did not receive focus:\n{}",
             String::from_utf8_lossy(&transcript)
         );
-    }
 
-    writer.write_all(b"\r").expect("activate Quit");
-    writer.flush().expect("flush Quit");
+        writer.write_all(b"\r").expect("activate Quit");
+        writer.flush().expect("flush Quit");
+    }));
     let mut killer = child.clone_killer();
+    if interaction.is_err() {
+        let _ = killer.kill();
+    }
     let (status_tx, status_rx) = mpsc::channel();
     let wait_thread = std::thread::spawn(move || {
         let _ = status_tx.send(child.wait());
     });
-    let status = match status_rx.recv_timeout(EXIT_TIMEOUT) {
-        Ok(status) => status,
-        Err(error) => {
-            let _ = killer.kill();
-            let _ = wait_thread.join();
-            drop(writer);
-            let _ = reader_thread.join();
-            panic!("TUI did not exit through the Quit action: {error}");
-        }
-    };
-    wait_thread.join().expect("join child waiter");
+    let status = status_rx.recv_timeout(EXIT_TIMEOUT);
+    if status.is_err() {
+        let _ = killer.kill();
+    }
+    let wait_join = wait_thread.join();
     drop(writer);
-    reader_thread.join().expect("join PTY reader");
+    let reader_join = reader_thread.join();
+    if let Err(payload) = interaction {
+        std::panic::resume_unwind(payload);
+    }
 
-    let status = status.expect("wait for TUI exit");
+    wait_join.expect("join child waiter");
+    reader_join.expect("join PTY reader");
+    let status = status
+        .unwrap_or_else(|error| panic!("TUI did not exit through the Quit action: {error}"))
+        .expect("wait for TUI exit");
     assert_eq!(status.exit_code(), 0, "the Quit action is a normal exit");
+    // This path must stay negative: CI makes the launch ineligible, and the
+    // runtime does not consume a plan while approved intro frames are absent.
+    // Assert against the production-selected data root instead of duplicating
+    // the private marker filename. Directory emptiness is stronger: any intro
+    // state write fails this contract, even if production changes its path.
     assert!(
-        !marker.exists(),
-        "CI suppression must leave the once-only intro unconsumed"
+        std::fs::read_dir(&data_dir).unwrap().next().is_none(),
+        "CI suppression must leave the production data directory unchanged"
     );
 }

@@ -1,9 +1,9 @@
 //! Compiled-binary detect integration against the real loopback Pangram 4
 //! fixture. No mocks, no live Pangram, no real credentials.
 //!
-//! Each test boots the Axum fixture on an ephemeral loopback port, points the
-//! `dev-tools`-gated `PANGRAM_DETECT_ENDPOINT` override at it, runs the
-//! compiled `pangram` binary in an isolated config/data environment, and
+//! Each test boots the Axum fixture on an ephemeral loopback port, passes it
+//! to the development-only compiled test driver, enters the real CLI adapter,
+//! and
 //! asserts the exact stdout envelope, stderr separation, exit code, and the
 //! recorded upstream request grammar. The synthetic key and content are
 //! fixture constants; assertion helpers never echo header or key values.
@@ -56,6 +56,10 @@ fn pangram() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pangram"))
 }
 
+fn test_driver() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pangram-test-driver"))
+}
+
 /// An isolated invocation: credential, config, and data state rooted in one
 /// temporary directory, with `CI` set (never interactive) and a synthetic key.
 struct Isolated {
@@ -88,10 +92,8 @@ impl Isolated {
     }
 
     fn command(&self, endpoint: &str) -> Command {
-        let mut command = pangram();
-        command
-            .env("PANGRAM_API_KEY", SYNTHETIC_KEY)
-            .env("PANGRAM_DETECT_ENDPOINT", endpoint);
+        let mut command = test_driver();
+        command.env("PANGRAM_API_KEY", SYNTHETIC_KEY).arg(endpoint);
         for (key, value) in &self.env {
             command.env(key, value);
         }

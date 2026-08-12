@@ -8,7 +8,7 @@
 use std::io::{self, Write};
 use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crossterm::cursor;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
@@ -155,11 +155,14 @@ pub(crate) struct TerminalSession {
 impl TerminalSession {
     /// Enters raw mode and the alternate screen, then hides the cursor.
     pub(crate) fn enter() -> io::Result<Self> {
+        let restore_state = Arc::new(RestoreState::new());
+        let mut panic_hook = PanicHookGuard::install(Arc::clone(&restore_state))?;
+
+        // Claim process-global terminal ownership before consuming a pending
+        // signal. A rejected concurrent entry must not alter the active
+        // session's signal state.
         let signals = process_signal_state()?;
         signals.clear();
-
-        let restore_state = Arc::new(RestoreState::new());
-        let mut panic_hook = PanicHookGuard::install(Arc::clone(&restore_state));
 
         // Arm before the first terminal mutation. Cleanup commands are safe on
         // a partially entered terminal, so a panic or error between writes can
@@ -233,11 +236,12 @@ impl TerminalSession {
         };
         let terminal_result =
             restore_terminal(&self.restore_state, &mut *self.terminal.backend_mut());
-        self.panic_hook.restore();
-        match cursor_result {
-            Err(error) => Err(error),
-            Ok(()) => terminal_result,
+        let restore_result =
+            finish_restore_attempt(&self.restore_state, cursor_result, terminal_result);
+        if restore_result.is_ok() {
+            self.panic_hook.restore();
         }
+        restore_result
     }
 }
 
@@ -299,6 +303,30 @@ fn record_first_error(first_error: &mut Option<io::Error>, result: io::Result<()
     }
 }
 
+fn finish_restore_attempt(
+    state: &RestoreState,
+    cursor_result: io::Result<()>,
+    terminal_result: io::Result<()>,
+) -> io::Result<()> {
+    let result = match (cursor_result, terminal_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(cursor_error), Ok(())) => Err(cursor_error),
+        (Ok(()), Err(terminal_error)) => Err(terminal_error),
+        (Err(cursor_error), Err(terminal_error)) => Err(io::Error::new(
+            cursor_error.kind(),
+            format!("{cursor_error}; terminal restoration also failed: {terminal_error}"),
+        )),
+    };
+
+    if result.is_err() {
+        // A successful low-level terminal sequence can otherwise disarm the
+        // state after ratatui's cursor restoration failed. Keep the full
+        // inverse sequence available to Drop and the installed panic hook.
+        state.arm();
+    }
+    result
+}
+
 static PANIC_HOOK_SESSION: Mutex<()> = Mutex::new(());
 
 struct PanicHookGuard {
@@ -311,10 +339,17 @@ struct PanicHookGuard {
 }
 
 impl PanicHookGuard {
-    fn install(restore_state: Arc<RestoreState>) -> Self {
-        let session_lock = PANIC_HOOK_SESSION
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fn install(restore_state: Arc<RestoreState>) -> io::Result<Self> {
+        let session_lock = match PANIC_HOOK_SESSION.try_lock() {
+            Ok(session_lock) => session_lock,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "another terminal session is active",
+                ));
+            }
+        };
         let prior = Arc::new(Mutex::new(Some(panic::take_hook())));
         let prior_for_hook = Arc::clone(&prior);
         let terminal_owner = std::thread::current().id();
@@ -336,11 +371,11 @@ impl PanicHookGuard {
             }
         }));
 
-        Self {
+        Ok(Self {
             prior,
             installed: true,
             _session_lock: session_lock,
-        }
+        })
     }
 
     fn restore(&mut self) {
@@ -397,5 +432,59 @@ fn restore_previous_panic_hook(prior: &Arc<Mutex<Option<PanicHook>>>) -> bool {
             panic::set_hook(installed_hook);
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_attempt_reports_both_failures_and_remains_armed() {
+        let state = RestoreState::new();
+        let error = finish_restore_attempt(
+            &state,
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "cursor restoration failed",
+            )),
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "terminal restoration failed",
+            )),
+        )
+        .expect_err("both restoration failures must be reported");
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(
+            error.to_string(),
+            "cursor restoration failed; terminal restoration also failed: terminal restoration failed"
+        );
+        assert!(state.is_armed(), "Drop must be able to retry cleanup");
+    }
+
+    #[test]
+    fn enter_fails_fast_without_consuming_signal_when_panic_hook_is_owned() {
+        let signals = process_signal_state().expect("process signals register");
+        signals.clear();
+        signals.interrupt.store(true, Ordering::SeqCst);
+        let session_lock = PANIC_HOOK_SESSION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let error = match TerminalSession::enter() {
+            Ok(_) => panic!("a concurrent terminal session must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.to_string(), "another terminal session is active");
+        assert!(
+            signals.is_requested(),
+            "rejected entry must not consume the active session's signal"
+        );
+
+        signals.clear();
+        drop(session_lock);
     }
 }

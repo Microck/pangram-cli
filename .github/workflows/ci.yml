@@ -140,11 +140,14 @@ jobs:
       - name: Audit TUI acceptance dependencies
         if: runner.os == 'Linux'
         run: npm audit --audit-level=critical
-      - name: Build all-features pangram binary
-        run: cargo build --locked --all-features --bin pangram
+      - name: Build product and loopback acceptance binaries
+        run: >-
+          cargo build --locked --all-features
+          --bin pangram --bin pangram-test-driver
       - name: Run TUI acceptance tests
         env:
           PANGRAM_BIN: ${{ github.workspace }}/target/debug/pangram
+          PANGRAM_TEST_DRIVER_BIN: ${{ github.workspace }}/target/debug/pangram-test-driver
         run: npm run test:tui
       - name: Upload sanitized TUI failure artifacts
         if: failure()

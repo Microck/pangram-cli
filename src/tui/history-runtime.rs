@@ -22,25 +22,38 @@ use crate::output::{CanonicalError, ErrorCode, ExitCode};
 use super::history::{ExportRequest, HistoryLoadRequest, RedactedAnalysis};
 use super::model::{AnalysisFailure, AppEvent};
 
+pub(super) struct FreshAnalysisOptions {
+    pub(super) text: String,
+    pub(super) public_link: bool,
+    pub(super) manual_save: bool,
+    pub(super) automatic_save: bool,
+}
+
 /// Starts one fresh text analysis without making the terminal loop async.
 pub(super) fn spawn_fresh_analysis(
     service: ConfigService,
-    text: String,
-    public_link: bool,
-    manual_save: bool,
-    automatic_save: bool,
+    options: FreshAnalysisOptions,
     stop: StopObserving,
     events: Sender<AppEvent>,
+    analyzer_source: crate::analysis::AnalyzerSource,
 ) -> AnalysisId {
-    let save_state = requested_save_state(manual_save, automatic_save);
-    let retained_text = save_state.map(|_| text.clone());
-    let request = fresh_request(text, public_link);
+    let save_state = requested_save_state(options.manual_save, options.automatic_save);
+    let retained_text = save_state.map(|_| options.text.clone());
+    let request = fresh_request(options.text, options.public_link);
     let analysis_id = request.id();
     let fallback_events = events.clone();
     if let Err(error) = std::thread::Builder::new()
         .name("pangram-tui-analysis".to_owned())
         .spawn(move || {
-            run_analysis_worker(service, retained_text, request, save_state, stop, events);
+            run_analysis_worker(
+                service,
+                retained_text,
+                request,
+                save_state,
+                stop,
+                events,
+                analyzer_source,
+            );
         })
     {
         send_failure(&fallback_events, analysis_id, analysis_runtime_error(error));
@@ -141,6 +154,7 @@ pub(super) fn spawn_history_rerun(
     automatic_save: bool,
     stop: StopObserving,
     events: Sender<AppEvent>,
+    analyzer_source: crate::analysis::AnalyzerSource,
 ) {
     let fallback_events = events.clone();
     if let Err(error) = std::thread::Builder::new()
@@ -172,7 +186,15 @@ pub(super) fn spawn_history_rerun(
             // bytes after Analyzer consumes the private request.
             let save_state = automatic_save.then_some(SaveState::SavedHistory);
             let retained_text = save_state.map(|_| request.text().to_owned());
-            run_analysis_worker(service, retained_text, request, save_state, stop, events);
+            run_analysis_worker(
+                service,
+                retained_text,
+                request,
+                save_state,
+                stop,
+                events,
+                analyzer_source,
+            );
         })
     {
         let _ = fallback_events.send(AppEvent::HistoryRerunPrepared {
@@ -214,6 +236,7 @@ fn run_analysis_worker(
     save_state: Option<SaveState>,
     stop: StopObserving,
     events: Sender<AppEvent>,
+    analyzer_source: crate::analysis::AnalyzerSource,
 ) {
     let analysis_id = request.id();
     let panic_events = events.clone();
@@ -235,6 +258,7 @@ fn run_analysis_worker(
             save_state,
             stop,
             events,
+            analyzer_source,
         ));
     }));
     if outcome.is_err() {
@@ -249,20 +273,10 @@ async fn run_analysis(
     save_state: Option<SaveState>,
     stop: StopObserving,
     events: Sender<AppEvent>,
+    analyzer_source: crate::analysis::AnalyzerSource,
 ) {
     let analysis_id = request.id();
-    let resolution = match service.credentials().resolve(service.overrides()) {
-        Ok(resolution) => resolution,
-        Err(error) => {
-            send_failure(&events, analysis_id, crate::analysis::config_error(error));
-            return;
-        }
-    };
-    let Some(api_key) = resolution.key_for_client() else {
-        send_failure(&events, analysis_id, crate::output::missing_api_key_error());
-        return;
-    };
-    let analyzer = match crate::analysis::build_analyzer(&service, api_key) {
+    let analyzer = match analyzer_source.resolve(&service) {
         Ok(analyzer) => analyzer,
         Err(error) => {
             send_failure(&events, analysis_id, error);

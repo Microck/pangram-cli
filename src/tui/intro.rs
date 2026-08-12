@@ -17,9 +17,12 @@ use serde::Deserialize;
 use super::model::{IntroFrequency, MIN_HEIGHT, MIN_WIDTH, MotionLevel, TerminalSize};
 
 pub(crate) const STATE_FILE_NAME: &str = "tui-state.json";
-pub(crate) const FRAME_COUNT: usize = 56;
-pub(crate) const FRAME_DURATION: Duration = Duration::from_millis(50);
-pub(crate) const INTRO_DURATION: Duration = Duration::from_millis(2_800);
+const FRAME_DURATION_MILLIS: u64 = 50;
+const INTRO_DURATION_MILLIS: u64 = 2_800;
+const _: () = assert!(INTRO_DURATION_MILLIS.is_multiple_of(FRAME_DURATION_MILLIS));
+pub(crate) const FRAME_DURATION: Duration = Duration::from_millis(FRAME_DURATION_MILLIS);
+pub(crate) const INTRO_DURATION: Duration = Duration::from_millis(INTRO_DURATION_MILLIS);
+pub(crate) const FRAME_COUNT: usize = (INTRO_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
 
 const STATE_SCHEMA_VERSION: &str = "1";
 const SEEN_STATE_BYTES: &[u8] = b"{\n  \"schema_version\": \"1\",\n  \"intro_seen\": true\n}\n";
@@ -551,6 +554,11 @@ mod tests {
 
     #[test]
     fn elapsed_time_selects_boundaries_and_skips_stale_frames() {
+        assert_eq!(
+            INTRO_DURATION,
+            FRAME_DURATION * u32::try_from(FRAME_COUNT).expect("frame count fits u32"),
+            "the frame count must stay derived from the sequence timing"
+        );
         assert_eq!(select_frame(Duration::ZERO), FrameSelection::Frame(0));
         assert_eq!(
             select_frame(Duration::from_millis(49)),
@@ -565,13 +573,10 @@ mod tests {
             FrameSelection::Frame(3)
         );
         assert_eq!(
-            select_frame(Duration::from_millis(2_799)),
-            FrameSelection::Frame(55)
+            select_frame(INTRO_DURATION - Duration::from_millis(1)),
+            FrameSelection::Frame(FRAME_COUNT - 1)
         );
-        assert_eq!(
-            select_frame(Duration::from_millis(2_800)),
-            FrameSelection::Complete
-        );
+        assert_eq!(select_frame(INTRO_DURATION), FrameSelection::Complete);
         assert_eq!(
             select_frame(Duration::from_secs(60)),
             FrameSelection::Complete

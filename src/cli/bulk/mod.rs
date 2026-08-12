@@ -46,25 +46,28 @@ pub(crate) fn execute(
     root_matches: &ArgMatches,
     global: GlobalFlags,
     streams: &dyn StreamTty,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let started = UtcTimestamp::now();
     match resolved {
         ResolvedCommand::BulkSubmit => {
-            submit::bulk_submit(sub, root_matches, global, streams, started)
+            submit::bulk_submit(sub, root_matches, global, streams, started, analyzer_source)
         }
         ResolvedCommand::BulkStatus => {
-            status_wait::bulk_status(sub, root_matches, global, streams, started)
+            status_wait::bulk_status(sub, root_matches, global, streams, started, analyzer_source)
         }
         ResolvedCommand::BulkWait => {
-            status_wait::bulk_wait(sub, root_matches, global, streams, started)
+            status_wait::bulk_wait(sub, root_matches, global, streams, started, analyzer_source)
         }
         ResolvedCommand::BulkResults => {
-            results::bulk_results(sub, root_matches, global, streams, started)
+            results::bulk_results(sub, root_matches, global, streams, started, analyzer_source)
         }
         ResolvedCommand::TaskStatus => {
-            task::task_status(sub, root_matches, global, streams, started)
+            task::task_status(sub, root_matches, global, streams, started, analyzer_source)
         }
-        ResolvedCommand::TaskWait => task::task_wait(sub, root_matches, global, streams, started),
+        ResolvedCommand::TaskWait => {
+            task::task_wait(sub, root_matches, global, streams, started, analyzer_source)
+        }
         _ => unreachable!("dispatch only routes bulk and task commands here"),
     }
 }
@@ -78,8 +81,9 @@ pub(super) fn prepare(
     root_matches: &ArgMatches,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> Result<(Analyzer, crate::config::ConfigService), DetectOutcome> {
-    super::prepare_detection(resolved, root_matches, output, started)
+    super::prepare_detection(resolved, root_matches, output, started, analyzer_source)
         .map(|prepared| (prepared.analyzer, prepared.service))
 }
 
@@ -103,7 +107,7 @@ pub(super) fn prepare_service(
         crate::config::ConfigOverrides::from_environment(),
     );
     crate::config::ConfigService::new(&overrides).map_err(|error| {
-        detect::failure_outcome(resolved, output, started, detect::credential_error(error))
+        detect::failure_outcome(resolved, output, started, detect::config_error(error))
     })
 }
 
@@ -113,10 +117,10 @@ pub(super) fn prepare_from_service(
     service: crate::config::ConfigService,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> Result<(Analyzer, crate::config::ConfigService), DetectOutcome> {
-    let api_key = detect::resolve_api_key(&service)
-        .map_err(|error| detect::failure_outcome(resolved, output, started, error))?;
-    let analyzer = detect::build_analyzer(&service, api_key)
+    let analyzer = analyzer_source
+        .resolve(&service)
         .map_err(|error| detect::failure_outcome(resolved, output, started, error))?;
     Ok((analyzer, service))
 }

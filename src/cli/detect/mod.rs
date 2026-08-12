@@ -26,8 +26,8 @@ pub(crate) mod inputs;
 mod render;
 pub(crate) mod save;
 
-pub(crate) use crate::analysis::{build_analyzer, config_error as credential_error};
-pub(crate) use client::{bridge_sigint, install_sigint_driver, reset_sigint_flag, resolve_api_key};
+pub(crate) use crate::analysis::config_error;
+pub(crate) use client::{bridge_sigint, install_sigint_driver, reset_sigint_flag};
 pub(crate) use render::{
     DetectOutcome, analysis_command_outcome, analysis_exit_code, early_failure, elapsed_ms,
     failure_outcome, identity_note, internal_error, interrupted_outcome, note_stderr,
@@ -48,7 +48,7 @@ use render::{DETACH_NOTE, success_outcome};
 // The submodules hold the cohesive halves of the adapter:
 // - `inputs`: source resolution, word counting, and billing preflight
 // - `render`: envelope assembly, exit mapping, and projection handoff
-// - `client`: credential resolution, the endpoint-bearing client, SIGINT
+// - `client`: credential resolution and SIGINT bridging
 //
 // This file keeps the argument-and-flow core: flag parsing, plan/execute,
 // and per-observation progress emission.

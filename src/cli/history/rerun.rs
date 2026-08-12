@@ -21,6 +21,7 @@ pub(super) fn execute(
     output: ResolvedOutput,
     started: crate::domain::UtcTimestamp,
     streams: &dyn StreamTty,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let original_id = request.id.expect("rerun requires ID");
     let original = match store {
@@ -43,11 +44,7 @@ pub(super) fn execute(
     };
     let text = analysis_request.text().to_owned();
 
-    let api_key = match detect::resolve_api_key(service) {
-        Ok(key) => key,
-        Err(error) => return failed(output, started, error),
-    };
-    let analyzer = match detect::build_analyzer(service, api_key) {
+    let analyzer = match analyzer_source.resolve(service) {
         Ok(analyzer) => analyzer,
         Err(error) => return failed(output, started, error),
     };

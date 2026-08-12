@@ -200,8 +200,7 @@ async fn missing_and_absent_local_ids_fail_before_auth_or_network() {
 
     let missing = Isolated::new();
     let output = missing
-        .command(fixture.base_url())
-        .env_remove("PANGRAM_API_KEY")
+        .command_without_key()
         .args(["task", "status", "anl_01983c20-0180-7a80-a001-000000000099"])
         .output()
         .expect("missing database");
@@ -211,8 +210,7 @@ async fn missing_and_absent_local_ids_fail_before_auth_or_network() {
     let absent = Isolated::new();
     drop(HistoryStore::open(&absent.data).expect("create empty real history"));
     let output = absent
-        .command(fixture.base_url())
-        .env_remove("PANGRAM_API_KEY")
+        .command_without_key()
         .args(["task", "status", "anl_01983c20-0180-7a80-a001-000000000098"])
         .output()
         .expect("absent local row");
@@ -276,8 +274,7 @@ async fn corrupt_evidence_fails_while_combined_evidence_resolves_the_ai_task() {
         drop(connection);
 
         let output = isolated
-            .command(fixture.base_url())
-            .env_remove("PANGRAM_API_KEY")
+            .command_without_key()
             .args(["task", "status", &original])
             .output()
             .expect("resolve invalid task evidence");
@@ -310,8 +307,7 @@ async fn local_record_without_task_evidence_is_unresolvable_without_a_request() 
     drop(connection);
 
     let output = isolated
-        .command(fixture.base_url())
-        .env_remove("PANGRAM_API_KEY")
+        .command_without_key()
         .args(["task", "wait", &original])
         .output()
         .expect("resolve missing task evidence");

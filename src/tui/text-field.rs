@@ -67,7 +67,9 @@ pub(super) fn edit_value(value: &mut String, cursor: &mut usize, key: KeyInput) 
         | KeyInput::Tab
         | KeyInput::BackTab
         | KeyInput::Up
-        | KeyInput::Down => {
+        | KeyInput::Down
+        | KeyInput::PageUp
+        | KeyInput::PageDown => {
             return false;
         }
         _ => return true,
@@ -117,6 +119,8 @@ mod tests {
             KeyInput::BackTab,
             KeyInput::Up,
             KeyInput::Down,
+            KeyInput::PageUp,
+            KeyInput::PageDown,
         ] {
             assert!(!field.edit(key));
         }

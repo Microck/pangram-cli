@@ -19,9 +19,7 @@ use clap::ArgMatches;
 use secrecy::ExposeSecret as _;
 use zeroize::Zeroizing;
 
-use crate::config::{
-    ConfigError, ConfigOverrides, ConfigService, CredentialService, CredentialSource,
-};
+use crate::config::{ConfigOverrides, ConfigService, CredentialService, CredentialSource};
 use crate::diagnostics::{self, DiagnosticsContext, DiagnosticsError};
 use crate::output::{
     AuthSource, AuthStatus, CanonicalError, CommandData, CommandEnvelope, ConfigGetStatus,
@@ -104,8 +102,12 @@ fn service(
         flags = flags.with_data_dir(data_dir);
     }
     let overrides = ConfigOverrides::merge(flags, ConfigOverrides::from_environment());
-    ConfigService::new(&overrides)
-        .map_err(|error| Box::new(PhaseOneOutcome::failure(command, config_error(error))))
+    ConfigService::new(&overrides).map_err(|error| {
+        Box::new(PhaseOneOutcome::failure(
+            command,
+            crate::analysis::config_error(error),
+        ))
+    })
 }
 
 fn auth(
@@ -145,12 +147,18 @@ fn auth_guided(config_flag: Option<&str>, data_dir_flag: Option<&str>) -> PhaseO
     let key = match CredentialService::prompt_masked("Pangram API key: ") {
         Ok(key) => key,
         Err(error) => {
-            return PhaseOneOutcome::failure(ResolvedCommand::AuthSet, config_error(error));
+            return PhaseOneOutcome::failure(
+                ResolvedCommand::AuthSet,
+                crate::analysis::credential_error(error),
+            );
         }
     };
     match service.credentials().store(key.expose_secret()) {
         Ok(()) => PhaseOneOutcome::success(CommandData::AuthSet(MutationAcknowledgement::new())),
-        Err(error) => PhaseOneOutcome::failure(ResolvedCommand::AuthSet, config_error(error)),
+        Err(error) => PhaseOneOutcome::failure(
+            ResolvedCommand::AuthSet,
+            crate::analysis::credential_error(error),
+        ),
     }
 }
 
@@ -191,7 +199,10 @@ fn auth_set(
 
     match service.credentials().store(&key) {
         Ok(()) => PhaseOneOutcome::success(CommandData::AuthSet(MutationAcknowledgement::new())),
-        Err(error) => PhaseOneOutcome::failure(ResolvedCommand::AuthSet, config_error(error)),
+        Err(error) => PhaseOneOutcome::failure(
+            ResolvedCommand::AuthSet,
+            crate::analysis::credential_error(error),
+        ),
     }
 }
 
@@ -239,7 +250,10 @@ fn auth_status(config_flag: Option<&str>, data_dir_flag: Option<&str>) -> PhaseO
                 Err(_) => PhaseOneOutcome::internal(),
             }
         }
-        Err(error) => PhaseOneOutcome::failure(ResolvedCommand::AuthStatus, config_error(error)),
+        Err(error) => PhaseOneOutcome::failure(
+            ResolvedCommand::AuthStatus,
+            crate::analysis::credential_error(error),
+        ),
     }
 }
 
@@ -267,9 +281,10 @@ fn auth_logout(
             Ok(()) => {
                 PhaseOneOutcome::success(CommandData::AuthLogout(MutationAcknowledgement::new()))
             }
-            Err(error) => {
-                PhaseOneOutcome::failure(ResolvedCommand::AuthLogout, config_error(error))
-            }
+            Err(error) => PhaseOneOutcome::failure(
+                ResolvedCommand::AuthLogout,
+                crate::analysis::credential_error(error),
+            ),
         };
     }
 
@@ -334,7 +349,7 @@ fn config(
                     nested.into_iter().collect();
                 PhaseOneOutcome::success(CommandData::ConfigList(ConfigListStatus::new(config)))
             }
-            Err(error) => PhaseOneOutcome::failure(command, config_error(error)),
+            Err(error) => PhaseOneOutcome::failure(command, crate::analysis::config_error(error)),
         },
         ResolvedCommand::ConfigGet => {
             // Clap required-ness makes the value present; only non-UTF-8 argv
@@ -350,7 +365,9 @@ fn config(
                     Ok(value) => PhaseOneOutcome::success(CommandData::ConfigGet(value)),
                     Err(_) => PhaseOneOutcome::internal(),
                 },
-                Err(error) => PhaseOneOutcome::failure(command, config_error(error)),
+                Err(error) => {
+                    PhaseOneOutcome::failure(command, crate::analysis::config_error(error))
+                }
             }
         }
         ResolvedCommand::ConfigSet => {
@@ -384,7 +401,9 @@ fn config(
                     }
                     PhaseOneOutcome::success(CommandData::ConfigSet(MutationAcknowledgement::new()))
                 }
-                Err(error) => PhaseOneOutcome::failure(command, config_error(error)),
+                Err(error) => {
+                    PhaseOneOutcome::failure(command, crate::analysis::config_error(error))
+                }
             }
         }
         ResolvedCommand::ConfigPath => {
@@ -485,25 +504,6 @@ fn auth_source(source: CredentialSource) -> AuthSource {
         CredentialSource::Environment => AuthSource::Environment,
         CredentialSource::Stored => AuthSource::Stored,
     }
-}
-
-/// Maps a sanitized configuration or credential error to its stable code.
-/// Messages are already safe by construction of `ConfigError`; the adapter
-/// never adds argv or key material of its own.
-fn config_error(error: ConfigError) -> CanonicalError {
-    let code = match &error {
-        ConfigError::InsecurePermissions | ConfigError::RestrictionFailed => {
-            ErrorCode::InsecureConfigPermissions
-        }
-        _ => ErrorCode::InvalidConfig,
-    };
-    CanonicalError::new(code, error.to_string())
-        // The only invalidated message path is an empty string, which
-        // ConfigError never produces; the fallback message stays fixed.
-        .unwrap_or_else(|_| {
-            CanonicalError::new(code, "local configuration is invalid")
-                .expect("the fixed fallback message is non-empty")
-        })
 }
 
 fn usage_error(code: ErrorCode, message: &str) -> CanonicalError {

@@ -65,9 +65,60 @@ use secrecy::SecretString;
 use crate::config::{ConfigError, ConfigService};
 use crate::output::{CanonicalError, ErrorCode};
 
+/// Selects the immutable analysis dependency used by one adapter execution.
+/// Production resolves configuration and credentials at the point of use;
+/// the development driver supplies a loopback-validated analyzer directly.
+#[derive(Clone, Default)]
+pub(crate) enum AnalyzerSource {
+    #[default]
+    Production,
+    #[cfg(feature = "dev-tools")]
+    Injected(Box<Analyzer>),
+}
+
+impl AnalyzerSource {
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn resolve(&self, service: &ConfigService) -> Result<Analyzer, CanonicalError> {
+        match self {
+            Self::Production => {
+                let resolution = service
+                    .credentials()
+                    .resolve(service.overrides())
+                    .map_err(credential_error)?;
+                let Some(api_key) = resolution.key_for_client() else {
+                    return Err(crate::output::missing_api_key_error());
+                };
+                build_analyzer(service, api_key)
+            }
+            #[cfg(feature = "dev-tools")]
+            Self::Injected(analyzer) => Ok(analyzer.as_ref().clone()),
+        }
+    }
+
+    #[cfg(feature = "dev-tools")]
+    pub(crate) fn injected(analyzer: Analyzer) -> Self {
+        Self::Injected(Box::new(analyzer))
+    }
+}
+
 /// Maps configuration failures into the canonical categories shared by every
 /// adapter that constructs an analyzer or resolves credentials.
 pub(crate) fn config_error(error: ConfigError) -> CanonicalError {
+    let code = match &error {
+        ConfigError::InsecurePermissions | ConfigError::RestrictionFailed => {
+            ErrorCode::InsecureConfigPermissions
+        }
+        _ => ErrorCode::InvalidConfig,
+    };
+    CanonicalError::new(code, error.to_string()).unwrap_or_else(|_| {
+        CanonicalError::new(code, "local configuration is invalid").expect("fixed message")
+    })
+}
+
+/// Maps failures from the credential store or effective-key resolution.
+/// Only this credential-owned boundary may classify an invalid value as an
+/// invalid API key; general configuration values remain `invalid_config`.
+pub(crate) fn credential_error(error: ConfigError) -> CanonicalError {
     let code = match &error {
         ConfigError::InsecurePermissions | ConfigError::RestrictionFailed => {
             ErrorCode::InsecureConfigPermissions
@@ -81,8 +132,9 @@ pub(crate) fn config_error(error: ConfigError) -> CanonicalError {
 }
 
 /// Builds the one adapter-facing analyzer from effective configuration.
-/// Production endpoints stay fixed inside `UpstreamClient`; the environment
-/// override exists only in test/dev-tools builds and accepts loopback hosts.
+/// Production endpoints stay fixed inside `UpstreamClient`. Loopback fixtures
+/// construct a client through the typed test-only seam instead of changing
+/// endpoint selection in the product binary.
 #[allow(clippy::result_large_err)]
 pub(crate) fn build_analyzer(
     service: &ConfigService,
@@ -93,43 +145,11 @@ pub(crate) fn build_analyzer(
         .network
         .as_ref()
         .and_then(|network| network.max_requests_per_second);
-    let client = configured_client(api_key, AnalysisConfig::production(rate))?;
+    let client = map_client(UpstreamClient::production(
+        api_key,
+        AnalysisConfig::production(rate),
+    ))?;
     Ok(Analyzer::from_client(client))
-}
-
-#[cfg(any(test, feature = "dev-tools", doctest))]
-#[allow(clippy::result_large_err)]
-fn configured_client(
-    api_key: SecretString,
-    config: AnalysisConfig,
-) -> Result<UpstreamClient, CanonicalError> {
-    let base = std::env::var("PANGRAM_DETECT_ENDPOINT").ok();
-    let endpoints = base
-        .as_deref()
-        .map(str::trim)
-        .filter(|base| !base.is_empty())
-        .map(UpstreamEndpoints::loopback);
-    let client = match endpoints {
-        Some(Ok(endpoints)) => UpstreamClient::for_loopback(api_key, config, endpoints),
-        Some(Err(error)) => {
-            return Err(CanonicalError::new(
-                ErrorCode::InvalidConfig,
-                format!("PANGRAM_DETECT_ENDPOINT is not a loopback fixture address: {error}"),
-            )
-            .expect("static template"));
-        }
-        None => UpstreamClient::production(api_key, config),
-    };
-    map_client(client)
-}
-
-#[cfg(not(any(test, feature = "dev-tools", doctest)))]
-#[allow(clippy::result_large_err)]
-fn configured_client(
-    api_key: SecretString,
-    config: AnalysisConfig,
-) -> Result<UpstreamClient, CanonicalError> {
-    map_client(UpstreamClient::production(api_key, config))
 }
 
 #[allow(clippy::result_large_err)]
@@ -144,4 +164,55 @@ fn map_client(
         .and_then(|error| error.with_contextual_retryability(false))
         .expect("static template")
     })
+}
+
+/// Builds the development driver's loopback-only analyzer. URL validation
+/// remains inside the analysis module, and its production request policy is
+/// identical to the shipped client apart from the endpoint set.
+#[cfg(feature = "dev-tools")]
+#[allow(clippy::result_large_err)]
+pub(crate) fn build_loopback_analyzer(
+    base_url: &str,
+    api_key: SecretString,
+) -> Result<Analyzer, CanonicalError> {
+    let endpoints = UpstreamEndpoints::loopback(base_url).map_err(|_| {
+        CanonicalError::new(
+            ErrorCode::InvalidConfig,
+            "the fixture endpoint must be an HTTP loopback base URL",
+        )
+        .expect("fixed URL validation error")
+    })?;
+    let client = map_client(UpstreamClient::for_loopback(
+        api_key,
+        AnalysisConfig::production(None),
+        endpoints,
+    ))?;
+    Ok(Analyzer::from_client(client))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{config_error, credential_error};
+    use crate::config::ConfigError;
+    use crate::output::ErrorCode;
+
+    #[test]
+    fn general_invalid_values_are_configuration_errors() {
+        let error = config_error(ConfigError::InvalidValue {
+            key: "tui.keymap".into(),
+            reason: "must be regular or vim".into(),
+        });
+
+        assert_eq!(error.code(), ErrorCode::InvalidConfig);
+    }
+
+    #[test]
+    fn credential_invalid_values_are_api_key_errors() {
+        let error = credential_error(ConfigError::InvalidValue {
+            key: "PANGRAM_API_KEY".into(),
+            reason: "must be valid UTF-8 when set".into(),
+        });
+
+        assert_eq!(error.code(), ErrorCode::InvalidApiKey);
+    }
 }

@@ -1,40 +1,7 @@
-//! Credential and endpoint plumbing for detection: effective-key resolution,
-//! the fixed-production or (dev-tools-only) loopback client, and the process
-//! SIGINT cancellation slot. Secret material lives only inside the
-//! endpoint-bearing client; this module never logs or renders it. The
-//! loopback override is compiled out of every production build.
+//! SIGINT plumbing for detection. Credential resolution and analyzer
+//! construction stay in the shared analysis execution context.
 
-use secrecy::SecretString;
 use tokio_util::sync::CancellationToken;
-
-use crate::config::CredentialSource;
-use crate::output::CanonicalError;
-
-/// Resolves the effective API key (`PANGRAM_API_KEY` over stored) into
-/// secret material for client construction. Returns `MissingApiKey` when no
-/// credential is configured.
-pub(crate) fn resolve_api_key(
-    service: &crate::config::ConfigService,
-) -> Result<SecretString, CanonicalError> {
-    let resolution = service
-        .credentials()
-        .resolve(service.overrides())
-        .map_err(crate::analysis::config_error)?;
-    match resolution.source() {
-        CredentialSource::None => Err(crate::output::missing_api_key_error()),
-        CredentialSource::Environment | CredentialSource::Stored => {
-            // The resolution owns the SecretString; cloning shares the secrecy
-            // wrapper without exposing the value.
-            Ok(resolution_key(&resolution))
-        }
-    }
-}
-
-fn resolution_key(resolution: &crate::config::CredentialResolution) -> SecretString {
-    resolution
-        .key_for_client()
-        .expect("a configured resolution always carries its key")
-}
 
 /// The CTRL+C/SIGINT request flag. The low-level signal handler only ever
 /// stores this atomic (an async-signal-safe operation), so the handler can

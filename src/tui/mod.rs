@@ -19,6 +19,8 @@ mod render;
 mod result_lines;
 #[path = "result-viewport.rs"]
 mod result_viewport;
+#[path = "settings-runtime.rs"]
+mod settings_runtime;
 mod terminal;
 #[path = "text-field.rs"]
 mod text_field;
@@ -32,12 +34,13 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::analysis::StopObserving;
-use crate::config::{ConfigError, ConfigKey, ConfigOverrides, ConfigService, OnboardingState};
+use crate::config::{ConfigError, ConfigOverrides, ConfigService, OnboardingState};
 
 use model::{
     AppEvent, AppState, Effect, IntroFrequency, KeyInput, MotionLevel, SettingsDraft, StartupState,
-    StoredSetting, TerminalSize,
+    TerminalSize,
 };
+use settings_runtime::{SettingWrite, SettingsWorker};
 use terminal::{ProcessSignal, TerminalSession};
 
 const EVENT_POLL: Duration = Duration::from_millis(25);
@@ -51,6 +54,14 @@ enum ActiveAnalysisIdentity {
 struct ActiveAnalysis {
     stop: StopObserving,
     identity: ActiveAnalysisIdentity,
+}
+
+struct EffectExecutor<'a> {
+    service: &'a ConfigService,
+    worker_tx: &'a Sender<AppEvent>,
+    settings_worker: &'a SettingsWorker,
+    analyzer_source: &'a crate::analysis::AnalyzerSource,
+    active_analysis: Option<ActiveAnalysis>,
 }
 
 enum LoopExit {
@@ -84,9 +95,114 @@ impl Drop for ActiveAnalysis {
     }
 }
 
+impl<'a> EffectExecutor<'a> {
+    fn new(
+        service: &'a ConfigService,
+        worker_tx: &'a Sender<AppEvent>,
+        settings_worker: &'a SettingsWorker,
+        analyzer_source: &'a crate::analysis::AnalyzerSource,
+    ) -> Self {
+        Self {
+            service,
+            worker_tx,
+            settings_worker,
+            analyzer_source,
+            active_analysis: None,
+        }
+    }
+
+    fn apply_event(&mut self, state: &mut AppState, event: AppEvent) -> Option<LoopExit> {
+        update_active_analysis(&event, &mut self.active_analysis);
+        for effect in model::reduce_in_place(state, event) {
+            match effect {
+                Effect::SubmitText {
+                    text,
+                    public_link,
+                    save,
+                    automatic_save,
+                } => {
+                    let stop = StopObserving::new();
+                    let analysis_id = history_runtime::spawn_fresh_analysis(
+                        self.service.clone(),
+                        history_runtime::FreshAnalysisOptions {
+                            text,
+                            public_link,
+                            manual_save: save,
+                            automatic_save,
+                        },
+                        stop.clone(),
+                        self.worker_tx.clone(),
+                        self.analyzer_source.clone(),
+                    );
+                    self.active_analysis = Some(ActiveAnalysis::fresh(stop, analysis_id));
+                }
+                Effect::StoreCredential { credential } => {
+                    self.settings_worker
+                        .store(SettingWrite::Credential(credential));
+                }
+                Effect::StoreUpdatePreference(choice) => {
+                    self.settings_worker
+                        .store(SettingWrite::UpdatePreference(choice));
+                }
+                Effect::StoreHistory(enabled) => {
+                    self.settings_worker.store(SettingWrite::History(enabled));
+                }
+                Effect::StoreIntro(intro) => {
+                    self.settings_worker.store(SettingWrite::Intro(intro));
+                }
+                Effect::StoreKeymap(keymap) => {
+                    self.settings_worker.store(SettingWrite::Keymap(keymap));
+                }
+                Effect::StoreMotion(motion) => {
+                    self.settings_worker.store(SettingWrite::Motion(motion));
+                }
+                Effect::LoadHistory(request) => history_runtime::spawn_history_load(
+                    self.service.clone(),
+                    request,
+                    self.worker_tx.clone(),
+                ),
+                Effect::LoadHistoryDetail(analysis_id) => history_runtime::spawn_history_detail(
+                    self.service.clone(),
+                    analysis_id,
+                    self.worker_tx.clone(),
+                ),
+                Effect::DeleteHistory(analysis_id) => history_runtime::spawn_history_delete(
+                    self.service.clone(),
+                    analysis_id,
+                    self.worker_tx.clone(),
+                ),
+                Effect::PrepareHistoryRerun {
+                    analysis_id,
+                    automatic_save,
+                } => {
+                    let stop = StopObserving::new();
+                    history_runtime::spawn_history_rerun(
+                        self.service.clone(),
+                        analysis_id,
+                        automatic_save,
+                        stop.clone(),
+                        self.worker_tx.clone(),
+                        self.analyzer_source.clone(),
+                    );
+                    self.active_analysis = Some(ActiveAnalysis::preparing_rerun(stop, analysis_id));
+                }
+                Effect::ExportHistory(request) => return Some(LoopExit::Export(request)),
+                Effect::Exit(exit_code) => return Some(LoopExit::Process(exit_code)),
+            }
+        }
+        None
+    }
+
+    fn stop_active_analysis(&mut self) {
+        if let Some(active) = self.active_analysis.take() {
+            active.stop();
+        }
+    }
+}
+
 /// Runs the full-screen adapter and returns a process exit intent.
-pub(crate) fn run() -> u8 {
-    match run_inner() {
+pub(crate) fn run(analyzer_source: crate::analysis::AnalyzerSource) -> u8 {
+    match run_inner(analyzer_source) {
         Ok(exit_code) => exit_code,
         Err(error) => {
             eprintln!("pangram: terminal interface failed: {error}");
@@ -95,7 +211,7 @@ pub(crate) fn run() -> u8 {
     }
 }
 
-fn run_inner() -> Result<u8, TuiError> {
+fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, TuiError> {
     let overrides = ConfigOverrides::merge(
         ConfigOverrides::default(),
         ConfigOverrides::from_environment(),
@@ -125,11 +241,15 @@ fn run_inner() -> Result<u8, TuiError> {
     if let Some(diagnostic) = intro_state.diagnostic() {
         state.notice = Some(diagnostic.message().to_owned());
     }
+    let (worker_tx, worker_rx) = mpsc::channel();
+    let settings_worker = SettingsWorker::spawn(service.clone(), worker_tx.clone());
+    // Declare the terminal owner after the settings worker so Rust's reverse
+    // drop order restores the terminal before waiting on any queued durable
+    // write during an early-error return.
     let mut session = TerminalSession::enter()?;
     #[cfg(feature = "dev-tools")]
     inject_terminal_failure_for_test()?;
-    let (worker_tx, worker_rx) = mpsc::channel();
-    let mut active_stop = None;
+    let mut effects = EffectExecutor::new(&service, &worker_tx, &settings_worker, &analyzer_source);
 
     // The first useful frame is independent of disk-backed history. Loading
     // follows it so a large or contended database cannot delay TUI startup.
@@ -143,10 +263,7 @@ fn run_inner() -> Result<u8, TuiError> {
     let loop_exit = 'main: loop {
         let mut redraw = false;
         while let Ok(event) = worker_rx.try_recv() {
-            update_active_analysis(&event, &mut active_stop);
-            if let Some(loop_exit) =
-                apply_event(event, &mut state, &service, &worker_tx, &mut active_stop)
-            {
+            if let Some(loop_exit) = effects.apply_event(&mut state, event) {
                 break 'main loop_exit;
             }
             redraw = true;
@@ -164,9 +281,7 @@ fn run_inner() -> Result<u8, TuiError> {
         }
         if event::poll(EVENT_POLL)? {
             if let Some(event) = terminal_event(event::read()?) {
-                if let Some(loop_exit) =
-                    apply_event(event, &mut state, &service, &worker_tx, &mut active_stop)
-                {
+                if let Some(loop_exit) = effects.apply_event(&mut state, event) {
                     break loop_exit;
                 }
                 session.draw(|frame| render::render(frame, &state))?;
@@ -174,10 +289,10 @@ fn run_inner() -> Result<u8, TuiError> {
         }
     };
 
-    if let Some(active) = active_stop.take() {
-        active.stop();
-    }
+    effects.stop_active_analysis();
     session.restore()?;
+    drop(effects);
+    drop(settings_worker);
     // Raw export is a primary stdout surface. Drop the terminal owner before
     // the first export byte so neither its panic hook nor alternate-screen
     // backend remains active during streaming output.
@@ -345,167 +460,6 @@ fn key_input(key: KeyEvent) -> Option<KeyInput> {
         KeyCode::Delete => Some(KeyInput::Delete),
         _ => None,
     }
-}
-
-fn apply_event(
-    event: AppEvent,
-    state: &mut AppState,
-    service: &ConfigService,
-    worker_tx: &Sender<AppEvent>,
-    active_stop: &mut Option<ActiveAnalysis>,
-) -> Option<LoopExit> {
-    let transition = model::reduce(state.clone(), event);
-    *state = transition.state;
-    for effect in transition.effects {
-        match effect {
-            Effect::SubmitText {
-                text,
-                public_link,
-                save,
-                automatic_save,
-            } => {
-                let stop = StopObserving::new();
-                let analysis_id = history_runtime::spawn_fresh_analysis(
-                    service.clone(),
-                    text,
-                    public_link,
-                    save,
-                    automatic_save,
-                    stop.clone(),
-                    worker_tx.clone(),
-                );
-                *active_stop = Some(ActiveAnalysis::fresh(stop, analysis_id));
-            }
-            Effect::StoreCredential { credential } => {
-                let result = service
-                    .credentials()
-                    .store(credential.as_str())
-                    .map_err(crate::analysis::config_error);
-                let completion = AppEvent::SettingStored {
-                    setting: StoredSetting::Credential,
-                    result,
-                };
-                let completion = model::reduce(state.clone(), completion);
-                *state = completion.state;
-            }
-            Effect::StoreUpdatePreference(choice) => {
-                let result = service
-                    .set(
-                        ConfigKey::UpdatesCheckOnTuiStart.as_str(),
-                        if choice { "true" } else { "false" },
-                    )
-                    .map(|_| ())
-                    .map_err(crate::analysis::config_error);
-                let completion = AppEvent::SettingStored {
-                    setting: StoredSetting::UpdatePreference(choice),
-                    result,
-                };
-                let completion = model::reduce(state.clone(), completion);
-                *state = completion.state;
-            }
-            Effect::StoreHistory(enabled) => {
-                let result = service
-                    .set(
-                        ConfigKey::HistoryEnabled.as_str(),
-                        if enabled { "true" } else { "false" },
-                    )
-                    .map(|_| ())
-                    .map_err(crate::analysis::config_error);
-                let completion = AppEvent::SettingStored {
-                    setting: StoredSetting::History(enabled),
-                    result,
-                };
-                let completion = model::reduce(state.clone(), completion);
-                *state = completion.state;
-            }
-            Effect::StoreIntro(intro) => {
-                let result = service
-                    .set(
-                        ConfigKey::TuiIntro.as_str(),
-                        match intro {
-                            IntroFrequency::Once => "once",
-                            IntroFrequency::Always => "always",
-                            IntroFrequency::Off => "off",
-                        },
-                    )
-                    .map(|_| ())
-                    .map_err(crate::analysis::config_error);
-                let completion = AppEvent::SettingStored {
-                    setting: StoredSetting::Intro(intro),
-                    result,
-                };
-                let completion = model::reduce(state.clone(), completion);
-                *state = completion.state;
-            }
-            Effect::StoreKeymap(keymap) => {
-                let result = service
-                    .set(
-                        ConfigKey::TuiKeymap.as_str(),
-                        match keymap {
-                            model::Keymap::Regular => "regular",
-                            model::Keymap::Vim => "vim",
-                        },
-                    )
-                    .map(|_| ())
-                    .map_err(crate::analysis::config_error);
-                let completion = AppEvent::SettingStored {
-                    setting: StoredSetting::Keymap(keymap),
-                    result,
-                };
-                let completion = model::reduce(state.clone(), completion);
-                *state = completion.state;
-            }
-            Effect::StoreMotion(motion) => {
-                let result = service
-                    .set(
-                        ConfigKey::TuiMotion.as_str(),
-                        match motion {
-                            MotionLevel::Full => "full",
-                            MotionLevel::Reduced => "reduced",
-                            MotionLevel::Off => "off",
-                        },
-                    )
-                    .map(|_| ())
-                    .map_err(crate::analysis::config_error);
-                let completion = AppEvent::SettingStored {
-                    setting: StoredSetting::Motion(motion),
-                    result,
-                };
-                let completion = model::reduce(state.clone(), completion);
-                *state = completion.state;
-            }
-            Effect::LoadHistory(request) => {
-                history_runtime::spawn_history_load(service.clone(), request, worker_tx.clone())
-            }
-            Effect::LoadHistoryDetail(analysis_id) => history_runtime::spawn_history_detail(
-                service.clone(),
-                analysis_id,
-                worker_tx.clone(),
-            ),
-            Effect::DeleteHistory(analysis_id) => history_runtime::spawn_history_delete(
-                service.clone(),
-                analysis_id,
-                worker_tx.clone(),
-            ),
-            Effect::PrepareHistoryRerun {
-                analysis_id,
-                automatic_save,
-            } => {
-                let stop = StopObserving::new();
-                history_runtime::spawn_history_rerun(
-                    service.clone(),
-                    analysis_id,
-                    automatic_save,
-                    stop.clone(),
-                    worker_tx.clone(),
-                );
-                *active_stop = Some(ActiveAnalysis::preparing_rerun(stop, analysis_id));
-            }
-            Effect::ExportHistory(request) => return Some(LoopExit::Export(request)),
-            Effect::Exit(exit_code) => return Some(LoopExit::Process(exit_code)),
-        }
-    }
-    None
 }
 
 #[cfg(test)]

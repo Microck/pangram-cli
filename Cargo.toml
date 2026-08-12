@@ -134,6 +134,13 @@ name = "generate-contracts"
 path = "tools/generate-contracts.rs"
 required-features = ["dev-tools"]
 
+# Compiled protocol and TUI acceptance driver. Normal installs omit it because
+# its required feature is disabled; release automation builds only `pangram`.
+[[bin]]
+name = "pangram-test-driver"
+path = "tools/pangram-test-driver.rs"
+required-features = ["dev-tools"]
+
 # The Pangram protocol fixture reaches loopback-only client constructors and
 # does not ship in release artifacts.
 [[test]]

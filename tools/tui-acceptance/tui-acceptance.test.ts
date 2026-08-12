@@ -37,11 +37,13 @@ type IsolatedFixture = {
 
 type AcceptanceHarness = {
   pangramBinary: string
+  testDriverBinary: string
   terminal: TerminalControl
 }
 
 type ScenarioOptions = {
   environment?: Readonly<Record<string, string>>
+  loopbackBaseUrl?: string
   prepare?: (fixture: IsolatedFixture) => Promise<void>
 }
 
@@ -66,9 +68,18 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
     if (!configuredBinary) {
       throw new Error("PANGRAM_BIN must point to the compiled pangram binary")
     }
+    const configuredTestDriver = process.env.PANGRAM_TEST_DRIVER_BIN
+    if (!configuredTestDriver) {
+      throw new Error(
+        "PANGRAM_TEST_DRIVER_BIN must point to the compiled pangram-test-driver binary",
+      )
+    }
 
     harness = {
       pangramBinary: isAbsolute(configuredBinary) ? configuredBinary : resolve(configuredBinary),
+      testDriverBinary: isAbsolute(configuredTestDriver)
+        ? configuredTestDriver
+        : resolve(configuredTestDriver),
       terminal: await TerminalControl.make({
         artifacts: {
           directory: ARTIFACT_DIRECTORY,
@@ -540,8 +551,8 @@ async function runLoopbackAnalysis(
       {
         environment: {
           PANGRAM_API_KEY: SYNTHETIC_API_KEY,
-          PANGRAM_DETECT_ENDPOINT: loopback.baseUrl,
         },
+        loopbackBaseUrl: loopback.baseUrl,
       },
     )
     expectOneSubmission(loopback, text)
@@ -612,15 +623,19 @@ async function runIsolatedScenario(
   run: (session: Session, fixture: IsolatedFixture) => Promise<void>,
   options: ScenarioOptions = {},
 ): Promise<void> {
-  const { pangramBinary, terminal } = initializedHarness()
+  const { pangramBinary, testDriverBinary, terminal } = initializedHarness()
   const fixture = await makeIsolatedFixture()
+  const noError = Symbol("no error")
   let session: Session | undefined
-  let primaryError: unknown
+  let primaryError: unknown = noError
 
   try {
     await options.prepare?.(fixture)
+    const command = options.loopbackBaseUrl
+      ? [testDriverBinary, options.loopbackBaseUrl]
+      : [pangramBinary]
     session = await terminal.launch({
-      command: [pangramBinary],
+      command,
       viewport: { cols: 120, rows: 40 },
       color: "never",
       inheritEnv: false,
@@ -634,7 +649,7 @@ async function runIsolatedScenario(
         const manifest = await session.writeArtifacts(artifactName)
         await sanitizeFailureArtifacts(
           manifest,
-          [fixture.root, pangramBinary],
+          [fixture.root, pangramBinary, testDriverBinary],
           [SYNTHETIC_API_KEY],
         )
         console.error(`Terminal Control failure artifacts: ${manifest.directory}`)
@@ -642,19 +657,25 @@ async function runIsolatedScenario(
         console.error("Could not write Terminal Control failure artifacts", artifactError)
       }
     }
-    throw error
-  } finally {
-    let cleanupError: unknown
-    try {
-      if (session) await session.stop()
-    } catch (error) {
-      cleanupError = error
-      console.error("Could not stop Terminal Control session", error)
-    } finally {
-      await rm(fixture.root, { recursive: true, force: true })
-    }
-    if (!primaryError && cleanupError) throw cleanupError
   }
+
+  let cleanupError: unknown = noError
+  try {
+    if (session) await session.stop()
+  } catch (error) {
+    cleanupError = error
+    console.error("Could not stop Terminal Control session", error)
+  }
+
+  try {
+    await rm(fixture.root, { recursive: true, force: true })
+  } catch (error) {
+    if (cleanupError === noError) cleanupError = error
+    console.error("Could not remove isolated TUI fixture", error)
+  }
+
+  if (primaryError !== noError) throw primaryError
+  if (cleanupError !== noError) throw cleanupError
 }
 
 function initializedHarness(): AcceptanceHarness {

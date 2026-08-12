@@ -1085,9 +1085,8 @@ GLOBAL:
 
 Resolution:
 
-- no command, no input, and stdin, stdout, and stderr all TTYs: TUI (the TUI
-  arrives in Phase 5; before it is compiled, that otherwise-TUI launch falls
-  back to successful help text exactly as bare `pangram --help`)
+- no command, no input, and stdin, stdout, and stderr all TTYs: enter the TUI
+  alternate-screen Analyze route
 - no command, literal text: detect. Every bare token that is not a compiled
   subcommand and does not begin with `-` is literal text, including tokens
   that spell planned (not yet compiled) command names; those are analyzed as
@@ -1101,12 +1100,11 @@ Resolution:
 - literal `-`: stdin
 
 Bare dispatch evaluates the source before any help or usage surface: a bare
-piped stdin never prints help, and only the all-TTY bare launch uses the
-pre-TUI successful-help fallback.
+piped stdin never prints help. A bare all-TTY process launch bypasses the help
+surface and enters the TUI.
 
-When the TUI is compiled, an all-TTY bare launch enters the alternate-screen
-Analyze route instead of the pre-TUI help fallback. The initial interactive
-surface has these observable boundaries:
+An all-TTY bare launch enters the alternate-screen Analyze route. The initial
+interactive surface has these observable boundaries:
 
 - `Analyze`, `Active`, `History`, and `Settings` are reachable through the
   regular keymap with `Analyze` selected first. The Vim keymap adds its

@@ -121,6 +121,7 @@ pub(super) fn execute(
     root: &ArgMatches,
     global: GlobalFlags,
     streams: &dyn StreamTty,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let started = crate::domain::UtcTimestamp::now();
     let Some((name, leaf)) = matches.subcommand() else {
@@ -167,7 +168,15 @@ pub(super) fn execute(
     };
 
     if parsed.command == ResolvedCommand::HistoryRerun {
-        return rerun::execute(parsed, store, &service, output, started, streams);
+        return rerun::execute(
+            parsed,
+            store,
+            &service,
+            output,
+            started,
+            streams,
+            analyzer_source,
+        );
     }
 
     if parsed.command == ResolvedCommand::HistoryExport {
@@ -371,7 +380,10 @@ fn run(request: Request, store: Option<HistoryStore>) -> Result<CommandData, His
 }
 
 fn run_export(request: Request, store: Option<HistoryStore>) -> Result<(), HistoryExportError> {
-    let mut stdout = std::io::stdout().lock();
+    // The shared exporter flushes its writer before returning, so buffering
+    // keeps raw export writes efficient without deferring output-device errors
+    // to BufWriter's infallible Drop path.
+    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
     let format = if request.export_markdown {
         HistoryExportFormat::Markdown
     } else {
@@ -408,7 +420,7 @@ fn config_service(root: &ArgMatches) -> Result<crate::config::ConfigService, Box
         crate::config::ConfigOverrides::from_environment(),
     );
     crate::config::ConfigService::new(&overrides)
-        .map_err(super::detect::credential_error)
+        .map_err(super::detect::config_error)
         .map_err(Box::new)
 }
 

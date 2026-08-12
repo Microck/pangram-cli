@@ -159,7 +159,8 @@ impl Isolated {
         std::fs::create_dir_all(&home).expect("create home directory");
         std::fs::create_dir_all(&cache).expect("create cache directory");
 
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_pangram"));
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_pangram-test-driver"));
+        command.arg(endpoint);
         command.env_clear();
         for (key, value) in [
             ("HOME", home.as_os_str()),
@@ -178,7 +179,6 @@ impl Isolated {
             ("PANGRAM_CONFIG", self.config.as_os_str()),
             ("PANGRAM_DATA_DIR", self.data.as_os_str()),
             ("PANGRAM_API_KEY", OsStr::new(SYNTHETIC_KEY)),
-            ("PANGRAM_DETECT_ENDPOINT", OsStr::new(endpoint)),
             ("TERM", OsStr::new("xterm-256color")),
             ("CI", OsStr::new("true")),
             ("LANG", OsStr::new("C.UTF-8")),

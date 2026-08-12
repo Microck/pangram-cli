@@ -59,7 +59,8 @@ fn isolated_command(root: &std::path::Path, endpoint: &str) -> CommandBuilder {
         std::fs::create_dir_all(directory).unwrap();
     }
 
-    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_pangram"));
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_pangram-test-driver"));
+    command.arg(endpoint);
     command.env_clear();
     for (key, value) in [
         ("HOME", home.as_os_str()),
@@ -70,7 +71,6 @@ fn isolated_command(root: &std::path::Path, endpoint: &str) -> CommandBuilder {
         ("PANGRAM_CONFIG", config.as_os_str()),
         ("PANGRAM_DATA_DIR", data_home.as_os_str()),
         ("PANGRAM_API_KEY", OsStr::new(SYNTHETIC_KEY)),
-        ("PANGRAM_DETECT_ENDPOINT", OsStr::new(endpoint)),
         ("TERM", OsStr::new("xterm-256color")),
         ("CI", OsStr::new("true")),
         ("LANG", OsStr::new("C.UTF-8")),
@@ -144,89 +144,102 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
     });
 
     let mut transcript = Vec::new();
-    assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "Update");
-    writer.write_all(b"n").expect("decline update checks");
-    writer.flush().expect("flush onboarding choice");
-    assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "composer");
-    assert!(
-        transcript
-            .windows(b"\x1b[?2004h".len())
-            .any(|bytes| bytes == b"\x1b[?2004h"),
-        "the TUI enables bracketed paste before accepting composer input"
-    );
+    // Every assertion and terminal write after spawning runs inside this
+    // unwind boundary. A failed contract must still reach the common kill,
+    // reap, writer-drop, and reader-join path below.
+    let interaction = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "Update");
+        writer.write_all(b"n").expect("decline update checks");
+        writer.flush().expect("flush onboarding choice");
+        assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "composer");
+        assert!(
+            transcript
+                .windows(b"\x1b[?2004h".len())
+                .any(|bytes| bytes == b"\x1b[?2004h"),
+            "the TUI enables bracketed paste before accepting composer input"
+        );
 
-    writer
-        .write_all(b"\x1b[200~")
-        .expect("start bracketed paste");
-    writer
-        .write_all(text.as_bytes())
-        .expect("paste analysis text");
-    writer
-        .write_all(b"\x1b[201~")
-        .expect("finish bracketed paste");
-    writer.flush().expect("flush bracketed analysis text");
+        writer
+            .write_all(b"\x1b[200~")
+            .expect("start bracketed paste");
+        writer
+            .write_all(text.as_bytes())
+            .expect("paste analysis text");
+        writer
+            .write_all(b"\x1b[201~")
+            .expect("finish bracketed paste");
+        writer.flush().expect("flush bracketed analysis text");
 
-    // Composer -> Public link -> Manual save -> Submit in the documented
-    // regular keymap. Enter in the composer would insert a newline, so the
-    // test proves the focus model as well as the positive action.
-    writer.write_all(b"\t\t\t").expect("focus Submit");
-    writer.flush().expect("flush focus navigation");
-    writer.write_all(b"\r").expect("activate Submit");
-    writer.flush().expect("flush Submit");
+        // Composer -> Public link -> Manual save -> Submit in the documented
+        // regular keymap. Enter in the composer would insert a newline, so the
+        // test proves the focus model as well as the positive action.
+        writer.write_all(b"\t\t\t").expect("focus Submit");
+        writer.flush().expect("flush focus navigation");
+        writer.write_all(b"\r").expect("activate Submit");
+        writer.flush().expect("flush Submit");
 
-    assert!(
-        receive_until(&output_rx, &mut transcript, ANALYSIS_TIMEOUT, |bytes| {
-            screen_contains(bytes, "Classification:") && screen_contains(bytes, "100.0%")
-        }),
-        "completed AI result was not visibly rendered:\n{}",
-        String::from_utf8_lossy(&transcript)
-    );
+        assert!(
+            receive_until(&output_rx, &mut transcript, ANALYSIS_TIMEOUT, |bytes| {
+                screen_contains(bytes, "Classification:") && screen_contains(bytes, "100.0%")
+            }),
+            "completed AI result was not visibly rendered:\n{}",
+            String::from_utf8_lossy(&transcript)
+        );
 
-    assert_eq!(fixture.post_count(), 1, "the TUI submits exactly once");
-    assert_eq!(
-        fixture.get_count(),
-        1,
-        "the TUI observes the task exactly once"
-    );
-    let requests = fixture.requests();
-    assert_eq!(requests.len(), 2, "one POST and one poll reach the fixture");
-    let submit = &requests[0];
-    assert_eq!(submit.method, "POST");
-    assert_eq!(submit.path, "/task");
-    assert!(submit.header_equals("x-api-key", SYNTHETIC_KEY));
-    let body = submit.body_json();
-    assert_eq!(body["text"], text);
-    assert_eq!(body["model"], "pangram-4");
-    assert_eq!(body["public_dashboard_link"], false);
-    assert_eq!(requests[1].method, "GET");
-    assert_eq!(requests[1].path, format!("/task/{TASK_ID}"));
+        assert_eq!(fixture.post_count(), 1, "the TUI submits exactly once");
+        assert_eq!(
+            fixture.get_count(),
+            1,
+            "the TUI observes the task exactly once"
+        );
+        let requests = fixture.requests();
+        assert_eq!(requests.len(), 2, "one POST and one poll reach the fixture");
+        let submit = &requests[0];
+        assert_eq!(submit.method, "POST");
+        assert_eq!(submit.path, "/task");
+        assert!(submit.header_equals("x-api-key", SYNTHETIC_KEY));
+        let body = submit.body_json();
+        assert_eq!(body["text"], text);
+        assert_eq!(body["model"], "pangram-4");
+        assert_eq!(body["public_dashboard_link"], false);
+        assert_eq!(requests[1].method, "GET");
+        assert_eq!(requests[1].path, format!("/task/{TASK_ID}"));
 
-    // Completed results focus the scrollable evidence first. Traverse the
-    // focusable New analysis action before reaching Quit without a shortcut.
-    writer.write_all(b"\t\t").expect("focus Quit");
-    writer.flush().expect("flush Quit navigation");
-    writer.write_all(b"\r").expect("activate Quit");
-    writer.flush().expect("flush Quit");
+        // Completed results focus the scrollable evidence first. Traverse the
+        // focusable New analysis action before reaching Quit without a shortcut.
+        writer.write_all(b"\t\t").expect("focus Quit");
+        writer.flush().expect("flush Quit navigation");
+        writer.write_all(b"\r").expect("activate Quit");
+        writer.flush().expect("flush Quit");
+    }));
 
     let mut killer = child.clone_killer();
+    if interaction.is_err() {
+        let _ = killer.kill();
+    }
     let (status_tx, status_rx) = mpsc::channel();
     let wait_thread = std::thread::spawn(move || {
         let _ = status_tx.send(child.wait());
     });
-    let status = match status_rx.recv_timeout(EXIT_TIMEOUT) {
-        Ok(status) => status.expect("wait for TUI exit"),
-        Err(error) => {
-            let _ = killer.kill();
-            panic!("TUI did not exit through the Quit action: {error}");
-        }
-    };
-    wait_thread.join().expect("join child waiter");
+    let status = status_rx.recv_timeout(EXIT_TIMEOUT);
+    if status.is_err() {
+        let _ = killer.kill();
+    }
+    let wait_join = wait_thread.join();
     drop(writer);
-    reader_thread.join().expect("join PTY reader");
+    let reader_join = reader_thread.join();
     while let Ok(chunk) = output_rx.try_recv() {
         transcript.extend_from_slice(&chunk);
     }
+    if let Err(payload) = interaction {
+        std::panic::resume_unwind(payload);
+    }
 
+    wait_join.expect("join child waiter");
+    reader_join.expect("join PTY reader");
+    let status = status
+        .unwrap_or_else(|error| panic!("TUI did not exit through the Quit action: {error}"))
+        .expect("wait for TUI exit");
     assert_eq!(status.exit_code(), 0, "the Quit action is a normal exit");
     for (sequence, behavior) in [
         (b"\x1b[?1049h".as_slice(), "enters the alternate screen"),

@@ -41,6 +41,10 @@ pub fn pangram() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pangram"))
 }
 
+pub fn test_driver() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pangram-test-driver"))
+}
+
 /// An isolated invocation: credential, config, and data state rooted in one
 /// temporary directory, with `CI` set (never interactive) and a synthetic key.
 pub struct Isolated {
@@ -73,20 +77,17 @@ impl Isolated {
     }
 
     pub fn command(&self, endpoint: &str) -> Command {
-        let mut command = pangram();
-        command
-            .env("PANGRAM_API_KEY", SYNTHETIC_KEY)
-            .env("PANGRAM_DETECT_ENDPOINT", endpoint);
+        let mut command = test_driver();
+        command.env("PANGRAM_API_KEY", SYNTHETIC_KEY).arg(endpoint);
         for (key, value) in &self.env {
             command.env(key, value);
         }
         command
     }
 
-    pub fn command_without_key(&self, endpoint: &str) -> Command {
+    pub fn command_without_key(&self, _endpoint: &str) -> Command {
         let mut command = pangram();
         command.env_remove("PANGRAM_API_KEY");
-        command.env("PANGRAM_DETECT_ENDPOINT", endpoint);
         for (key, value) in &self.env {
             command.env(key, value);
         }

@@ -1,7 +1,7 @@
 //! Pure state and transition logic for the terminal adapter.
 //!
-//! It owns no I/O: runtimes feed [`AppEvent`] values into [`reduce`] and
-//! execute the returned [`Effect`] values.
+//! It owns no I/O: runtimes feed [`AppEvent`] values into [`reduce_in_place`]
+//! and execute the returned [`Effect`] values.
 
 use std::fmt;
 
@@ -241,6 +241,7 @@ pub struct AppState {
     pub(crate) active: ActiveState,
     pub history: HistoryState,
     pub settings: SettingsDraft,
+    pub(crate) setting_write_pending: bool,
     vim_prefix_g: bool,
 }
 
@@ -274,6 +275,7 @@ impl AppState {
             active: ActiveState::default(),
             history: HistoryState::initial_loading(),
             settings: startup.settings,
+            setting_write_pending: false,
             vim_prefix_g: false,
         }
     }
@@ -387,439 +389,24 @@ pub enum Effect {
     Exit(u8),
 }
 
+#[cfg(test)]
 pub struct Transition {
     pub state: AppState,
     pub effects: Vec<Effect>,
 }
 
+#[path = "model-reducer.rs"]
+mod reducer;
+
+pub(crate) use reducer::reduce_in_place;
+
+#[cfg(test)]
+use reducer::first_focus;
+
+#[cfg(test)]
 pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
-    let mut effects = Vec::new();
-    match event {
-        AppEvent::Resize(size) => state.terminal = size,
-        AppEvent::Paste(text) => {
-            if state.layout() != ResponsiveLayout::ResizeRequired
-                && state.route == Route::Analyze
-                && state.focus == Focus::Composer
-                && state.overlay.is_none()
-            {
-                state.composer.insert_text(&text);
-            }
-        }
-        AppEvent::AnalysisAccepted(analysis) => {
-            if !state.history.accepts_analysis_event(analysis.id) {
-                return Transition { state, effects };
-            }
-            state.analysis.submitting = false;
-            state.analysis.failure = None;
-            state.analysis.current = Some(analysis.clone());
-            state.active.accept(&analysis);
-        }
-        AppEvent::AnalysisProgress(progress) => {
-            if !state.history.accepts_analysis_event(progress.analysis_id) {
-                return Transition { state, effects };
-            }
-            if !state.active.progress(progress.analysis_id) {
-                return Transition { state, effects };
-            }
-            state.analysis.submitting = false;
-            state.analysis.progress = Some(progress);
-        }
-        AppEvent::AnalysisFinished(analysis) => {
-            if !state.history.accepts_analysis_event(analysis.id) {
-                return Transition { state, effects };
-            }
-            let analysis_id = analysis.id;
-            state.analysis.submitting = false;
-            state.analysis.progress = None;
-            state.analysis.failure = None;
-            state.active.remove(analysis.id);
-            state.analysis.current = Some(analysis);
-            super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
-            if state.route == Route::Analyze {
-                state.result_viewport.reset(analysis_id);
-                state.focus = Focus::Result;
-            }
-        }
-        AppEvent::AnalysisFailed(failure) => {
-            if !state.history.accepts_analysis_event(failure.analysis_id) {
-                return Transition { state, effects };
-            }
-            let analysis_id = failure.analysis_id;
-            state.analysis.submitting = false;
-            state.analysis.progress = None;
-            state.active.remove(failure.analysis_id);
-            state.analysis.failure = Some(failure);
-            super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
-        }
-        AppEvent::HistoryChanged => {
-            super::history_reducer::history_changed(&mut state, &mut effects)
-        }
-        AppEvent::HistoryLoaded { request, result } => {
-            super::history_reducer::complete_load(&mut state, request, result, &mut effects)
-        }
-        AppEvent::HistoryDetailLoaded {
-            analysis_id,
-            result,
-        } => super::history_reducer::complete_detail(&mut state, analysis_id, result, &mut effects),
-        AppEvent::HistoryDeleted {
-            analysis_id,
-            result,
-        } => super::history_reducer::complete_delete(&mut state, analysis_id, result, &mut effects),
-        AppEvent::HistoryRerunPrepared {
-            analysis_id,
-            result,
-        } => super::history_reducer::complete_rerun(&mut state, analysis_id, result, &mut effects),
-        AppEvent::Notice(notice) => state.notice = Some(notice),
-        AppEvent::SettingStored { setting, result } => match result {
-            Ok(()) => match setting {
-                StoredSetting::Credential => {
-                    state.settings.credential_present = true;
-                    state.notice = None;
-                    advance_onboarding(&mut state);
-                }
-                StoredSetting::UpdatePreference(choice) => {
-                    state.settings.update_preference = Some(choice);
-                    state.overlay = None;
-                    state.notice = None;
-                }
-                StoredSetting::History(enabled) => {
-                    state.settings.history_enabled = enabled;
-                    state.overlay = None;
-                    state.notice = None;
-                }
-                StoredSetting::Intro(intro) => {
-                    state.settings.intro = intro;
-                    state.notice = None;
-                }
-                StoredSetting::Keymap(keymap) => {
-                    state.keymap = keymap;
-                    state.notice = None;
-                }
-                StoredSetting::Motion(motion) => {
-                    state.settings.motion = motion;
-                    state.notice = None;
-                }
-            },
-            Err(error) => state.notice = Some(error.message().to_owned()),
-        },
-        AppEvent::Key(KeyInput::CtrlC) => effects.push(Effect::Exit(130)),
-        AppEvent::Key(key) => {
-            if state.layout() != ResponsiveLayout::ResizeRequired {
-                reduce_key(&mut state, key, &mut effects);
-            }
-        }
-    }
+    let effects = reduce_in_place(&mut state, event);
     Transition { state, effects }
-}
-
-fn reduce_key(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>) {
-    if super::history_reducer::reduce_overlay(state, key, effects) {
-        return;
-    }
-    if reduce_overlay(state, key, effects) {
-        return;
-    }
-    if reduce_text_field(state, key) {
-        return;
-    }
-    if super::history_reducer::reduce_key(state, key, effects) {
-        return;
-    }
-    if super::result_viewport::reduce_key(state, key) {
-        return;
-    }
-    if super::active::reduce_key(state, key) {
-        return;
-    }
-
-    state.vim_prefix_g = match (state.keymap, state.vim_prefix_g, key) {
-        (Keymap::Vim, true, KeyInput::Character('g')) => {
-            if state.focus == Focus::Result {
-                super::result_viewport::navigate(state, ResultMove::First);
-            } else {
-                state.focus = first_focus(state.route);
-            }
-            false
-        }
-        (Keymap::Vim, false, KeyInput::Character('g')) => true,
-        _ => false,
-    };
-    if state.vim_prefix_g {
-        return;
-    }
-
-    match key {
-        KeyInput::Character('?') => state.overlay = Some(Overlay::Help),
-        KeyInput::Character('/') if state.route == Route::History => {
-            state.focus = Focus::HistorySearch;
-        }
-        KeyInput::Character('h') if state.keymap == Keymap::Vim => move_route_or_focus(state, -1),
-        KeyInput::Character('l') if state.keymap == Keymap::Vim => move_route_or_focus(state, 1),
-        KeyInput::Character('k') if state.keymap == Keymap::Vim => move_focus(state, -1),
-        KeyInput::Character('j') if state.keymap == Keymap::Vim => move_focus(state, 1),
-        KeyInput::Character('G') if state.keymap == Keymap::Vim => {
-            if state.focus == Focus::Result {
-                super::result_viewport::navigate(state, ResultMove::Last);
-            } else {
-                state.focus = Focus::Quit;
-            }
-        }
-        KeyInput::Character('n') | KeyInput::CtrlD if state.keymap == Keymap::Vim => {
-            move_focus(state, 1);
-        }
-        KeyInput::Character('N') | KeyInput::CtrlU if state.keymap == Keymap::Vim => {
-            move_focus(state, -1);
-        }
-        KeyInput::Left => move_route_or_focus(state, -1),
-        KeyInput::Right => move_route_or_focus(state, 1),
-        KeyInput::Up | KeyInput::BackTab => move_focus(state, -1),
-        KeyInput::Down | KeyInput::Tab => move_focus(state, 1),
-        KeyInput::Home => state.focus = first_focus(state.route),
-        KeyInput::End => state.focus = Focus::Quit,
-        KeyInput::PageUp => move_focus(state, -1),
-        KeyInput::PageDown => move_focus(state, 1),
-        KeyInput::Enter => activate_focus(state, effects),
-        KeyInput::Escape => state.focus = Focus::Routes,
-        KeyInput::Character(_)
-        | KeyInput::Backspace
-        | KeyInput::Delete
-        | KeyInput::CtrlC
-        | KeyInput::CtrlU
-        | KeyInput::CtrlD => {}
-    }
-}
-
-fn reduce_overlay(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>) -> bool {
-    let Some(overlay) = state.overlay.as_mut() else {
-        return false;
-    };
-    match overlay {
-        Overlay::Credential(entry) => match key {
-            KeyInput::Escape => advance_onboarding(state),
-            KeyInput::Enter if entry.value().trim().is_empty() => {
-                state.notice = Some("Enter an API key or press Escape to skip.".to_owned());
-            }
-            KeyInput::Enter => {
-                effects.push(Effect::StoreCredential {
-                    credential: entry.take(),
-                });
-            }
-            _ => {
-                edit_value(&mut entry.value, &mut entry.cursor, key);
-            }
-        },
-        Overlay::UpdatePreference { choice } => match key {
-            KeyInput::Escape => {
-                state.overlay = Some(Overlay::Credential(CredentialEntry::default()));
-            }
-            KeyInput::Character('y' | 'Y') => effects.push(Effect::StoreUpdatePreference(true)),
-            KeyInput::Character('n' | 'N') => effects.push(Effect::StoreUpdatePreference(false)),
-            KeyInput::Left | KeyInput::Right | KeyInput::Up | KeyInput::Down => *choice = !*choice,
-            KeyInput::Enter => {
-                let selected = *choice;
-                effects.push(Effect::StoreUpdatePreference(selected));
-            }
-            _ => {}
-        },
-        Overlay::HistoryConsent => match key {
-            KeyInput::Character('y' | 'Y') | KeyInput::Enter => {
-                effects.push(Effect::StoreHistory(true));
-            }
-            KeyInput::Character('n' | 'N') | KeyInput::Escape => state.overlay = None,
-            _ => {}
-        },
-        Overlay::Help => {
-            if matches!(key, KeyInput::Escape | KeyInput::Character('?')) {
-                state.overlay = None;
-            }
-        }
-        Overlay::ConfirmHistoryDelete { .. }
-        | Overlay::HistoryExport { .. }
-        | Overlay::ConfirmFullHistoryExport { .. } => {}
-    }
-    true
-}
-
-fn advance_onboarding(state: &mut AppState) {
-    state.overlay = if state.settings.update_preference.is_none() {
-        Some(Overlay::UpdatePreference { choice: true })
-    } else {
-        None
-    };
-}
-
-fn reduce_text_field(state: &mut AppState, key: KeyInput) -> bool {
-    if state.focus == Focus::Composer && key == KeyInput::Enter {
-        state.composer.insert_text("\n");
-        return true;
-    }
-    let field = match state.focus {
-        Focus::Composer if state.route == Route::Analyze => Some(&mut state.composer),
-        Focus::HistorySearch if state.route == Route::History => {
-            return super::history_reducer::edit_search(state, key);
-        }
-        _ => None,
-    };
-    let Some(field) = field else {
-        return false;
-    };
-    field.edit(key)
-}
-
-fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
-    match state.focus {
-        Focus::CheckAi
-        | Focus::CheckPlagiarism
-        | Focus::CheckBoth
-        | Focus::InputText
-        | Focus::InputFiles => {}
-        Focus::PublicLink => state.public_link = !state.public_link,
-        Focus::ManualSave => state.manual_save = !state.manual_save,
-        Focus::Submit => {
-            if state.analysis.submitting || state.active.has_session() {
-                state.notice = Some(ANALYSIS_IN_PROGRESS_NOTICE.to_owned());
-            } else if state.analysis.current.is_some()
-                || state.analysis.progress.is_some()
-                || state.analysis.failure.is_some()
-            {
-                state.composer = TextField::default();
-                state.public_link = false;
-                state.manual_save = false;
-                state.analysis = AnalysisView::default();
-                state.notice = None;
-            } else if state.composer.value().trim().is_empty() {
-                state.notice = Some("Enter text before submitting.".to_owned());
-            } else {
-                state.notice = None;
-                state.analysis.submitting = true;
-                effects.push(Effect::SubmitText {
-                    text: state.composer.value().to_owned(),
-                    public_link: state.public_link,
-                    save: state.manual_save,
-                    automatic_save: state.settings.history_enabled,
-                });
-            }
-        }
-        Focus::SettingsAuthentication => {
-            state.overlay = Some(Overlay::Credential(CredentialEntry::default()));
-        }
-        Focus::SettingsHistory => {
-            if state.settings.history_enabled {
-                effects.push(Effect::StoreHistory(false));
-            } else {
-                state.overlay = Some(Overlay::HistoryConsent);
-            }
-        }
-        Focus::SettingsIntro => {
-            let intro = match state.settings.intro {
-                IntroFrequency::Once => IntroFrequency::Always,
-                IntroFrequency::Always => IntroFrequency::Off,
-                IntroFrequency::Off => IntroFrequency::Once,
-            };
-            effects.push(Effect::StoreIntro(intro));
-        }
-        Focus::SettingsKeymap => {
-            let keymap = match state.keymap {
-                Keymap::Regular => Keymap::Vim,
-                Keymap::Vim => Keymap::Regular,
-            };
-            effects.push(Effect::StoreKeymap(keymap));
-        }
-        Focus::SettingsMotion => {
-            let motion = match state.settings.motion {
-                MotionLevel::Full => MotionLevel::Reduced,
-                MotionLevel::Reduced => MotionLevel::Off,
-                MotionLevel::Off => MotionLevel::Full,
-            };
-            effects.push(Effect::StoreMotion(motion));
-        }
-        Focus::SettingsUpdates => effects.push(Effect::StoreUpdatePreference(
-            !state.settings.update_preference.unwrap_or(false),
-        )),
-        Focus::Quit => effects.push(Effect::Exit(0)),
-        Focus::Routes
-        | Focus::Composer
-        | Focus::Result
-        | Focus::ActiveList
-        | Focus::HistorySearch
-        | Focus::HistoryStatusFilter
-        | Focus::HistoryCheckFilter
-        | Focus::HistoryList
-        | Focus::HistoryRerun
-        | Focus::HistoryExport
-        | Focus::HistoryDelete => {}
-    }
-}
-
-fn first_focus(route: Route) -> Focus {
-    match route {
-        Route::Analyze => Focus::Composer,
-        Route::Active => Focus::ActiveList,
-        Route::History => Focus::HistorySearch,
-        Route::Settings => Focus::SettingsAuthentication,
-    }
-}
-
-fn focus_order(state: &AppState) -> &'static [Focus] {
-    const ANALYZE: &[Focus] = &[
-        Focus::Routes,
-        Focus::CheckAi,
-        Focus::CheckPlagiarism,
-        Focus::CheckBoth,
-        Focus::InputText,
-        Focus::InputFiles,
-        Focus::Composer,
-        Focus::PublicLink,
-        Focus::ManualSave,
-        Focus::Submit,
-        Focus::Quit,
-    ];
-    const ANALYZE_RESULT: &[Focus] = &[Focus::Routes, Focus::Result, Focus::Submit, Focus::Quit];
-    const ACTIVE: &[Focus] = &[Focus::Routes, Focus::ActiveList, Focus::Quit];
-    const SETTINGS: &[Focus] = &[
-        Focus::Routes,
-        Focus::SettingsAuthentication,
-        Focus::SettingsHistory,
-        Focus::SettingsIntro,
-        Focus::SettingsKeymap,
-        Focus::SettingsMotion,
-        Focus::SettingsUpdates,
-        Focus::Quit,
-    ];
-    match state.route {
-        Route::Analyze if state.analysis.current.is_some() => ANALYZE_RESULT,
-        Route::Analyze => ANALYZE,
-        Route::Active => ACTIVE,
-        Route::History => {
-            super::history_reducer::focus_order(state.history.selected_detail().is_some())
-        }
-        Route::Settings => SETTINGS,
-    }
-}
-
-fn move_focus(state: &mut AppState, offset: isize) {
-    let order = focus_order(state);
-    let current = order
-        .iter()
-        .position(|focus| *focus == state.focus)
-        .unwrap_or(0);
-    let next = current.saturating_add_signed(offset).min(order.len() - 1);
-    state.focus = order[next];
-}
-
-fn move_route_or_focus(state: &mut AppState, offset: isize) {
-    if state.focus != Focus::Routes {
-        move_focus(state, offset);
-        return;
-    }
-    let current = Route::ALL
-        .iter()
-        .position(|route| *route == state.route)
-        .unwrap_or(0);
-    let next = current
-        .saturating_add_signed(offset)
-        .min(Route::ALL.len() - 1);
-    state.route = Route::ALL[next];
 }
 
 #[cfg(test)]

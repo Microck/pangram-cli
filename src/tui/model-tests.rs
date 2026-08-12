@@ -282,6 +282,16 @@ fn ctrl_c_requests_interrupt_exit() {
 }
 
 #[test]
+fn in_place_reducer_updates_state_without_replacing_it() {
+    let mut state = ready_state();
+
+    let effects = reduce_in_place(&mut state, AppEvent::Key(KeyInput::Character('x')));
+
+    assert!(effects.is_empty());
+    assert_eq!(state.composer.value(), "x");
+}
+
+#[test]
 fn focusable_quit_requests_normal_exit() {
     let mut state = ready_state();
     state.focus = Focus::Quit;
@@ -316,7 +326,7 @@ fn onboarding_orders_credential_before_update_preference() {
 }
 
 #[test]
-fn update_preference_escape_returns_to_credential_setup() {
+fn update_preference_escape_returns_to_credential_setup_only_when_missing() {
     let state = AppState::new(TerminalSize::default(), StartupState::default());
     let update = reduce(state, AppEvent::Key(KeyInput::Escape));
     assert!(matches!(
@@ -330,6 +340,29 @@ fn update_preference_escape_returns_to_credential_setup() {
         Some(Overlay::Credential(_))
     ));
     assert!(credential.effects.is_empty());
+
+    let configured = AppState::new(
+        TerminalSize::default(),
+        StartupState {
+            settings: SettingsDraft {
+                credential_present: true,
+                update_preference: None,
+                ..SettingsDraft::default()
+            },
+            keymap: Keymap::Regular,
+        },
+    );
+    assert!(matches!(
+        configured.overlay,
+        Some(Overlay::UpdatePreference { .. })
+    ));
+
+    let stayed = reduce(configured, AppEvent::Key(KeyInput::Escape));
+    assert!(matches!(
+        stayed.state.overlay,
+        Some(Overlay::UpdatePreference { .. })
+    ));
+    assert!(stayed.effects.is_empty());
 }
 
 #[test]
@@ -388,6 +421,38 @@ fn keymap_changes_only_after_persistence_succeeds() {
         },
     );
     assert_eq!(stored.state.keymap, Keymap::Vim);
+}
+
+#[test]
+fn repeated_setting_activation_is_coalesced_until_persistence_finishes() {
+    let mut state = ready_state();
+    state.route = Route::Settings;
+    state.focus = Focus::SettingsKeymap;
+
+    let requested = reduce(state, AppEvent::Key(KeyInput::Enter));
+    assert!(matches!(
+        requested.effects.as_slice(),
+        [Effect::StoreKeymap(Keymap::Vim)]
+    ));
+
+    let repeated = reduce(requested.state, AppEvent::Key(KeyInput::Enter));
+    assert!(repeated.effects.is_empty());
+    assert_eq!(repeated.state.keymap, Keymap::Regular);
+
+    let stored = reduce(
+        repeated.state,
+        AppEvent::SettingStored {
+            setting: StoredSetting::Keymap(Keymap::Vim),
+            result: Ok(()),
+        },
+    );
+    assert_eq!(stored.state.keymap, Keymap::Vim);
+
+    let next = reduce(stored.state, AppEvent::Key(KeyInput::Enter));
+    assert!(matches!(
+        next.effects.as_slice(),
+        [Effect::StoreKeymap(Keymap::Regular)]
+    ));
 }
 
 #[test]
