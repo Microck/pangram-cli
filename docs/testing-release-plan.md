@@ -403,8 +403,11 @@ real Ed25519 keys generated for fixtures.
 
 Verify:
 
+- private `0.x` production paths contain an empty key ring, perform zero DNS
+  or HTTP activity, and return non-retryable `update_unavailable`
 - detached manifest signature
 - exact downloaded-byte verification without JSON reserialization
+- verification occurs before UTF-8 decoding, manifest parsing, or URL use
 - unknown key ID
 - wrong signature
 - overlap key rotation and removed key rejection
@@ -419,8 +422,16 @@ Verify:
 - absolute, parent, symlink, hardlink, device, duplicate-executable, and
   unexpected archive entries
 - direct-install receipt path match
+- receipt lives beside the executable and binds its exact SHA-256
+- a check needs only the protected data-dir state lock
+- one protected install-location lock serializes executable mutation
+- operations needing both locks always acquire state before executable
 - receipt creation only after version smoke test
-- receipt finalization retry after successful replacement
+- staged candidate smoke before replacement
+- every pre-replacement failure preserves exact current executable bytes
+- only protected receipt finalization retries after successful replacement
+- install finalizes matching pending state before network or replacement while
+  holding state then mutation lock; check never reads adjacent pending state
 - stale and moved receipt
 - package-manager advisory behavior
 - interrupted download
@@ -431,6 +442,13 @@ Verify:
 - no automatic check outside the TUI
 - 24-hour TUI check interval and ETag
 - 200, 304, stale ETag, network failure, and clock rollback state transitions
+- 1 MiB manifest, 16 KiB signature, 1,024-byte ETag, five-redirect, 1 GiB
+  archive, 256 MiB executable, and 64 MiB XZ dictionary boundaries, including
+  one-byte-over cases
+- full SemVer precedence and the closed `UpdateStatus` field matrix
+- all-TTY confirmation, decline exit 130, redirected and CI refusal without
+  `--yes`, and noninteractive `--yes`
+- MCP `check_update` is explicit, nonbillable, read-only, and cannot install
 
 Private development builds perform no release-network request.
 
@@ -667,6 +685,11 @@ The npm main package selects an exact supported platform package through
 optional dependencies and fails clearly on unsupported targets.
 
 Package managers retain update ownership.
+
+Direct installers do not ship until their Ed25519 implementation proves the
+same embedded trust root and exact-byte verification on every clean-machine
+baseline. Do not replace this requirement with optional host crypto, a hash,
+TOFU, or a downloaded verifier.
 
 pnpm and Bun consume the npm package; they are not separate publication
 channels.

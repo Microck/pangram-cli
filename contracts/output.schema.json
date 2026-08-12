@@ -2402,15 +2402,232 @@
             }
           ]
         },
+        "manager": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpdateManager"
+            }
+          ]
+        },
         "manager_command": {
           "type": [
             "string"
-          ]
+          ],
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
         }
       },
+      "additionalProperties": false,
       "required": [
         "status",
         "current_version"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "manager": {
+                "const": "homebrew"
+              }
+            },
+            "required": [
+              "manager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "manager_command": {
+                "const": "brew upgrade Microck/pangram-cli/pangram"
+              }
+            },
+            "required": [
+              "manager_command"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "manager": {
+                "const": "scoop"
+              }
+            },
+            "required": [
+              "manager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "manager_command": {
+                "const": "scoop update pangram"
+              }
+            },
+            "required": [
+              "manager_command"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "manager": {
+                "const": "npm"
+              }
+            },
+            "required": [
+              "manager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "manager_command": {
+                "const": "npm install --global @microck/pangram-cli@latest"
+              }
+            },
+            "required": [
+              "manager_command"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "manager": {
+                "const": "pnpm"
+              }
+            },
+            "required": [
+              "manager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "manager_command": {
+                "const": "pnpm add --global @microck/pangram-cli@latest"
+              }
+            },
+            "required": [
+              "manager_command"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "manager": {
+                "const": "bun"
+              }
+            },
+            "required": [
+              "manager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "manager_command": {
+                "const": "bun add --global @microck/pangram-cli@latest"
+              }
+            },
+            "required": [
+              "manager_command"
+            ]
+          }
+        }
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "no_update"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "available_version"
+                ]
+              },
+              {
+                "required": [
+                  "manager"
+                ]
+              },
+              {
+                "required": [
+                  "manager_command"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "update_available"
+            }
+          },
+          "required": [
+            "status",
+            "available_version"
+          ],
+          "oneOf": [
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "manager"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "manager_command"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "manager",
+                "manager_command"
+              ]
+            }
+          ]
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "updated"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "available_version"
+                ]
+              },
+              {
+                "required": [
+                  "manager"
+                ]
+              },
+              {
+                "required": [
+                  "manager_command"
+                ]
+              }
+            ]
+          }
+        }
       ]
     },
     "UpdateStatusKind": {
@@ -2423,7 +2640,17 @@
     },
     "ContractVersion": {
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "UpdateManager": {
+      "type": "string",
+      "enum": [
+        "homebrew",
+        "scoop",
+        "npm",
+        "pnpm",
+        "bun"
+      ]
     },
     "EnvelopeMeta": {
       "description": "Timing metadata shared by success and failure envelopes.",

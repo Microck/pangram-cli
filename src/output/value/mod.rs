@@ -307,23 +307,48 @@ pub enum UpdateStatusKind {
     Updated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateManager {
+    Homebrew,
+    Scoop,
+    Npm,
+    Pnpm,
+    Bun,
+}
+
+impl UpdateManager {
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::Homebrew => "brew upgrade Microck/pangram-cli/pangram",
+            Self::Scoop => "scoop update pangram",
+            Self::Npm => "npm install --global @microck/pangram-cli@latest",
+            Self::Pnpm => "pnpm add --global @microck/pangram-cli@latest",
+            Self::Bun => "bun add --global @microck/pangram-cli@latest",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(transparent)]
-struct ContractVersion(#[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))] String);
+struct ContractVersion(
+    #[schemars(regex(
+        pattern = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$"
+    ))]
+    String,
+);
 
 impl ContractVersion {
     fn new(value: impl Into<String>, field: &'static str) -> Result<Self, OutputValidationError> {
         let value = value.into();
-        let mut parts = value.split('.');
-        let valid = (0..3).all(|_| {
-            parts.next().is_some_and(|part| {
-                !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
-            })
-        }) && parts.next().is_none();
-        if !valid {
+        if semver::Version::parse(&value).is_err() {
             return Err(OutputValidationError::InvalidVersion(field));
         }
         Ok(Self(value))
+    }
+
+    fn precedence(&self) -> semver::Version {
+        semver::Version::parse(&self.0).expect("ContractVersion is validated at construction")
     }
 }
 
@@ -336,13 +361,17 @@ impl<'de> Deserialize<'de> for ContractVersion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateStatus {
     status: UpdateStatusKind,
     current_version: ContractVersion,
     #[serde(default, deserialize_with = "deserialize_missing_only")]
     #[serde(skip_serializing_if = "Option::is_none")]
     available_version: Option<ContractVersion>,
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manager: Option<UpdateManager>,
     #[serde(default, deserialize_with = "deserialize_missing_only")]
     #[serde(skip_serializing_if = "Option::is_none")]
     manager_command: Option<String>,
@@ -353,14 +382,65 @@ impl UpdateStatus {
         status: UpdateStatusKind,
         current_version: impl Into<String>,
         available_version: Option<String>,
+        manager: Option<UpdateManager>,
         manager_command: Option<String>,
     ) -> Result<Self, OutputValidationError> {
+        let current_version = ContractVersion::new(current_version, "current version")?;
+        let available_version = available_version
+            .map(|version| ContractVersion::new(version, "available version"))
+            .transpose()?;
+        if manager_command
+            .as_ref()
+            .is_some_and(|command| command.is_empty() || command.chars().any(char::is_control))
+        {
+            return Err(OutputValidationError::InvalidUpdateStatus(
+                "manager command must be nonempty and contain no control characters",
+            ));
+        }
+        let manager_advisory = manager.is_some() && manager_command.is_some();
+        if manager.is_some() != manager_command.is_some() {
+            return Err(OutputValidationError::InvalidUpdateStatus(
+                "manager and manager command must appear together",
+            ));
+        }
+        if let (Some(manager), Some(command)) = (manager, &manager_command)
+            && command != manager.command()
+        {
+            return Err(OutputValidationError::InvalidUpdateStatus(
+                "manager command must match the manager advisory",
+            ));
+        }
+        match status {
+            UpdateStatusKind::NoUpdate | UpdateStatusKind::Updated
+                if available_version.is_some() || manager_advisory =>
+            {
+                return Err(OutputValidationError::InvalidUpdateStatus(
+                    "no_update and updated forbid available version and manager advice",
+                ));
+            }
+            UpdateStatusKind::UpdateAvailable => {
+                let Some(available) = &available_version else {
+                    return Err(OutputValidationError::InvalidUpdateStatus(
+                        "update_available requires an available version",
+                    ));
+                };
+                if available
+                    .precedence()
+                    .cmp_precedence(&current_version.precedence())
+                    .is_le()
+                {
+                    return Err(OutputValidationError::InvalidUpdateStatus(
+                        "available version must have greater SemVer precedence",
+                    ));
+                }
+            }
+            _ => {}
+        }
         Ok(Self {
             status,
-            current_version: ContractVersion::new(current_version, "current version")?,
-            available_version: available_version
-                .map(|version| ContractVersion::new(version, "available version"))
-                .transpose()?,
+            current_version,
+            available_version,
+            manager,
             manager_command,
         })
     }
@@ -379,8 +459,42 @@ impl UpdateStatus {
             .map(|version| version.0.as_str())
     }
 
+    pub const fn manager(&self) -> Option<UpdateManager> {
+        self.manager
+    }
+
     pub fn manager_command(&self) -> Option<&str> {
         self.manager_command.as_deref()
+    }
+}
+
+impl<'de> Deserialize<'de> for UpdateStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            status: UpdateStatusKind,
+            current_version: String,
+            #[serde(default, deserialize_with = "deserialize_missing_only")]
+            available_version: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_missing_only")]
+            manager: Option<UpdateManager>,
+            #[serde(default, deserialize_with = "deserialize_missing_only")]
+            manager_command: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(
+            wire.status,
+            wire.current_version,
+            wire.available_version,
+            wire.manager,
+            wire.manager_command,
+        )
+        .map_err(D::Error::custom)
     }
 }
 

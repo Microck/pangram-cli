@@ -18,7 +18,9 @@ dev-tools = []
 # directory handles also deny rename/delete sharing during resolution.
 cap-fs-ext = { version = "=4.0.2", default-features = false, features = ["std"] }
 cap-std = { version = "=4.0.2", default-features = false }
+base64 = { version = "=0.22.1", default-features = false, features = ["std"] }
 clap = { version = "=4.6.4", features = ["derive"] }
+clap_complete = { version = "=4.6.4", default-features = false }
 # Ratatui 0.29 keeps its calendar widget, and therefore `time`, outside the
 # default terminal feature graph. This remains compatible with the Rust 1.88
 # floor without retaining the vulnerable pre-0.3.47 `time` line pulled by
@@ -27,10 +29,12 @@ clap = { version = "=4.6.4", features = ["derive"] }
 crossterm = "=0.28.1"
 ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm"] }
 directories = "=6.0.0"
+ed25519-dalek = { version = "=3.0.0", default-features = false }
 # Cross-process serialization for read-modify-write config mutations. The
 # separate sidecar lock remains stable while atomic rename replaces config.toml.
 fs4 = "=1.1.0"
 jiff = { version = "=0.2.35", features = ["serde"] }
+lzma-rust2 = { version = "=0.18.1", default-features = false, features = ["std", "xz"] }
 # rustls-only TLS through the platform verifier; native TLS is never
 # compiled. `system-proxy` keeps the documented system proxy discovery,
 # `charset` and `http2` match the documented HTTP profile. Verified against
@@ -70,11 +74,13 @@ schemars = { version = "=1.2.2", features = ["jiff02", "preserve_order", "uuid1"
 secrecy = "=0.10.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+semver = { version = "=1.0.28", default-features = false, features = ["std"] }
 sha2 = "=0.11.0"
 # SIGINT-only interruption of CLI observation waits. Low-level and
 # platform-portable; `iterator` drives the blocking signal loop on one
 # dedicated thread so no signal handler touches application state.
 signal-hook = "=0.4.4"
+tar = { version = "=0.4.46", default-features = false }
 thiserror = "=2.0.19"
 # Canonical TOON projection of the JSON envelope. `default-features = false`
 # keeps the heavy `cli` feature out of the shipped binary; the projection uses
@@ -93,6 +99,7 @@ toml = "=1.0.7"
 url = "=2.5.8"
 uuid = { version = "=1.24.0", features = ["serde", "v7"] }
 zeroize = "=1.8.2"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "=0.61.2", features = [

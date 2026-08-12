@@ -604,11 +604,18 @@ Automatic update checks:
 
 CLI, piped, CI, MCP, and agent execution perform no automatic checks.
 
+The MCP `check_update` tool is explicit, read-only, and nonbillable. It is not
+an automatic check and never installs.
+
 Self-update is allowed only for an executable matching a direct-install
 receipt. Package-manager installations receive the exact manager command and
 are never mutated by Pangram CLI.
 
-Before public release, update networking is disabled.
+Every private `0.x` production binary has an empty update key ring. Before an
+authorized public release, every explicit production update command and MCP
+check performs zero network activity and returns typed `update_unavailable`.
+Tests use constructor-injected endpoints and keys; configuration cannot enable
+production update networking.
 
 ## 14. Agent behavior
 

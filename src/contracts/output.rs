@@ -21,6 +21,7 @@ pub(super) fn output_schema() -> Value {
         .expect("the output registry has definitions");
 
     patch_output_definitions(&mut definitions);
+    patch_update_status(&mut definitions);
     let analysis = schema_ref::<Analysis<CanonicalError>>();
     let array = json!({"type": "array", "minItems": 1, "items": analysis});
     let conditions = vec![
@@ -137,6 +138,79 @@ pub(super) fn output_schema() -> Value {
             {"$ref": "#/$defs/errorEnvelope"}
         ],
         "$defs": definitions,
+    })
+}
+
+fn patch_update_status(definitions: &mut Value) {
+    let update_status = &mut definitions["UpdateStatus"];
+    let manager_command = super::object_mut(&mut update_status["properties"]["manager_command"]);
+    manager_command.insert("minLength".into(), json!(1));
+    manager_command.insert("pattern".into(), json!(r"^[^\u0000-\u001F\u007F]+$"));
+    super::object_mut(update_status).insert("additionalProperties".into(), json!(false));
+    super::object_mut(update_status).insert(
+        "allOf".into(),
+        json!([
+            manager_command_invariant("homebrew", "brew upgrade Microck/pangram-cli/pangram"),
+            manager_command_invariant("scoop", "scoop update pangram"),
+            manager_command_invariant("npm", "npm install --global @microck/pangram-cli@latest"),
+            manager_command_invariant("pnpm", "pnpm add --global @microck/pangram-cli@latest"),
+            manager_command_invariant("bun", "bun add --global @microck/pangram-cli@latest")
+        ]),
+    );
+    super::object_mut(update_status).insert(
+        "oneOf".into(),
+        json!([
+            {
+                "properties": {"status": {"const": "no_update"}},
+                "required": ["status"],
+                "not": {
+                    "anyOf": [
+                        {"required": ["available_version"]},
+                        {"required": ["manager"]},
+                        {"required": ["manager_command"]}
+                    ]
+                }
+            },
+            {
+                "properties": {"status": {"const": "update_available"}},
+                "required": ["status", "available_version"],
+                "oneOf": [
+                    {
+                        "not": {
+                            "anyOf": [
+                                {"required": ["manager"]},
+                                {"required": ["manager_command"]}
+                            ]
+                        }
+                    },
+                    {"required": ["manager", "manager_command"]}
+                ]
+            },
+            {
+                "properties": {"status": {"const": "updated"}},
+                "required": ["status"],
+                "not": {
+                    "anyOf": [
+                        {"required": ["available_version"]},
+                        {"required": ["manager"]},
+                        {"required": ["manager_command"]}
+                    ]
+                }
+            }
+        ]),
+    );
+}
+
+fn manager_command_invariant(manager: &str, command: &str) -> Value {
+    json!({
+        "if": {
+            "properties": {"manager": {"const": manager}},
+            "required": ["manager"]
+        },
+        "then": {
+            "properties": {"manager_command": {"const": command}},
+            "required": ["manager_command"]
+        }
     })
 }
 

@@ -555,7 +555,7 @@ fn generated_cli_reference_keeps_bulk_submit_free_of_public_link() {
 // The generated help fixture lists the implemented (available) top-level
 // commands; the Phase 3 bulk and task namespaces surface in it.
 #[test]
-fn generated_cli_help_lists_the_activated_bulk_and_task_surface() {
+fn generated_cli_help_lists_the_activated_command_surface() {
     let GeneratedArtifact { bytes, .. } = generated_artifacts()
         .unwrap()
         .into_iter()
@@ -570,12 +570,42 @@ fn generated_cli_help_lists_the_activated_bulk_and_task_surface() {
         .map(|line| line.split_whitespace().next().unwrap())
         .collect();
 
-    for name in ["bulk", "task"] {
+    for name in ["bulk", "task", "completions"] {
         assert!(
             listed.contains(&name),
             "generated cli-help.txt must list the available {name} command"
         );
     }
+}
+
+#[test]
+fn generated_cli_reference_activates_the_closed_completion_surface() {
+    let reference = generated_json("generated/cli-reference.json");
+    let completions = reference["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["path"] == json!(["completions"]))
+        .expect("cli-reference.json contains completions");
+
+    assert_eq!(completions["availability"], json!("available"));
+    assert_eq!(
+        completions["arguments"],
+        json!([{
+            "name": "SHELL",
+            "aliases": [],
+            "kind": "positional",
+            "value_name": "SHELL",
+            "accepted_values": ["bash", "zsh", "fish", "powershell", "elvish"],
+            "required": true,
+            "repeatable": false,
+            "group": null,
+            "requires": [],
+            "stdin_marker": null,
+            "phase": 8,
+            "availability": "available"
+        }])
+    );
 }
 
 #[test]

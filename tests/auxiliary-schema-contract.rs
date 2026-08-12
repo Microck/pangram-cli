@@ -108,6 +108,32 @@ fn local_state_and_update_schemas_preserve_closed_security_contracts() {
                 }),
                 valid: false,
             },
+            Case {
+                name: "manifest versions accept canonical SemVer metadata",
+                instance: json!({
+                    "schema_version": "1",
+                    "channel": "stable",
+                    "version": "0.2.0-rc.1+release.5",
+                    "published_at": "2026-07-23T12:00:00Z",
+                    "notes_url": "https://github.com/Microck/pangram-cli/releases/tag/v0.2.0-rc.1",
+                    "minimum_updater_version": "0.1.0-alpha.1",
+                    "artifacts": [artifact]
+                }),
+                valid: true,
+            },
+            Case {
+                name: "manifest rejects noncanonical SemVer leading zeroes",
+                instance: json!({
+                    "schema_version": "1",
+                    "channel": "stable",
+                    "version": "0.02.0",
+                    "published_at": "2026-07-23T12:00:00Z",
+                    "notes_url": "https://github.com/Microck/pangram-cli/releases/tag/v0.2.0",
+                    "minimum_updater_version": "0.1.0",
+                    "artifacts": [artifact]
+                }),
+                valid: false,
+            },
         ],
     );
 
@@ -158,6 +184,24 @@ fn local_state_and_update_schemas_preserve_closed_security_contracts() {
                 }),
                 valid: false,
             },
+            Case {
+                name: "cached version accepts canonical SemVer prerelease",
+                instance: json!({
+                    "schema_version": "1",
+                    "last_checked_at": "2026-07-23T12:00:00Z",
+                    "available_version": "0.2.0-rc.1"
+                }),
+                valid: true,
+            },
+            Case {
+                name: "cached version rejects a leading zero",
+                instance: json!({
+                    "schema_version": "1",
+                    "last_checked_at": "2026-07-23T12:00:00Z",
+                    "available_version": "0.02.0"
+                }),
+                valid: false,
+            },
         ],
     );
 
@@ -173,9 +217,51 @@ fn local_state_and_update_schemas_preserve_closed_security_contracts() {
                     "installed_version": "0.1.0",
                     "target": "aarch64-unknown-linux-gnu",
                     "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "executable_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
                     "installed_at": "2026-07-23T12:00:00Z"
                 }),
                 valid: true,
+            },
+            Case {
+                name: "receipt requires the installed executable digest",
+                instance: json!({
+                    "schema_version": "1",
+                    "method": "direct",
+                    "executable_path": "/home/user/.local/bin/pangram",
+                    "installed_version": "0.1.0",
+                    "target": "aarch64-unknown-linux-gnu",
+                    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "installed_at": "2026-07-23T12:00:00Z"
+                }),
+                valid: false,
+            },
+            Case {
+                name: "executable digest is exact lowercase SHA-256",
+                instance: json!({
+                    "schema_version": "1",
+                    "method": "direct",
+                    "executable_path": "/home/user/.local/bin/pangram",
+                    "installed_version": "0.1.0",
+                    "target": "aarch64-unknown-linux-gnu",
+                    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "executable_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "installed_at": "2026-07-23T12:00:00Z"
+                }),
+                valid: false,
+            },
+            Case {
+                name: "receipt rejects a noncanonical installed version",
+                instance: json!({
+                    "schema_version": "1",
+                    "method": "direct",
+                    "executable_path": "/home/user/.local/bin/pangram",
+                    "installed_version": "0.01.0",
+                    "target": "aarch64-unknown-linux-gnu",
+                    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "executable_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "installed_at": "2026-07-23T12:00:00Z"
+                }),
+                valid: false,
             },
             Case {
                 name: "manager receipt cannot claim direct ownership",
@@ -186,6 +272,7 @@ fn local_state_and_update_schemas_preserve_closed_security_contracts() {
                     "installed_version": "0.1.0",
                     "target": "aarch64-apple-darwin",
                     "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "executable_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
                     "installed_at": "2026-07-23T12:00:00Z"
                 }),
                 valid: false,

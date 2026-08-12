@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use microck_pangram_cli::domain::{
@@ -9,7 +11,7 @@ use microck_pangram_cli::output::{
     ConfigGetStatus, ConfigPathStatus, DoctorCheck, DoctorCheckStatus, EnvelopeMeta, ErrorCategory,
     ErrorCode, ExitCode, McpClientStatus, McpMutationAction, McpMutationReport, McpMutationTarget,
     MutationAcknowledgement, NonEmptyAnalyses, ProgressEvent, Recovery, ResolvedCommand,
-    UpdateStatus, UpdateStatusKind,
+    UpdateManager, UpdateStatus, UpdateStatusKind,
 };
 use proptest::prelude::*;
 use schemars::JsonSchema;
@@ -351,8 +353,122 @@ fn output_status_constructors_and_deserializers_enforce_schema_constraints() {
         )
         .is_err()
     );
-    assert!(UpdateStatus::new(UpdateStatusKind::NoUpdate, "1.2", None, None).is_err());
-    assert!(UpdateStatus::new(UpdateStatusKind::NoUpdate, "1.2.3", None, None).is_ok());
+    assert!(UpdateStatus::new(UpdateStatusKind::NoUpdate, "1.2", None, None, None).is_err());
+    assert!(UpdateStatus::new(UpdateStatusKind::NoUpdate, "1.2.3", None, None, None).is_ok());
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::NoUpdate,
+            "1.2.3-alpha.1+build.5",
+            None,
+            None,
+            None,
+        )
+        .is_ok()
+    );
+    for invalid in ["01.2.3", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3+"] {
+        assert!(
+            UpdateStatus::new(UpdateStatusKind::NoUpdate, invalid, None, None, None).is_err(),
+            "{invalid} is not canonical SemVer"
+        );
+    }
+
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::NoUpdate,
+            "1.2.3",
+            Some("1.2.4".into()),
+            None,
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        UpdateStatus::new(UpdateStatusKind::UpdateAvailable, "1.2.3", None, None, None,).is_err()
+    );
+    for available in ["1.2.3", "1.2.3+new-build", "1.2.3-alpha.1"] {
+        assert!(
+            UpdateStatus::new(
+                UpdateStatusKind::UpdateAvailable,
+                "1.2.3",
+                Some(available.into()),
+                None,
+                None,
+            )
+            .is_err(),
+            "{available} must have greater SemVer precedence"
+        );
+    }
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::UpdateAvailable,
+            "1.2.3",
+            Some("1.2.4".into()),
+            None,
+            None,
+        )
+        .is_ok()
+    );
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::UpdateAvailable,
+            "1.2.3",
+            Some("1.2.4".into()),
+            Some(UpdateManager::Homebrew),
+            Some("brew upgrade Microck/pangram-cli/pangram".into()),
+        )
+        .is_ok()
+    );
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::UpdateAvailable,
+            "1.2.3",
+            Some("1.2.4".into()),
+            Some(UpdateManager::Homebrew),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::UpdateAvailable,
+            "1.2.3",
+            Some("1.2.4".into()),
+            Some(UpdateManager::Homebrew),
+            Some("brew upgrade pangram".into()),
+        )
+        .is_err()
+    );
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::UpdateAvailable,
+            "1.2.3",
+            Some("1.2.4".into()),
+            None,
+            Some("brew upgrade pangram".into()),
+        )
+        .is_err()
+    );
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::UpdateAvailable,
+            "1.2.3",
+            Some("1.2.4".into()),
+            Some(UpdateManager::Homebrew),
+            Some("brew upgrade\npangram".into()),
+        )
+        .is_err()
+    );
+    assert!(UpdateStatus::new(UpdateStatusKind::Updated, "1.2.4", None, None, None).is_ok());
+    assert!(
+        UpdateStatus::new(
+            UpdateStatusKind::Updated,
+            "1.2.4",
+            Some("1.2.4".into()),
+            None,
+            None,
+        )
+        .is_err()
+    );
 
     assert!(
         serde_json::from_value::<AuthStatus>(json!({
@@ -366,6 +482,24 @@ fn output_status_constructors_and_deserializers_enforce_schema_constraints() {
         serde_json::from_value::<UpdateStatus>(json!({
             "status": "no_update",
             "current_version": "v1.2.3"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<UpdateStatus>(json!({
+            "status": "update_available",
+            "current_version": "1.2.3",
+            "available_version": "1.2.4",
+            "manager": "apt",
+            "manager_command": "apt upgrade pangram"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<UpdateStatus>(json!({
+            "status": "updated",
+            "current_version": "1.2.4",
+            "manager_command": "brew upgrade pangram"
         }))
         .is_err()
     );
@@ -499,6 +633,19 @@ fn schema_accepts<T: JsonSchema>(value: &Value) -> bool {
     jsonschema::validator_for(&schema).unwrap().is_valid(value)
 }
 
+fn canonical_update_schema_accepts(data: &Value) -> bool {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("contracts/output.schema.json");
+    let schema: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .is_valid(&json!({
+            "schema_version": "1",
+            "command": "update_check",
+            "data": data,
+            "meta": {}
+        }))
+}
+
 #[test]
 fn derived_status_schemas_preserve_the_runtime_constraints() {
     assert!(schema_accepts::<MutationAcknowledgement>(
@@ -574,12 +721,70 @@ fn derived_status_schemas_preserve_the_runtime_constraints() {
         }],
         "extra": true
     })));
-    assert!(schema_accepts::<UpdateStatus>(
+    assert!(canonical_update_schema_accepts(
         &json!({"status": "no_update", "current_version": "1.2.3"})
     ));
-    assert!(!schema_accepts::<UpdateStatus>(
+    assert!(!canonical_update_schema_accepts(&json!({
+        "status": "no_update",
+        "current_version": "1.2.3",
+        "available_version": "1.2.4"
+    })));
+    assert!(!canonical_update_schema_accepts(&json!({
+        "status": "update_available",
+        "current_version": "1.2.3"
+    })));
+    assert!(canonical_update_schema_accepts(&json!({
+        "status": "update_available",
+        "current_version": "1.2.3",
+        "available_version": "1.2.4",
+        "manager": "homebrew",
+        "manager_command": "brew upgrade Microck/pangram-cli/pangram"
+    })));
+    assert!(!canonical_update_schema_accepts(&json!({
+        "status": "update_available",
+        "current_version": "1.2.3",
+        "available_version": "1.2.4",
+        "manager": "apt",
+        "manager_command": "apt upgrade pangram"
+    })));
+    assert!(!canonical_update_schema_accepts(&json!({
+        "status": "update_available",
+        "current_version": "1.2.3",
+        "available_version": "1.2.4",
+        "manager": "homebrew"
+    })));
+    assert!(!canonical_update_schema_accepts(&json!({
+        "status": "update_available",
+        "current_version": "1.2.3",
+        "available_version": "1.2.4",
+        "manager": "homebrew",
+        "manager_command": "brew upgrade pangram"
+    })));
+    assert!(canonical_update_schema_accepts(&json!({
+        "status": "updated",
+        "current_version": "1.2.4"
+    })));
+    assert!(!canonical_update_schema_accepts(&json!({
+        "status": "updated",
+        "current_version": "1.2.4",
+        "manager_command": "brew upgrade pangram"
+    })));
+    assert!(!canonical_update_schema_accepts(
         &json!({"status": "no_update", "current_version": "v1.2.3"})
     ));
+    assert!(canonical_update_schema_accepts(&json!({
+        "status": "no_update",
+        "current_version": "1.2.3-alpha.1+build.5"
+    })));
+    for invalid in ["01.2.3", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3+"] {
+        assert!(
+            !canonical_update_schema_accepts(&json!({
+                "status": "no_update",
+                "current_version": invalid
+            })),
+            "{invalid} is not canonical SemVer"
+        );
+    }
 }
 
 #[test]

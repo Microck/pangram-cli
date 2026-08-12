@@ -357,6 +357,16 @@ pub fn runtime_command() -> Command {
         .subcommand(task_status)
         .subcommand(task_wait);
 
+    let completions = Command::new("completions")
+        .about("Generate a shell completion script")
+        .arg(
+            Arg::new("SHELL")
+                .value_name("SHELL")
+                .required(true)
+                .value_parser(clap::value_parser!(clap_complete::aot::Shell))
+                .help("Shell whose completion script to generate"),
+        );
+
     Command::new(FULL_GRAMMAR.name)
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .version(env!("CARGO_PKG_VERSION"))
@@ -408,6 +418,7 @@ pub fn runtime_command() -> Command {
         .subcommand(mcp::command())
         .subcommand(mcp::agent_command())
         .subcommand(mcp::skills_command())
+        .subcommand(completions)
 }
 
 #[cfg(test)]
@@ -594,6 +605,17 @@ mod tests {
         try_parse(&["skills", "path"]).unwrap();
         try_parse(&["skills", "path", "pangram"]).unwrap();
         try_parse(&["skills", "path", "unknown"]).unwrap_err();
+    }
+
+    #[test]
+    fn completion_shell_vocabulary_is_exact_and_case_sensitive() {
+        for shell in grammar::COMPLETION_SHELLS {
+            try_parse(&["completions", shell]).unwrap();
+        }
+        for rejected in ["Bash", "power-shell", "pwsh", "nu"] {
+            try_parse(&["completions", rejected]).unwrap_err();
+        }
+        try_parse(&["completions"]).unwrap_err();
     }
 
     #[test]

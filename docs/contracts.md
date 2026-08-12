@@ -62,8 +62,10 @@ the protocol version and client capabilities; client information is optional.
 Phase 6 exposes text detection, ordinary task get/wait, bulk
 submit/get/wait/results, and capability-gated history and configuration tools.
 File detection, plagiarism, and combined analysis remain absent until Phase 7;
-update checks remain absent until Phase 8. There are no compatibility aliases
-or rejection-only placeholders for later tools.
+Phase 8 adds the explicit nonbillable `check_update` tool. Private `0.x`
+production builds advertise it but perform zero update-network activity and
+return typed `update_unavailable`. There are no compatibility aliases or
+rejection-only placeholders for later analysis tools.
 
 File-backed MCP input requires an explicit repeatable `--allow-file-root PATH`
 and handle-relative no-follow opening. Inline bulk items do not require a root;
@@ -84,6 +86,7 @@ rules, lives in [mcp-contract.md](mcp-contract.md).
 | Timestamps | RFC 3339 UTC strings ending in uppercase `Z` |
 | Durations | Non-negative integer milliseconds |
 | Hashes | Lowercase hexadecimal SHA-256 |
+| Update versions | Canonical SemVer 2.0.0 strings; comparison uses SemVer precedence |
 | Fractions | Number from 0.0 through 1.0 |
 | Percentages | Number from 0.0 through 100.0 |
 | Missing optional field | Omitted, not `null` |
@@ -960,6 +963,11 @@ NOT surface raw upstream text to the terminal or serialized error output.
 `network_timeout` is retryable only when no billable body was sent or the
 operation is a safe read. A timeout after an ambiguous billable send maps to
 `submission_outcome_unknown`.
+
+`update_replace_failed` is retryable only after the executable was replaced
+and protected pending state can finalize the matching receipt. Every failure
+before replacement preserves the installed executable and is not a retryable
+replacement state.
 
 The client paces every Pangram request with one shared time-based issue gate:
 request issue times are spaced at least `1/network.max_requests_per_second`
@@ -1917,6 +1925,12 @@ pangram update --yes
 
 Completions emit only the completion script.
 
+`pangram update --check` never prompts or installs. Bare `pangram update`
+prompts only when stdin, stdout, and stderr are all TTYs and `CI` is unset.
+Decline or interruption performs no mutation and exits 130. In CI or when any
+stream is redirected, bare update fails with `input_required` and exit 2.
+`pangram update --yes` is the sole noninteractive install form.
+
 ## 15. Local setup contract
 
 The configuration, credential, and diagnostics contract is normative in
@@ -1926,6 +1940,13 @@ The configuration, credential, and diagnostics contract is normative in
 
 The state and installation receipt are normative in
 [update-contract.md](update-contract.md).
+
+The contract fixes exact-byte manifest verification before parsing, the
+closed `UpdateStatus` field matrix, a production-empty private-build key ring,
+bounded untrusted inputs, install-location receipts with a protected mutation
+lock, a separate data-dir state lock with fixed lock order, candidate smoke
+before replacement, and receipt-only retry after replacement. Generated
+schemas and implementation must match that contract.
 
 ## 17. SQLite history schema
 

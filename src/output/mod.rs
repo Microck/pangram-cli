@@ -19,7 +19,7 @@ pub use value::{
     CommandEnvelope, ConfigGetStatus, ConfigListStatus, ConfigPathStatus, DoctorCheck,
     DoctorCheckStatus, DoctorStatus, EnvelopeMeta, McpClientStatus, McpMutationAction,
     McpMutationReport, McpMutationTarget, McpStatus, MutationAcknowledgement, NonEmptyAnalyses,
-    UpdateStatus, UpdateStatusKind,
+    UpdateManager, UpdateStatus, UpdateStatusKind,
 };
 
 mod projection;
@@ -36,6 +36,8 @@ pub enum OutputValidationError {
     AuthSuffixTooLong,
     #[error("{0} must use major.minor.patch numeric form")]
     InvalidVersion(&'static str),
+    #[error("invalid update status: {0}")]
+    InvalidUpdateStatus(&'static str),
     #[error("{0} has fixed retryability")]
     FixedRetryability(ErrorCode),
     #[error("{0} has fixed recovery guidance")]

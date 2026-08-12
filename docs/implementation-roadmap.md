@@ -498,16 +498,28 @@ updatable.
 4. Configure Tegami for change entries, version PRs, changelog, and lock.
 5. Configure target builds, archives, checksums, the Ed25519-signed update
    manifest, and artifact provenance.
-6. Implement direct-install receipts and signed atomic self-update.
+6. Implement the production-empty private `0.x` updater, then exact-byte
+   verification before parsing, bounded downloads and redirects, the closed
+   update-status matrix, install-location receipts with executable SHA-256,
+   separate protected state and mutation locks with one lock order,
+   staged-candidate smoke, atomic replacement, and protected receipt-only
+   finalization retry.
 7. Add package-manager formulas or manifests without letting the self-updater
    take ownership of manager installs.
+8. Add the explicit nonbillable MCP `check_update` tool and the TTY/`--yes`
+   confirmation contract. Keep direct installers blocked until portable
+   Ed25519 verification is proven on every clean-machine baseline.
 
 ### Tests
 
 - Fumadocs build, links, accessibility, and generated drift
 - exact-byte manifest signature verification
+- private-build zero-network and empty-key-ring proof
+- untrusted byte, ETag, redirect, archive, and executable limits
 - tamper, rollback, interruption, and atomic replacement
+- staged-candidate smoke and receipt-only post-replacement retry
 - direct versus manager-owned update behavior
+- explicit MCP check and interactive versus `--yes` confirmation
 - clean-machine install smoke tests for every supported channel
 
 ### Exit criteria

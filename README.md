@@ -113,6 +113,7 @@ Available today:
 | `pangram mcp` | Run or install the typed stdio MCP server |
 | `pangram agent` | Print the embedded agent usage guide |
 | `pangram skills` | List and load version-matched embedded skills |
+| `pangram completions` | Generate shell completion scripts |
 
 Planned:
 
@@ -120,7 +121,6 @@ Planned:
 | --- | --- |
 | `pangram plagiarism` | Run plagiarism checking |
 | `pangram analyze` | Run AI detection and plagiarism together |
-| `pangram completions` | Generate shell completions |
 | `pangram update` | Check for or install an eligible direct update |
 
 See [the CLI contract](docs/contracts.md) for the approved grammar, formats,

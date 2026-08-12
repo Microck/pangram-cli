@@ -839,42 +839,48 @@ rules remain in [mcp-contract.md](mcp-contract.md).
 
 The updater embeds Ed25519 public keys. It accepts a release only after:
 
-1. manifest schema validation
-2. detached signature verification over the exact downloaded manifest bytes
-3. target and version-policy match
-4. archive byte-size validation
-5. archive SHA-256 validation
-6. safe archive-layout and executable-size validation
+1. bounded download of detached signature and manifest bytes
+2. exact-byte signature verification before manifest decoding or parsing
+3. manifest schema, target, and version-policy validation
+4. archive size, SHA-256, layout, and executable-size validation
+5. staged-candidate version smoke
 
-Failure leaves the running executable untouched.
-
-The signed manifest is the single updater trust document. It binds artifact
-size and SHA-256. Key rotation requires an overlap release; downgrade is
-rejected; an equal version is no update.
+The signed manifest binds artifact size and SHA-256. Key rotation requires an
+overlap release; downgrade is
+rejected; an equal version is no update. Private `0.x` production builds embed
+an empty key ring, never contact update endpoints, and return typed
+`update_unavailable` until one authorized release enables the trust root.
 
 ### 15.2 Ownership
 
 An installation receipt is required for mutation. Its install method is always
 `direct`; it also includes the absolute executable path, version, target, and
-manifest identity. Package-manager detection never creates or adopts a
-receipt.
+manifest identity and exact executable SHA-256. Receipt `P.receipt.json` stays
+beside executable `P`, not in the data directory. Package managers never
+create or adopt a receipt.
 
-The updater compares the current executable to the receipt before replacement.
-Known package-manager paths are advisory only.
+The updater compares both current executable path and bytes to the receipt
+before replacement. A data-dir state lock permits read-only checks; protected
+`P.update.lock` serializes mutation for that executable. A path needing both
+locks always acquires state before executable. Known package-manager paths are
+advisory only; manager identity belongs to the distribution artifact.
 
-The direct installers own initial receipt creation. They verify the same
-manifest and archive contract, install atomically, smoke-test the version, then
-write the receipt. They do not edit shell profiles or PATH.
+Direct installers verify the same contract, smoke-test the staged candidate,
+install atomically, then finalize the receipt without editing PATH.
 
 ### 15.3 Replacement
 
 Download to the destination filesystem, verify, set executable permissions,
-and atomically replace. Platform-specific replacement behavior remains behind
-the updater module.
+and run the staged candidate's exact version smoke before atomically replacing
+the current binary. Every pre-replacement failure preserves the current
+executable byte for byte. Platform-specific replacement behavior remains
+behind the updater module.
 
 Windows replacement uses the verified new executable as a narrowly scoped
-post-parent helper. Receipt state advances only after replacement and a version
-smoke test. There is no installed-version collection or automatic rollback.
+post-parent helper. Protected pending state binds the one allowed replacement.
+After replacement, only receipt finalization for the exact pending executable
+hash may retry; no download, smoke, or replacement retries. There is no
+installed-version collection or automatic rollback.
 
 ## 16. Documentation and generated contracts
 

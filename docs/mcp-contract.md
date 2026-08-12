@@ -40,15 +40,19 @@ already implemented:
 | `get_bulk` | exactly one of `bulk_id`, `upstream_bulk_id` | none |
 | `wait_bulk` | exactly one of `bulk_id`, `upstream_bulk_id` | `timeout_ms` |
 | `get_bulk_results` | exactly one of `bulk_id`, `upstream_bulk_id`; `offset`, `limit` | none |
+| `check_update` | none | none |
 
 The gated history and configuration tools in this contract join that inventory
 only when their startup gate is enabled.
 
 Phase 6 does not advertise `detect_files`, `check_plagiarism`, or
 `analyze_text`. Phase 7 owns those operations after live conformance resolves
-their upstream contracts. Phase 6 does not advertise `check_update`; Phase 8
-owns update checks. The server has no alias, compatibility shim, hidden tool,
-or rejection-only placeholder for a later-phase operation.
+their upstream contracts. Phase 8 adds `check_update` as an explicit
+nonbillable read. It never installs, accepts no arguments, and requires no
+optional startup capability. Private `0.x` production builds perform zero
+update-network activity and return the canonical `update_unavailable` failure.
+The server has no alias, compatibility shim, hidden tool, or rejection-only
+placeholder for a later analysis operation.
 
 Every billable text submission requires positive `max_billable_units`. The
 server estimates locally and rejects the call before submission when the
@@ -136,6 +140,7 @@ Any tool request with `public_link: true` fails with
 | Local rerun | false | false | false | true |
 | Local delete/clear | false | true | false | false |
 | Configuration update | false | false | false | false |
+| Explicit update check | true | false | true | true |
 
 Annotations are hints, not authorization. Startup capability gates remain
 authoritative.
@@ -152,6 +157,7 @@ Each Phase 6 tool maps to one canonical command:
 | `history_list`, `history_search`, `history_rerun`, `history_delete`, `history_clear` | matching `history_*` command |
 | `history_get` | `history_show` |
 | `update_config` | `config_set` |
+| `check_update` | `update_check` |
 
 Successful tools return:
 

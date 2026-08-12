@@ -249,6 +249,7 @@ where
             };
             finish_raw_bytes(bytes, invocation)
         }
+        Some(("completions", sub)) => execute_completions(sub, invocation),
         // A bare literal-text reach (`pangram some text`) resolves to implicit
         // detection; the literal `-` reads stdin. A no-text reach can only
         // come from the non-rendering parsing hook because process-facing bare
@@ -283,6 +284,27 @@ where
             finish(outcome)
         }
     }
+}
+
+/// Generates one raw shell script from the same Clap tree used to parse the
+/// process. Library callers only validate argv and never write process-owned
+/// output; the compiled binary owns the script bytes on stdout.
+fn execute_completions(arguments: &ArgMatches, invocation: &InvocationContext<'_>) -> RunOutcome {
+    if !invocation.is_process_facing() {
+        return RunOutcome {
+            exit_code: 0,
+            clap_error: None,
+        };
+    }
+
+    let generator = arguments
+        .get_one::<clap_complete::aot::Shell>("SHELL")
+        .copied()
+        .expect("Clap requires and validates the completion shell");
+    let mut command = runtime_command();
+    let mut script = Vec::new();
+    clap_complete::aot::generate(generator, &mut command, FULL_GRAMMAR.name, &mut script);
+    finish_raw_bytes(&script, invocation)
 }
 
 /// Runs the blocking stdio server only for the real process entrypoint.

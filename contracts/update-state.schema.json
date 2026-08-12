@@ -17,10 +17,11 @@
       ]
     },
     "available_version": {
-      "type": [
-        "string"
-      ],
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SemVerString"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -28,6 +29,12 @@
     "schema_version",
     "last_checked_at"
   ],
+  "$defs": {
+    "SemVerString": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"
+    }
+  },
   "$id": "https://pangram.micr.dev/schemas/update-state-v1.json",
   "x-contract-owner": "rust:microck_pangram_cli::contracts"
 }

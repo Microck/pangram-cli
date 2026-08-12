@@ -74,6 +74,15 @@ pub(super) enum ArchiveFormat {
 }
 
 #[derive(JsonSchema)]
+#[serde(transparent)]
+pub(super) struct SemVerString(
+    #[schemars(regex(
+        pattern = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$"
+    ))]
+    String,
+);
+
+#[derive(JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct UpdateArtifact {
     pub target: Target,
@@ -93,14 +102,12 @@ pub(super) struct UpdateArtifact {
 pub(super) struct UpdateManifest {
     pub schema_version: String,
     pub channel: String,
-    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
-    pub version: String,
+    pub version: SemVerString,
     #[schemars(extend("format" = "date-time"))]
     pub published_at: String,
     #[schemars(url, regex(pattern = r"^https://"))]
     pub notes_url: String,
-    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
-    pub minimum_updater_version: String,
+    pub minimum_updater_version: SemVerString,
     #[schemars(length(min = 1))]
     pub artifacts: Vec<UpdateArtifact>,
 }
@@ -122,8 +129,7 @@ pub(super) struct UpdateState {
     #[schemars(extend("format" = "date-time"))]
     pub last_checked_at: String,
     pub etag: Option<String>,
-    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
-    pub available_version: Option<String>,
+    pub available_version: Option<SemVerString>,
 }
 
 #[derive(JsonSchema)]
@@ -133,11 +139,12 @@ pub(super) struct InstallReceipt {
     pub method: String,
     #[schemars(length(min = 1))]
     pub executable_path: String,
-    #[schemars(regex(pattern = r"^[0-9]+\.[0-9]+\.[0-9]+$"))]
-    pub installed_version: String,
+    pub installed_version: SemVerString,
     pub target: Target,
     #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
     pub manifest_sha256: String,
+    #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
+    pub executable_sha256: String,
     #[schemars(extend("format" = "date-time"))]
     pub installed_at: String,
 }

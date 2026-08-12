@@ -156,7 +156,7 @@ const MCP_CLIENTS: &[&str] = &[
     "droid",
     "antigravity",
 ];
-const SHELLS: &[&str] = &["bash", "zsh", "fish", "powershell", "elvish"];
+pub(crate) const COMPLETION_SHELLS: [&str; 5] = ["bash", "zsh", "fish", "powershell", "elvish"];
 
 const fn planned_argument(name: &'static str, kind: ArgumentKind, phase: Phase) -> ArgumentSpec {
     ArgumentSpec {
@@ -493,7 +493,7 @@ const DOCTOR_ARGUMENTS: &[ArgumentSpec] = &[
 
 #[rustfmt::skip]
 const COMPLETIONS_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("SHELL", SHELLS, true, false, Phase::DistributionAndUpdate),
+    positional("SHELL", &COMPLETION_SHELLS, true, false, Phase::DistributionAndUpdate).available(),
 ];
 
 const UPDATE_MODE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
@@ -559,7 +559,7 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         available_command(&["config", "set"], CommandKind::Command, CONFIG_SET_ARGUMENTS, &[], Phase::LocalSetup),
         available_command(&["config", "path"], CommandKind::Command, &[], &[], Phase::LocalSetup),
         available_command(&["doctor"], CommandKind::Command, DOCTOR_ARGUMENTS, &[], Phase::LocalSetup),
-        planned_command(&["completions"], CommandKind::Command, COMPLETIONS_ARGUMENTS, &[], Phase::DistributionAndUpdate),
+        available_command(&["completions"], CommandKind::Command, COMPLETIONS_ARGUMENTS, &[], Phase::DistributionAndUpdate),
         planned_command(&["update"], CommandKind::Command, UPDATE_ARGUMENTS, UPDATE_MODE_GROUP, Phase::DistributionAndUpdate),
     ],
 };

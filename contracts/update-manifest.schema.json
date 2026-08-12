@@ -10,8 +10,7 @@
       "const": "stable"
     },
     "version": {
-      "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "$ref": "#/$defs/SemVerString"
     },
     "published_at": {
       "type": "string",
@@ -24,8 +23,7 @@
       "pattern": "^https://"
     },
     "minimum_updater_version": {
-      "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "$ref": "#/$defs/SemVerString"
     },
     "artifacts": {
       "type": "array",
@@ -46,6 +44,10 @@
     "artifacts"
   ],
   "$defs": {
+    "SemVerString": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"
+    },
     "UpdateArtifact": {
       "type": "object",
       "properties": {
