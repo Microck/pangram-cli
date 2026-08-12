@@ -6,7 +6,7 @@ use crate::domain::{AnalysisStatus, CheckKind};
 
 use super::records::StoredSearchHit;
 use super::store::HistoryStore;
-use super::wire::{row_to_summary, wire_check_kind};
+use super::wire::{row_to_summary, wire_check_kind, wire_status};
 use super::{HistoryError, HistoryErrorCode};
 
 type SummaryCheckRow = (
@@ -24,6 +24,56 @@ impl HistoryStore {
     /// Most recent analyses first, for `history list`.
     pub fn list(&self, limit: u32, offset: u32) -> Result<Vec<StoredSearchHit>, HistoryError> {
         self.list_filtered(None, None, limit, offset)
+    }
+
+    /// Every saved queued or running analysis, independent of any paginated
+    /// or filtered history view.
+    pub fn list_unfinished(&self) -> Result<Vec<StoredSearchHit>, HistoryError> {
+        self.with_read_snapshot(|connection| {
+            certify_list_search_store(connection)?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT a.id, a.status,
+                            COALESCE((
+                              SELECT group_concat(k.check_kind, ',') FROM (
+                                SELECT check_kind FROM analysis_checks
+                                WHERE analysis_id = a.id
+                                ORDER BY check_index
+                              ) k
+                            ), ''),
+                            a.check_count, a.save_state, a.input_type, a.display_name, a.created_at
+                     FROM analyses a
+                     WHERE a.status IN (?1, ?2)
+                     ORDER BY a.created_at DESC, a.id",
+                )
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "list unfinished analyses",
+                    )
+                })?;
+            statement
+                .query_map(
+                    params![
+                        wire_status(AnalysisStatus::Queued),
+                        wire_status(AnalysisStatus::Running)
+                    ],
+                    row_to_summary,
+                )
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryUnavailable,
+                        "list unfinished analyses",
+                    )
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    HistoryError::from_sqlite(
+                        HistoryErrorCode::HistoryCorrupt,
+                        "list unfinished analyses",
+                    )
+                })
+        })
     }
 
     /// Most recent analyses first with closed parent/check filters.
@@ -62,7 +112,7 @@ impl HistoryStore {
             statement
                 .query_map(
                     params![
-                        status.map(super::wire::wire_status),
+                        status.map(wire_status),
                         check.map(wire_check_kind),
                         limit,
                         offset
@@ -228,7 +278,7 @@ fn certify_list_search_store(connection: &Connection) -> Result<(), HistoryError
 /// Proves the one-to-one typed relationship between analyses and their FTS5
 /// rows before list/search returns a page. Exact content projection is owned
 /// by full reads and destructive certification.
-fn certify_search_index(connection: &Connection) -> Result<(), HistoryError> {
+pub(super) fn certify_search_index(connection: &Connection) -> Result<(), HistoryError> {
     let corrupt: bool = connection
         .query_row(
             "SELECT EXISTS (

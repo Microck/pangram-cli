@@ -27,6 +27,7 @@ pub(super) fn task_status(
     global: GlobalFlags,
     streams: &dyn StreamTty,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let resolved = ResolvedCommand::TaskStatus;
     let output = resolve_policy(resolved, sub, &global, streams);
@@ -34,11 +35,17 @@ pub(super) fn task_status(
         .get_one::<String>("ID")
         .map(String::as_str)
         .unwrap_or_default();
-    let (task_id, analyzer, service) =
-        match prepare_task_identity(raw, resolved, root_matches, output, started) {
-            Ok(prepared) => prepared,
-            Err(outcome) => return outcome,
-        };
+    let (task_id, analyzer, service) = match prepare_task_identity(
+        raw,
+        resolved,
+        root_matches,
+        output,
+        started,
+        analyzer_source,
+    ) {
+        Ok(prepared) => prepared,
+        Err(outcome) => return outcome,
+    };
     let runtime = match new_runtime(resolved, output, started) {
         Ok(runtime) => runtime,
         Err(outcome) => return outcome,
@@ -69,6 +76,7 @@ pub(super) fn task_wait(
     global: GlobalFlags,
     streams: &dyn StreamTty,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let resolved = ResolvedCommand::TaskWait;
     let output = resolve_policy(resolved, sub, &global, streams);
@@ -80,11 +88,17 @@ pub(super) fn task_wait(
         Ok(timeout) => timeout,
         Err(outcome) => return outcome,
     };
-    let (task_id, analyzer, service) =
-        match prepare_task_identity(raw, resolved, root_matches, output, started) {
-            Ok(prepared) => prepared,
-            Err(outcome) => return outcome,
-        };
+    let (task_id, analyzer, service) = match prepare_task_identity(
+        raw,
+        resolved,
+        root_matches,
+        output,
+        started,
+        analyzer_source,
+    ) {
+        Ok(prepared) => prepared,
+        Err(outcome) => return outcome,
+    };
     let runtime = match new_runtime(resolved, output, started) {
         Ok(runtime) => runtime,
         Err(outcome) => return outcome,
@@ -153,6 +167,7 @@ fn prepare_task_identity(
     root_matches: &ArgMatches,
     output: detect::ResolvedOutput,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> Result<
     (
         UpstreamTaskId,
@@ -164,7 +179,8 @@ fn prepare_task_identity(
     let Ok(local_id) = raw.parse::<AnalysisId>() else {
         let task_id = parse_upstream_task_id(raw)
             .map_err(|error| detect::failure_outcome(resolved, output, started, error))?;
-        let (analyzer, service) = prepare(resolved, root_matches, output, started)?;
+        let (analyzer, service) =
+            prepare(resolved, root_matches, output, started, analyzer_source)?;
         return Ok((task_id, analyzer, service));
     };
 
@@ -190,7 +206,8 @@ fn prepare_task_identity(
             detect::failure_outcome(resolved, output, started, local_task_unresolvable())
         })?;
     drop(store);
-    let (analyzer, service) = prepare_from_service(resolved, service, output, started)?;
+    let (analyzer, service) =
+        prepare_from_service(resolved, service, output, started, analyzer_source)?;
     Ok((task_id, analyzer, service))
 }
 

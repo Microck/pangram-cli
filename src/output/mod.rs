@@ -400,6 +400,19 @@ impl CanonicalError {
     }
 }
 
+/// The adapter-independent missing-credential failure and recovery guidance.
+pub(crate) fn missing_api_key_error() -> CanonicalError {
+    let recovery = Recovery::new("Configure a persistent key or set PANGRAM_API_KEY.")
+        .and_then(|recovery| recovery.with_command("pangram auth"))
+        .expect("fixed recovery text is non-empty");
+    CanonicalError::new(
+        ErrorCode::MissingApiKey,
+        "No Pangram API key is configured.",
+    )
+    .and_then(|error| error.with_recovery(recovery))
+    .expect("recovery is valid for missing_api_key")
+}
+
 #[derive(Deserialize)]
 struct CanonicalErrorWire {
     code: ErrorCode,

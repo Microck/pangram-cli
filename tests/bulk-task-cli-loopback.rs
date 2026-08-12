@@ -2,7 +2,7 @@
 //! 4 fixture. No mocks, no live Pangram, no real credentials.
 //!
 //! Each test boots the Axum fixture on an ephemeral loopback port, points the
-//! `dev-tools`-gated `PANGRAM_DETECT_ENDPOINT` override at it (one loopback
+//! development-only compiled test driver at it (one loopback
 //! set derives both the task and bulk routes), runs the compiled `pangram`
 //! binary in an isolated config/data environment, and asserts the exact
 //! stdout envelope, stderr separation, exit code, and the recorded upstream

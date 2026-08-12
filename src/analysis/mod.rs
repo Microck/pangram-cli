@@ -59,3 +59,160 @@ pub use upstream::{
 
 pub use crate::config::MAX_REQUESTS_PER_SECOND;
 pub use tokio::time::{Duration, Instant};
+
+use secrecy::SecretString;
+
+use crate::config::{ConfigError, ConfigService};
+use crate::output::{CanonicalError, ErrorCode};
+
+/// Selects the immutable analysis dependency used by one adapter execution.
+/// Production resolves configuration and credentials at the point of use;
+/// the development driver supplies a loopback-validated analyzer directly.
+#[derive(Clone, Default)]
+pub(crate) enum AnalyzerSource {
+    #[default]
+    Production,
+    #[cfg(feature = "dev-tools")]
+    Injected(Box<Analyzer>),
+}
+
+impl AnalyzerSource {
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn resolve(&self, service: &ConfigService) -> Result<Analyzer, CanonicalError> {
+        match self {
+            Self::Production => {
+                let resolution = service
+                    .credentials()
+                    .resolve(service.overrides())
+                    .map_err(credential_error)?;
+                let Some(api_key) = resolution.key_for_client() else {
+                    return Err(crate::output::missing_api_key_error());
+                };
+                build_analyzer(service, api_key)
+            }
+            #[cfg(feature = "dev-tools")]
+            Self::Injected(analyzer) => Ok(analyzer.as_ref().clone()),
+        }
+    }
+
+    #[cfg(feature = "dev-tools")]
+    pub(crate) fn injected(analyzer: Analyzer) -> Self {
+        Self::Injected(Box::new(analyzer))
+    }
+}
+
+/// Maps configuration failures into the canonical categories shared by every
+/// adapter that constructs an analyzer or resolves credentials.
+pub(crate) fn config_error(error: ConfigError) -> CanonicalError {
+    let code = match &error {
+        ConfigError::InsecurePermissions | ConfigError::RestrictionFailed => {
+            ErrorCode::InsecureConfigPermissions
+        }
+        _ => ErrorCode::InvalidConfig,
+    };
+    CanonicalError::new(code, error.to_string()).unwrap_or_else(|_| {
+        CanonicalError::new(code, "local configuration is invalid").expect("fixed message")
+    })
+}
+
+/// Maps failures from the credential store or effective-key resolution.
+/// Only this credential-owned boundary may classify an invalid value as an
+/// invalid API key; general configuration values remain `invalid_config`.
+pub(crate) fn credential_error(error: ConfigError) -> CanonicalError {
+    let code = match &error {
+        ConfigError::InsecurePermissions | ConfigError::RestrictionFailed => {
+            ErrorCode::InsecureConfigPermissions
+        }
+        ConfigError::InvalidValue { .. } => ErrorCode::InvalidApiKey,
+        _ => ErrorCode::InvalidConfig,
+    };
+    CanonicalError::new(code, error.to_string()).unwrap_or_else(|_| {
+        CanonicalError::new(code, "credential resolution failed").expect("fixed message")
+    })
+}
+
+/// Builds the one adapter-facing analyzer from effective configuration.
+/// Production endpoints stay fixed inside `UpstreamClient`. Loopback fixtures
+/// construct a client through the typed test-only seam instead of changing
+/// endpoint selection in the product binary.
+#[allow(clippy::result_large_err)]
+pub(crate) fn build_analyzer(
+    service: &ConfigService,
+    api_key: SecretString,
+) -> Result<Analyzer, CanonicalError> {
+    let config = service.effective().map_err(config_error)?;
+    let rate = config
+        .network
+        .as_ref()
+        .and_then(|network| network.max_requests_per_second);
+    let client = map_client(UpstreamClient::production(
+        api_key,
+        AnalysisConfig::production(rate),
+    ))?;
+    Ok(Analyzer::from_client(client))
+}
+
+#[allow(clippy::result_large_err)]
+fn map_client(
+    client: Result<UpstreamClient, AnalysisError>,
+) -> Result<UpstreamClient, CanonicalError> {
+    client.map_err(|error| {
+        CanonicalError::new(
+            ErrorCode::UpstreamError,
+            format!("could not build the Pangram client: {error}"),
+        )
+        .and_then(|error| error.with_contextual_retryability(false))
+        .expect("static template")
+    })
+}
+
+/// Builds the development driver's loopback-only analyzer. URL validation
+/// remains inside the analysis module, and its production request policy is
+/// identical to the shipped client apart from the endpoint set.
+#[cfg(feature = "dev-tools")]
+#[allow(clippy::result_large_err)]
+pub(crate) fn build_loopback_analyzer(
+    base_url: &str,
+    api_key: SecretString,
+) -> Result<Analyzer, CanonicalError> {
+    let endpoints = UpstreamEndpoints::loopback(base_url).map_err(|_| {
+        CanonicalError::new(
+            ErrorCode::InvalidConfig,
+            "the fixture endpoint must be an HTTP loopback base URL",
+        )
+        .expect("fixed URL validation error")
+    })?;
+    let client = map_client(UpstreamClient::for_loopback(
+        api_key,
+        AnalysisConfig::production(None),
+        endpoints,
+    ))?;
+    Ok(Analyzer::from_client(client))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{config_error, credential_error};
+    use crate::config::ConfigError;
+    use crate::output::ErrorCode;
+
+    #[test]
+    fn general_invalid_values_are_configuration_errors() {
+        let error = config_error(ConfigError::InvalidValue {
+            key: "tui.keymap".into(),
+            reason: "must be regular or vim".into(),
+        });
+
+        assert_eq!(error.code(), ErrorCode::InvalidConfig);
+    }
+
+    #[test]
+    fn credential_invalid_values_are_api_key_errors() {
+        let error = credential_error(ConfigError::InvalidValue {
+            key: "PANGRAM_API_KEY".into(),
+            reason: "must be valid UTF-8 when set".into(),
+        });
+
+        assert_eq!(error.code(), ErrorCode::InvalidApiKey);
+    }
+}

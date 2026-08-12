@@ -152,16 +152,6 @@ fn target_not_found() -> HistoryError {
     )
 }
 
-/// Certifies and reconstructs every analysis in identity order with exactly
-/// one parent/FTS query, one checks query, and one task-evidence query.
-pub(super) fn certify_analysis_batch(
-    connection: &Connection,
-    include_input: bool,
-) -> Result<Vec<crate::domain::Analysis<crate::output::CanonicalError>>, HistoryError> {
-    certify_analysis_batch_inner(connection, include_input, true, false, None, None)
-        .map(|batch| batch.canonical)
-}
-
 /// Certifies every analysis without retaining reconstructed return values.
 /// Destructive mutation preflights use this exact whole-store projection.
 pub(super) fn certify_analysis_store(connection: &Connection) -> Result<(), HistoryError> {

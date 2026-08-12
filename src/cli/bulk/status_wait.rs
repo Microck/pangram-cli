@@ -22,6 +22,7 @@ pub(super) fn bulk_status(
     global: GlobalFlags,
     streams: &dyn StreamTty,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let resolved = ResolvedCommand::BulkStatus;
     let output = resolve_policy(resolved, sub, &global, streams);
@@ -33,10 +34,11 @@ pub(super) fn bulk_status(
         Ok(id) => id,
         Err(error) => return detect::failure_outcome(resolved, output, started, error),
     };
-    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
-        Ok(prepared) => prepared,
-        Err(outcome) => return outcome,
-    };
+    let (analyzer, service) =
+        match prepare(resolved, root_matches, output, started, analyzer_source) {
+            Ok(prepared) => prepared,
+            Err(outcome) => return outcome,
+        };
     let runtime = match new_runtime(resolved, output, started) {
         Ok(runtime) => runtime,
         Err(outcome) => return outcome,
@@ -97,6 +99,7 @@ pub(super) fn bulk_wait(
     global: GlobalFlags,
     streams: &dyn StreamTty,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let resolved = ResolvedCommand::BulkWait;
     let output = resolve_policy(resolved, sub, &global, streams);
@@ -112,10 +115,11 @@ pub(super) fn bulk_wait(
         Ok(timeout) => timeout,
         Err(outcome) => return outcome,
     };
-    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
-        Ok(prepared) => prepared,
-        Err(outcome) => return outcome,
-    };
+    let (analyzer, service) =
+        match prepare(resolved, root_matches, output, started, analyzer_source) {
+            Ok(prepared) => prepared,
+            Err(outcome) => return outcome,
+        };
     let runtime = match new_runtime(resolved, output, started) {
         Ok(runtime) => runtime,
         Err(outcome) => return outcome,

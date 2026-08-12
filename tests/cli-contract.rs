@@ -10,7 +10,7 @@ use serde_json::Value;
 mod harness;
 
 use harness::{
-    FORBIDDEN_NETWORK_APIS, FORBIDDEN_NETWORK_ENDPOINTS, HELP, PHASE_4_RUNTIME_DEPENDENCIES,
+    FORBIDDEN_NETWORK_APIS, FORBIDDEN_NETWORK_ENDPOINTS, HELP, PHASE_5_RUNTIME_DEPENDENCIES,
     PLANNED_TOP_LEVEL_COMMANDS, argument, code_before_line_comment, command, pangram,
     rust_source_paths,
 };
@@ -39,6 +39,26 @@ fn spawns_are_credential_and_environment_hermetic() {
     assert_eq!(body["data"]["source"], "none");
 }
 
+#[cfg(feature = "dev-tools")]
+#[test]
+fn loopback_test_driver_rejects_non_loopback_without_echoing_the_url() {
+    let hostile = "https://example.com/private?token=fixture-secret";
+    let output = Command::new(env!("CARGO_BIN_EXE_pangram-test-driver"))
+        .arg(hostile)
+        .env("PANGRAM_API_KEY", "synthetic-test-key")
+        .output()
+        .expect("run test driver");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert_eq!(
+        stderr,
+        "pangram-test-driver: the fixture endpoint must be an HTTP loopback base URL\n"
+    );
+    assert!(!stderr.contains(hostile));
+}
+
 #[test]
 fn short_help_matches_the_exact_help_contract() {
     let output = pangram().arg("-h").output().unwrap();
@@ -53,8 +73,8 @@ fn bare_invocation_with_an_empty_stdin_is_input_required_not_help() {
     // A compiled-binary spawn gets a non-TTY (null) stdin: bare dispatch
     // evaluates the source before any help surface, so an empty stdin is the
     // canonical input_required usage error (exit 2), never help text. The
-    // all-TTY help fallback cannot be exercised without a real terminal; the
-    // PTY harness owns that path.
+    // all-TTY TUI route cannot be exercised without a real terminal; the PTY
+    // harness owns that path.
     let output = pangram().output().unwrap();
 
     assert_eq!(output.status.code(), Some(2));
@@ -64,6 +84,62 @@ fn bare_invocation_with_an_empty_stdin_is_input_required_not_help() {
     let body: Value = serde_json::from_str(stdout.trim_end()).unwrap();
     assert_eq!(body["command"], "detect");
     assert_eq!(body["error"]["code"], "input_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn bare_invocation_with_tty_stdin_and_redirected_stdout_is_input_required() {
+    use std::process::Stdio;
+
+    use portable_pty::{NativePtySystem, PtySize, PtySystem};
+
+    let pair = NativePtySystem::default()
+        .openpty(PtySize::default())
+        .expect("open native pseudo-terminal");
+    let tty_path = pair.master.tty_name().expect("PTY has a slave path");
+    let stdin = std::fs::File::open(&tty_path).expect("open PTY stdin");
+    let stderr = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&tty_path)
+        .expect("open PTY stderr");
+
+    let output = pangram()
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(stderr)
+        .output()
+        .expect("run pangram with mixed terminal streams");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("Usage:"), "not help:\n{stdout}");
+    let body: Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(body["command"], "detect");
+    assert_eq!(body["error"]["code"], "input_required");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn history_export_flush_failure_exits_general_failure() {
+    use std::process::Stdio;
+
+    // An empty Markdown export is smaller than BufWriter's default capacity,
+    // so /dev/full accepts no bytes only when the exporter flushes. This
+    // compiled-process check guards the raw-export exit contract at the
+    // adapter boundary rather than only testing the shared writer directly.
+    let output = pangram()
+        .args(["history", "export", "--format", "markdown"])
+        .stdout(Stdio::from(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .expect("open /dev/full"),
+        ))
+        .output()
+        .expect("run history export with a full output device");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -480,7 +556,7 @@ fn cargo_metadata_reports_the_exact_runtime_dependencies() {
         .filter(|dependency| dependency["kind"].is_null())
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
-    let expected: BTreeSet<_> = PHASE_4_RUNTIME_DEPENDENCIES.iter().copied().collect();
+    let expected: BTreeSet<_> = PHASE_5_RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
 }
 
@@ -571,7 +647,12 @@ fn production_endpoints_are_analysis_owned_constants() {
         }
         for (line_index, line) in source.lines().enumerate() {
             let code = code_before_line_comment(line);
-            for forbidden in ["PANGRAM_ENDPOINT", "PANGRAM_API_URL", "endpoint_override"] {
+            for forbidden in [
+                "PANGRAM_DETECT_ENDPOINT",
+                "PANGRAM_ENDPOINT",
+                "PANGRAM_API_URL",
+                "endpoint_override",
+            ] {
                 if code.contains(forbidden) {
                     override_violations.push(format!(
                         "{}:{} contains {forbidden:?}",

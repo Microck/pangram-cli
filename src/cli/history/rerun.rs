@@ -21,6 +21,7 @@ pub(super) fn execute(
     output: ResolvedOutput,
     started: crate::domain::UtcTimestamp,
     streams: &dyn StreamTty,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let original_id = request.id.expect("rerun requires ID");
     let original = match store {
@@ -33,54 +34,17 @@ pub(super) fn execute(
             Err(error) => return failed(output, started, error.into_canonical()),
         },
     };
-    let (text, origin, name, retained_input) = match original.input() {
-        Some(crate::domain::AnalysisInput::Text(input))
-            if original.checks().len() == 1
-                && matches!(
-                    original.checks().first(),
-                    Some(crate::domain::Check::AiDetection(_))
-                ) =>
-        {
-            match input.text.clone() {
-                Some(text) => (
-                    text,
-                    input.origin(),
-                    input.name().map(str::to_owned),
-                    crate::domain::AnalysisInput::Text(input.clone()),
-                ),
-                None => return failed(output, started, super::unresolvable()),
-            }
-        }
-        _ => return failed(output, started, super::unresolvable()),
+    // The shared analysis seam resolves every retained-input eligibility and
+    // integrity rule before credential lookup or network work. Keep the text
+    // only because automatic history persistence needs the submitted content
+    // after the analyzer consumes the private request.
+    let analysis_request = match crate::analysis::AnalysisRequest::from_saved_rerun(&original) {
+        Some(request) => request,
+        None => return failed(output, started, super::unresolvable()),
     };
+    let text = analysis_request.text().to_owned();
 
-    // Eligibility and retained-plaintext integrity are fully established
-    // before credentials or billable work. Construction uses the same
-    // production request/input owner as a fresh detect submission.
-    let word_count = match detect::inputs::validate_text_eligibility(&text) {
-        Ok(word_count) => word_count,
-        Err(()) => return failed(output, started, super::unresolvable()),
-    };
-    let validation_request = crate::analysis::AnalysisRequest::new(
-        text.clone(),
-        origin,
-        name.clone(),
-        word_count,
-        true,
-        false,
-    );
-    if validation_request.input() != retained_input {
-        return failed(output, started, super::unresolvable());
-    }
-    let analysis_request =
-        crate::analysis::AnalysisRequest::new(text.clone(), origin, name, word_count, false, false)
-            .with_rerun_of(original_id);
-
-    let api_key = match detect::resolve_api_key(service) {
-        Ok(key) => key,
-        Err(error) => return failed(output, started, error),
-    };
-    let analyzer = match detect::build_analyzer(service, api_key) {
+    let analyzer = match analyzer_source.resolve(service) {
         Ok(analyzer) => analyzer,
         Err(error) => return failed(output, started, error),
     };

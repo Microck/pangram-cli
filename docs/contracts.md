@@ -1085,9 +1085,8 @@ GLOBAL:
 
 Resolution:
 
-- no command, no input, and stdin, stdout, and stderr all TTYs: TUI (the TUI
-  arrives in Phase 5; before it is compiled, that otherwise-TUI launch falls
-  back to successful help text exactly as bare `pangram --help`)
+- no command, no input, and stdin, stdout, and stderr all TTYs: enter the TUI
+  alternate-screen Analyze route
 - no command, literal text: detect. Every bare token that is not a compiled
   subcommand and does not begin with `-` is literal text, including tokens
   that spell planned (not yet compiled) command names; those are analyzed as
@@ -1101,8 +1100,123 @@ Resolution:
 - literal `-`: stdin
 
 Bare dispatch evaluates the source before any help or usage surface: a bare
-piped stdin never prints help, and only the all-TTY bare launch uses the
-pre-TUI successful-help fallback.
+piped stdin never prints help. A bare all-TTY process launch bypasses the help
+surface and enters the TUI.
+
+An all-TTY bare launch enters the alternate-screen Analyze route. The initial
+interactive surface has these observable boundaries:
+
+- `Analyze`, `Active`, `History`, and `Settings` are reachable through the
+  regular keymap with `Analyze` selected first. The Vim keymap adds its
+  documented navigation keys without stealing printable input from the text
+  composer.
+- text AI detection is the first positive analysis capability and must enter
+  the shared `Analyzer`. File input, plagiarism, and combined analysis remain
+  visible but unavailable until their owning implementation phases; activating
+  an unavailable control makes no request and spends no Pangram credit.
+- While the text composer owns focus and no overlay covers it, the terminal
+  cursor is visible at the canonical edit position. The composer derives
+  horizontal and vertical scroll to keep that position on-screen. Leaving the
+  composer focus hides the cursor.
+- The full-screen session enables bracketed paste and disables it through the
+  same idempotent restoration path as raw mode. One paste is one literal
+  composer edit, including tabs and line breaks; its bytes never become
+  navigation, toggle, help, or submit commands. A covered composer, another
+  focus, or the resize-required surface ignores the paste.
+- terminals at least 120 columns wide render route rail, center workspace, and
+  inspector as three stable areas. Widths 80 through 119 render top tabs and
+  place inspector content below the center content. Any viewport below 80x24
+  renders a resize overlay without changing application state.
+- normal keyboard exit is the focusable `Quit` command-bar action. Ctrl+C is
+  always an interruption. No unlisted single-key quit shortcut is implied by
+  this contract.
+- Settings changes commit through the same typed configuration service used by
+  the CLI and become visible only after persistence succeeds. Enabling local
+  history requires an explicit plaintext-retention warning and confirmation;
+  cancelling that overlay leaves the disabled default unchanged.
+- Update-preference onboarding advertises an Escape Back action only when the
+  credential setup overlay is reachable. With a configured credential, the
+  preference remains required and no inert Back action is shown.
+- eligible intro playback remains unconsumed while the viewport is below
+  80x24. Missing approved source geometry or logo rights suppresses generated
+  intro frames but does not block the reducer, Analyze workflow, layout, or
+  terminal restoration.
+
+The TUI Active route is an ID-keyed union of in-session operations and every
+saved unfinished analysis. A dedicated certified SQLite read loads the complete
+queued/running union independently of the filtered, newest-50 History display
+page. Queued and running summaries merge into Active without duplicating an
+in-session entry.
+A newly accepted in-session entry precedes saved entries and becomes the
+ID-owned selection. Up, Down, Home, End, and Vim `j`/`k` traverse every entry;
+the derived six-row window follows that selection without a separate mutable
+scroll position.
+A matching progress event advances only that analysis to running. A returned
+terminal summary, successful deletion, or matching terminal analysis event
+removes only that exact ID. Omission from a later History page does not remove
+an Active entry because search, filters, and the 50-record page limit can omit
+an otherwise unfinished saved analysis.
+
+The TUI History route uses the same certified SQLite records and closed filters
+as the noninteractive history commands. Disabling automatic history does not
+hide records already stored. It shows at most the newest 50 matching records,
+labels that value as `Showing N` rather than a total count, and includes each
+record's status, ordered checks, save state, display name, and timestamp.
+Each summary occupies exactly one terminal row. The display name is clipped at
+an extended-grapheme boundary to the remaining terminal-cell width, so wide
+Unicode cannot wrap into another record.
+Status cycles through all, queued, running, succeeded, failed, and partial;
+check cycles through all, AI detection, and plagiarism. Filter changes reload
+immediately. Search applies the literal query only when Enter is pressed. One
+history operation may be pending at a time, so repeated activation cannot
+duplicate reads, mutations, exports, or billable reruns. Selection is owned by
+analysis ID and survives a reload when that ID remains present.
+
+Opening a selected record loads `canonical_analysis(ID, false)`. Retained text,
+original paths, and extracted text never enter TUI state or rendered cells.
+Detail and every diagnostic still pass through terminal sanitization.
+Completed Analyze results and loaded History detail expose every ordered AI
+segment and plagiarism match through one ID-owned result viewport; projection
+never truncates evidence. Each AI segment shows its canonical label, text,
+confidence, start and end offsets, word and token counts, AI-assistance
+score, and humanizer score and decision. Result paging budgets
+rendered terminal rows at the active content width. Provider-authored text is
+sanitized, split at extended-grapheme boundaries without clipping, and its
+continuation rows remain navigable even when one evidence value is taller than
+the viewport. Up and Down move one result row, PageUp and PageDown move six
+rows, and Home and End move to the first and last row. Vim adds
+`k`/`j`, Ctrl+u/Ctrl+d, and `gg`/`G`. Loading a different analysis starts at
+its first result row. Tab and Shift+Tab leave or enter the viewport.
+After ordered evidence, the shared projection shows canonical provider,
+version, aggregate task IDs, bulk ID, submission and completion times, then
+per-check task IDs in canonical check order. It omits absent identities and
+sanitizes every upstream value before rendering. Save state and actions follow
+that provenance block.
+
+Rerun is a focused action labeled as billable; activating it is the explicit
+request and does not add a second confirmation. It reconstructs and validates
+the retained text inside the shared history/analysis module before credential
+resolution, creates a fresh analysis with `rerun_of`, always requests no public
+dashboard link, and never implies manual save. The current automatic-history setting
+still determines whether a successful rerun is saved automatically.
+
+Delete exists only in the selected record's contextual action menu. Enter on
+Delete opens a confirmation whose default is Cancel, a second Enter therefore
+cancels, `Y` confirms, and `N` or Escape cancels. A bare `d` never mutates
+history. The selected row remains visible until the real deletion returns.
+After either a clean deletion or a deletion that committed before a WAL
+checkpoint warning, History reloads the current criteria so the screen matches
+the committed database. A pre-commit failure preserves the row and shows one
+sanitized notice.
+
+Export means all certified history records. Its overlay defaults to JSONL,
+redacted content, and Cancel; Markdown is the other format. Full content
+requires a separate explicit confirmation. Confirming an export restores the
+terminal and leaves the interactive loop before writing any stdout byte, then
+uses the same certified streaming exporter as `history export`. A history
+failure before output exits 7 with no export prefix. An output or flush failure
+exits 1 and emits no secondary stdout document. Cancelling stays in History and
+writes nothing.
 
 Source-category and content rules:
 

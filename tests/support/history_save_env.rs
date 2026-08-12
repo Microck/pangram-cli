@@ -28,6 +28,10 @@ pub fn pangram() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pangram"))
 }
 
+pub fn test_driver() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pangram-test-driver"))
+}
+
 /// An isolated invocation: credential, config, and data state rooted in one
 /// temporary directory, with `CI` set (never interactive) and a synthetic
 /// key. Unlike the pure-protocol suites this one keeps a handle on the data
@@ -67,13 +71,21 @@ impl Isolated {
     }
 
     pub fn command(&self, endpoint: &str) -> Command {
-        let mut command = pangram();
-        command
-            .env("PANGRAM_API_KEY", SYNTHETIC_KEY)
-            .env("PANGRAM_DETECT_ENDPOINT", endpoint);
+        let mut command = test_driver();
+        command.env("PANGRAM_API_KEY", SYNTHETIC_KEY).arg(endpoint);
         for (key, value) in &self.env {
             command.env(key, value);
         }
+        command
+    }
+
+    /// Runs the shipped binary for paths that must fail before credential
+    /// resolution or network access. The loopback driver needs a key to
+    /// construct its injected analyzer, so using it here would test the
+    /// driver's preflight instead of the product's local error ordering.
+    pub fn command_without_key(&self) -> Command {
+        let mut command = self.product_command();
+        command.env_remove("PANGRAM_API_KEY");
         command
     }
 
@@ -83,7 +95,7 @@ impl Isolated {
     /// intended transition acknowledgment, not a failure.
     pub fn enable_history(&self) {
         let output = self
-            .command("http://127.0.0.1:1")
+            .product_command()
             .args(["config", "set", "history.enabled", "true"])
             .output()
             .expect("run config set");
@@ -93,10 +105,18 @@ impl Isolated {
     /// Runs a `config set` invocation directly so a test can assert its
     /// exact stdout/stderr/exit (used by the ADR 0004 warning transitions).
     pub fn config_set(&self, key: &str, value: &str) -> std::process::Output {
-        self.command("http://127.0.0.1:1")
+        self.product_command()
             .args(["config", "set", key, value])
             .output()
             .expect("run config set")
+    }
+
+    fn product_command(&self) -> Command {
+        let mut command = pangram();
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
+        command
     }
 
     /// The history directory Packet C would create lazily on first open.

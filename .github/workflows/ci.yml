@@ -109,6 +109,56 @@ jobs:
           git status --short
           test -z "$(git status --porcelain --untracked-files=all)"
 
+  tui-acceptance:
+    name: TUI acceptance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        # dtolnay/rust-toolchain master, pinned 2026-07-28
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.97.1"
+      - name: Install Node.js
+        # actions/setup-node v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install TUI acceptance dependencies
+        run: npm ci --ignore-scripts
+      - name: Audit TUI acceptance dependencies
+        if: runner.os == 'Linux'
+        run: npm audit --audit-level=critical
+      - name: Build product and loopback acceptance binaries
+        run: >-
+          cargo build --locked --all-features
+          --bin pangram --bin pangram-test-driver
+      - name: Run TUI acceptance tests
+        env:
+          PANGRAM_BIN: ${{ github.workspace }}/target/debug/pangram
+          PANGRAM_TEST_DRIVER_BIN: ${{ github.workspace }}/target/debug/pangram-test-driver
+        run: npm run test:tui
+      - name: Upload sanitized TUI failure artifacts
+        if: failure()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tui-acceptance-${{ runner.os }}
+          path: tools/tui-acceptance/.artifacts/
+          include-hidden-files: true
+          if-no-files-found: warn
+
   windows-credential-acl:
     name: Windows credential ACL
     runs-on: windows-latest

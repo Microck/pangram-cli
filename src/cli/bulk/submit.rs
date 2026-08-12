@@ -25,6 +25,7 @@ pub(super) fn bulk_submit(
     global: GlobalFlags,
     streams: &dyn StreamTty,
     started: UtcTimestamp,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let resolved = ResolvedCommand::BulkSubmit;
     let output = resolve_policy(resolved, sub, &global, streams);
@@ -94,10 +95,11 @@ pub(super) fn bulk_submit(
     // Actual submission: only accepted work (a 202) keeps the pipelines. A
     // local observation failure after acceptance changes the local status
     // and exits 1, never a top-level failure envelope.
-    let (analyzer, service) = match prepare(resolved, root_matches, output, started) {
-        Ok(prepared) => prepared,
-        Err(outcome) => return outcome,
-    };
+    let (analyzer, service) =
+        match prepare(resolved, root_matches, output, started, analyzer_source) {
+            Ok(prepared) => prepared,
+            Err(outcome) => return outcome,
+        };
 
     let runtime = match new_runtime(resolved, output, started) {
         Ok(runtime) => runtime,

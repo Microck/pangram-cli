@@ -252,7 +252,7 @@ impl<R, E> CheckState<R, E> {
         }
     }
 
-    fn upstream(&self) -> Option<&UpstreamIdentity> {
+    pub(crate) fn upstream(&self) -> Option<&UpstreamIdentity> {
         match self {
             Self::Queued { upstream }
             | Self::Running { upstream }

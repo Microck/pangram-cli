@@ -6,7 +6,7 @@
 //! boundary.
 
 use crate::domain::{
-    Analysis, AnalysisId, AnalysisInput, Sha256Hash, TextInput, TextOrigin, UpstreamTaskId,
+    Analysis, AnalysisId, AnalysisInput, Check, Sha256Hash, TextInput, TextOrigin, UpstreamTaskId,
 };
 use crate::output::CanonicalError;
 
@@ -33,6 +33,14 @@ pub struct AnalysisRequest {
 }
 
 impl AnalysisRequest {
+    /// Returns the canonical word count when text is eligible for submission.
+    /// Fresh adapter inputs and retained history inputs share this owner so no
+    /// submission path can bypass the nonzero-token rule.
+    pub(crate) fn eligible_text_word_count(text: &str) -> Option<u64> {
+        let word_count = canonical_text_word_count(text);
+        (word_count != 0).then_some(word_count)
+    }
+
     /// A UTF-8 text submission. `word_count` is the adapter-computed
     /// canonical count used for billing estimates; `byte_count` is
     /// `text.len()`.
@@ -58,6 +66,50 @@ impl AnalysisRequest {
             public_dashboard_link,
             rerun_of: None,
         }
+    }
+
+    /// Reconstructs a private rerun request from one saved canonical analysis.
+    ///
+    /// A rerun is possible only when the record retains exact text for one
+    /// AI-detection check. The retained descriptor is treated as evidence,
+    /// not trusted input: its hash, byte count, word count, origin, name, and
+    /// text must equal a descriptor rebuilt from the retained plaintext.
+    /// Reruns always receive fresh identity and reset both plaintext output
+    /// and public-link creation to their privacy-preserving defaults.
+    #[must_use]
+    pub fn from_saved_rerun(original: &Analysis<CanonicalError>) -> Option<Self> {
+        if !matches!(original.checks(), [Check::AiDetection(_)]) {
+            return None;
+        }
+        let Some(AnalysisInput::Text(retained_input)) = original.input() else {
+            return None;
+        };
+        let text = retained_input.text.as_deref()?;
+        let word_count = Self::eligible_text_word_count(text)?;
+        let reconstructed = TextInput::new(
+            retained_input.origin(),
+            retained_input.name().map(str::to_owned),
+            Sha256Hash::digest(text.as_bytes()),
+            u64::try_from(text.len()).unwrap_or(u64::MAX),
+            word_count,
+            Some(text.to_owned()),
+        )
+        .ok()?;
+        if &reconstructed != retained_input {
+            return None;
+        }
+
+        Some(
+            Self::new(
+                text,
+                retained_input.origin(),
+                retained_input.name().map(str::to_owned),
+                word_count,
+                false,
+                false,
+            )
+            .with_rerun_of(original.id),
+        )
     }
 
     /// Marks a fresh request as a rerun of one durable local analysis.
@@ -197,3 +249,175 @@ impl TaskError {
 
 /// The whole-operation result exposed to adapters.
 pub type AnalysisResult = Result<Analysis<CanonicalError>, TaskError>;
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::{
+        AiDetectionResult, CheckState, OrderedChecks, PlagiarismResult, Provenance, Provider,
+        SaveState, SubmissionOutcome, UtcTimestamp,
+    };
+
+    use super::*;
+
+    const RETAINED_TEXT: &str = "retained words";
+    const RETAINED_NAME: &str = "saved.txt";
+
+    fn text_input(
+        text: Option<&str>,
+        sha256: Sha256Hash,
+        byte_count: u64,
+        word_count: u64,
+    ) -> TextInput {
+        TextInput::new(
+            TextOrigin::File,
+            Some(RETAINED_NAME.to_owned()),
+            sha256,
+            byte_count,
+            word_count,
+            text.map(str::to_owned),
+        )
+        .unwrap()
+    }
+
+    fn valid_input() -> TextInput {
+        text_input(
+            Some(RETAINED_TEXT),
+            Sha256Hash::digest(RETAINED_TEXT.as_bytes()),
+            u64::try_from(RETAINED_TEXT.len()).unwrap(),
+            2,
+        )
+    }
+
+    fn ai_check() -> Check<CanonicalError> {
+        let state: CheckState<AiDetectionResult, CanonicalError> =
+            CheckState::Queued { upstream: None };
+        Check::AiDetection(state)
+    }
+
+    fn plagiarism_check() -> Check<CanonicalError> {
+        let state: CheckState<PlagiarismResult, CanonicalError> =
+            CheckState::Queued { upstream: None };
+        Check::Plagiarism(state)
+    }
+
+    fn saved_analysis(
+        input: TextInput,
+        checks: impl IntoIterator<Item = Check<CanonicalError>>,
+    ) -> Analysis<CanonicalError> {
+        let now = UtcTimestamp::now();
+        Analysis::new(
+            AnalysisId::new(),
+            SubmissionOutcome::NotSubmitted,
+            AnalysisInput::Text(input),
+            OrderedChecks::new(checks).unwrap(),
+            SaveState::SavedHistory,
+            Provenance {
+                provider: Provider::Pangram,
+                upstream_version: None,
+                upstream_task_ids: None,
+                upstream_bulk_id: None,
+                submitted_at: None,
+                completed_at: None,
+            },
+            None,
+            None,
+            now,
+            now,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn saved_rerun_rejects_missing_and_whitespace_only_text() {
+        let missing = text_input(
+            None,
+            Sha256Hash::digest(RETAINED_TEXT.as_bytes()),
+            u64::try_from(RETAINED_TEXT.len()).unwrap(),
+            2,
+        );
+        assert!(
+            AnalysisRequest::from_saved_rerun(&saved_analysis(missing, [ai_check()])).is_none()
+        );
+
+        let whitespace = "\u{00a0}\u{2003}\u{2029}";
+        let whitespace_input = text_input(
+            Some(whitespace),
+            Sha256Hash::digest(whitespace.as_bytes()),
+            u64::try_from(whitespace.len()).unwrap(),
+            0,
+        );
+        assert!(
+            AnalysisRequest::from_saved_rerun(&saved_analysis(whitespace_input, [ai_check()]))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn saved_rerun_rejects_each_derived_input_integrity_mismatch() {
+        let mismatches = [
+            text_input(
+                Some(RETAINED_TEXT),
+                Sha256Hash::digest(b"different text"),
+                u64::try_from(RETAINED_TEXT.len()).unwrap(),
+                2,
+            ),
+            text_input(
+                Some(RETAINED_TEXT),
+                Sha256Hash::digest(RETAINED_TEXT.as_bytes()),
+                999,
+                2,
+            ),
+            text_input(
+                Some(RETAINED_TEXT),
+                Sha256Hash::digest(RETAINED_TEXT.as_bytes()),
+                u64::try_from(RETAINED_TEXT.len()).unwrap(),
+                999,
+            ),
+        ];
+
+        for input in mismatches {
+            assert!(
+                AnalysisRequest::from_saved_rerun(&saved_analysis(input, [ai_check()])).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn saved_rerun_requires_exactly_one_ai_detection_check() {
+        assert!(
+            AnalysisRequest::from_saved_rerun(&saved_analysis(valid_input(), [plagiarism_check()]))
+                .is_none()
+        );
+        assert!(
+            AnalysisRequest::from_saved_rerun(&saved_analysis(
+                valid_input(),
+                [ai_check(), plagiarism_check()]
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn saved_rerun_creates_fresh_private_request_with_verified_identity() {
+        let original = saved_analysis(valid_input(), [ai_check()]);
+        let request = AnalysisRequest::from_saved_rerun(&original).unwrap();
+
+        assert_ne!(request.id(), original.id);
+        assert_eq!(request.rerun_of(), Some(original.id));
+        assert_eq!(request.text(), RETAINED_TEXT);
+        assert_eq!(request.byte_count(), RETAINED_TEXT.len() as u64);
+        assert_eq!(request.word_count(), 2);
+        assert!(!request.include_input());
+        assert!(!request.public_dashboard_link());
+        assert_eq!(
+            request.input(),
+            AnalysisInput::Text(text_input(
+                None,
+                Sha256Hash::digest(RETAINED_TEXT.as_bytes()),
+                RETAINED_TEXT.len() as u64,
+                2,
+            ))
+        );
+    }
+}

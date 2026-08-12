@@ -87,11 +87,13 @@ pub(crate) const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
     "update",
 ];
 
-pub(crate) const PHASE_4_RUNTIME_DEPENDENCIES: &[&str] = &[
+pub(crate) const PHASE_5_RUNTIME_DEPENDENCIES: &[&str] = &[
     "clap",
+    "crossterm",
     "directories",
     "fs4",
     "jiff",
+    "ratatui",
     "reqwest",
     "rpassword",
     "rusqlite",

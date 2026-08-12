@@ -86,6 +86,7 @@ The initial implementation should follow this ownership layout:
 |-- tools/
 |   |-- generate-contracts.rs
 |   |-- generate-intro-frames.rs
+|   |-- pangram-test-driver.rs
 |   `-- tui-acceptance/
 |       |-- package.json
 |       `-- tui-acceptance.test.ts
@@ -124,12 +125,18 @@ The Rust package is named `microck-pangram-cli` and provides:
 - library target used by the shipped binary and integration tests
 - `pangram` binary
 - feature-gated `generate-contracts` development binary
+- feature-gated `pangram-test-driver` development binary
 
 The library target is an internal architecture boundary and is not published to
 crates.io in v1. Public documentation MUST NOT advertise a stable Rust SDK.
 
-The contract generator requires a `dev-tools` feature and is absent from normal
-release artifacts.
+Both development binaries require a `dev-tools` feature and are absent from
+normal installs and release artifacts. `pangram-test-driver` accepts only a
+validated loopback base URL, constructs the typed analysis dependency through
+the analysis module, and then enters the same CLI or TUI adapter path as the
+shipped binary. It is the sole compiled-binary seam for local protocol
+fixtures. The shipped `pangram` binary has no endpoint flag, environment
+override, or feature-dependent endpoint behavior.
 
 ## 5. Module ownership
 
@@ -311,6 +318,13 @@ All requests use `x-api-key`.
 
 Production configuration cannot override these values. Test-only constructors
 accept loopback endpoint sets.
+
+Compiled adapter tests use the `dev-tools`-gated `pangram-test-driver`. The
+driver validates the loopback URL and injects one typed `Analyzer` through an
+immutable execution context shared by CLI and TUI dispatch. The context does
+not use process-global mutable state and does not duplicate analysis flow.
+Tests that do not need protocol traffic continue to execute the shipped
+`pangram` binary.
 
 The Pangram SDK v1.0.0 tag documents the exact text and job-wide bulk request
 selector (`model` set to `pangram-4`) even though the rendered public REST
@@ -649,7 +663,7 @@ marketing assets are research evidence only and MUST NOT enter the repository.
 One terminal guard owns:
 
 - raw mode
-- alternate screen
+- alternate screen and bracketed-paste mode
 - cursor visibility
 - mouse capture when enabled
 - panic restoration
@@ -666,9 +680,11 @@ SIGKILL, and equivalent uncatchable termination are outside the guarantee.
 ### 13.6 Autonomous acceptance boundary
 
 The compiled TUI is exercised through a development-only Terminal Control
-harness. The harness launches the real binary in a real PTY and drives the same
-keyboard and resize paths a person uses. It does not link into the application
-and does not ship in release artifacts.
+harness. Product-only journeys launch the real `pangram` binary in a real PTY.
+Protocol journeys launch `pangram-test-driver`, which injects a loopback
+analyzer and then enters the exact same TUI adapter. Both paths drive the same
+keyboard and resize handling a person uses. Neither the harness nor the test
+driver ships in release artifacts.
 
 The harness uses `@kitlangton/terminal-control 0.6.0` with Vitest. Tests set an
 isolated config directory, data directory, home directory, locale, terminal

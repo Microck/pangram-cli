@@ -4,11 +4,11 @@ use std::io::Write as _;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use crate::domain::{
-    AnalysisId, AnalysisInputKind, AnalysisStatus, AnalysisSummary, AnalysisSummaryPage, CheckKind,
-    OrderedChecks,
+use crate::domain::{AnalysisId, AnalysisStatus, CheckKind};
+use crate::history::{
+    HistoryError, HistoryErrorCode, HistoryExportError, HistoryExportFormat, HistoryStore,
+    export_history,
 };
-use crate::history::{HistoryError, HistoryErrorCode, HistoryStore, InputKind, StoredSearchHit};
 use crate::output::{
     CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode, MutationAcknowledgement,
     OutputFormat, ResolvedCommand,
@@ -121,6 +121,7 @@ pub(super) fn execute(
     root: &ArgMatches,
     global: GlobalFlags,
     streams: &dyn StreamTty,
+    analyzer_source: &crate::analysis::AnalyzerSource,
 ) -> DetectOutcome {
     let started = crate::domain::UtcTimestamp::now();
     let Some((name, leaf)) = matches.subcommand() else {
@@ -167,7 +168,15 @@ pub(super) fn execute(
     };
 
     if parsed.command == ResolvedCommand::HistoryRerun {
-        return rerun::execute(parsed, store, &service, output, started, streams);
+        return rerun::execute(
+            parsed,
+            store,
+            &service,
+            output,
+            started,
+            streams,
+            analyzer_source,
+        );
     }
 
     if parsed.command == ResolvedCommand::HistoryExport {
@@ -178,10 +187,10 @@ pub(super) fn execute(
                 rendered: true,
                 primary_ok: true,
             },
-            Err(ExportError::History(error)) => {
+            Err(HistoryExportError::History(error)) => {
                 failure_outcome(command, output, started, error.into_canonical())
             }
-            Err(ExportError::Output) => DetectOutcome {
+            Err(HistoryExportError::Output) => DetectOutcome {
                 exit_code: 1,
                 envelopes: Vec::new(),
                 rendered: true,
@@ -329,7 +338,9 @@ fn run(request: Request, store: Option<HistoryStore>) -> Result<CommandData, His
                 }
                 None => Vec::new(),
             };
-            Ok(CommandData::HistoryList(summary_page(hits)?))
+            Ok(CommandData::HistoryList(crate::history::summary_page(
+                hits,
+            )?))
         }
         ResolvedCommand::HistorySearch => {
             let hits = match store {
@@ -341,7 +352,9 @@ fn run(request: Request, store: Option<HistoryStore>) -> Result<CommandData, His
                 )?,
                 None => Vec::new(),
             };
-            Ok(CommandData::HistorySearch(summary_page(hits)?))
+            Ok(CommandData::HistorySearch(crate::history::summary_page(
+                hits,
+            )?))
         }
         ResolvedCommand::HistoryShow => {
             let store = store.ok_or_else(missing_record)?;
@@ -366,100 +379,17 @@ fn run(request: Request, store: Option<HistoryStore>) -> Result<CommandData, His
     }
 }
 
-enum ExportError {
-    History(HistoryError),
-    Output,
-}
-
-impl From<HistoryError> for ExportError {
-    fn from(error: HistoryError) -> Self {
-        Self::History(error)
-    }
-}
-
-fn export_json_error(error: serde_json::Error) -> ExportError {
-    if error.is_io() {
-        ExportError::Output
+fn run_export(request: Request, store: Option<HistoryStore>) -> Result<(), HistoryExportError> {
+    // The shared exporter flushes its writer before returning, so buffering
+    // keeps raw export writes efficient without deferring output-device errors
+    // to BufWriter's infallible Drop path.
+    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    let format = if request.export_markdown {
+        HistoryExportFormat::Markdown
     } else {
-        ExportError::History(HistoryError::new(
-            HistoryErrorCode::HistoryCorrupt,
-            "export history: a canonical analysis could not be encoded",
-        ))
-    }
-}
-
-/// Escapes Markdown fence characters while `serde_json` writes a record.
-/// The adapter consumes every input byte or returns the underlying I/O error,
-/// so the serializer never needs a record-sized intermediate string.
-struct MarkdownJsonWriter<'a, W> {
-    inner: &'a mut W,
-}
-
-impl<W: std::io::Write> std::io::Write for MarkdownJsonWriter<'_, W> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let mut start = 0;
-        for (index, byte) in bytes.iter().enumerate() {
-            if *byte == b'`' {
-                self.inner.write_all(&bytes[start..index])?;
-                self.inner.write_all(b"\\u0060")?;
-                start = index + 1;
-            }
-        }
-        self.inner.write_all(&bytes[start..])?;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
-
-fn run_export(request: Request, store: Option<HistoryStore>) -> Result<(), ExportError> {
-    // Certify the whole SQLite snapshot before stdout receives a prefix: a
-    // corrupt later row must fail closed without leaking an earlier record.
-    // Rendering below then writes one certified value at a time, so export
-    // never allocates a second buffer proportional to total history size.
-    let values = match store {
-        Some(store) => store.export_analyses(request.redact_content)?,
-        None => Vec::new(),
+        HistoryExportFormat::Jsonl
     };
-    let mut stdout = std::io::stdout().lock();
-    write_export(&mut stdout, values.into_iter(), request.export_markdown)
-}
-
-fn write_export(
-    writer: &mut impl std::io::Write,
-    values: impl Iterator<Item = serde_json::Value>,
-    markdown: bool,
-) -> Result<(), ExportError> {
-    if markdown {
-        writer
-            .write_all(b"# Pangram history export\n")
-            .map_err(|_| ExportError::Output)?;
-        for value in values {
-            let id = value
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("invalid");
-            write!(writer, "\n## `{id}`\n\n```json\n").map_err(|_| ExportError::Output)?;
-            serde_json::to_writer_pretty(
-                MarkdownJsonWriter {
-                    inner: &mut *writer,
-                },
-                &value,
-            )
-            .map_err(export_json_error)?;
-            writer
-                .write_all(b"\n```\n")
-                .map_err(|_| ExportError::Output)?;
-        }
-    } else {
-        for value in values {
-            serde_json::to_writer(&mut *writer, &value).map_err(export_json_error)?;
-            writer.write_all(b"\n").map_err(|_| ExportError::Output)?;
-        }
-    }
-    writer.flush().map_err(|_| ExportError::Output)
+    export_history(store.as_ref(), &mut stdout, format, request.redact_content)
 }
 
 fn unresolvable() -> CanonicalError {
@@ -468,33 +398,6 @@ fn unresolvable() -> CanonicalError {
         "The saved analysis does not retain exact text that can be rerun.",
     )
     .expect("static error")
-}
-
-fn summary_page(hits: Vec<StoredSearchHit>) -> Result<AnalysisSummaryPage, HistoryError> {
-    let items = hits
-        .into_iter()
-        .map(|hit| {
-            let checks = OrderedChecks::new(hit.checks).map_err(|_| {
-                HistoryError::new(
-                    HistoryErrorCode::HistoryCorrupt,
-                    "a stored history summary has invalid check ordering",
-                )
-            })?;
-            Ok(AnalysisSummary {
-                id: hit.analysis_id,
-                status: hit.status,
-                checks,
-                save_state: hit.save_state,
-                input_kind: match hit.input_kind {
-                    InputKind::Text => AnalysisInputKind::Text,
-                    InputKind::File => AnalysisInputKind::File,
-                },
-                display_name: hit.display_name,
-                created_at: hit.created_at,
-            })
-        })
-        .collect::<Result<Vec<_>, HistoryError>>()?;
-    Ok(AnalysisSummaryPage { items })
 }
 
 fn missing_record() -> HistoryError {
@@ -517,7 +420,7 @@ fn config_service(root: &ArgMatches) -> Result<crate::config::ConfigService, Box
         crate::config::ConfigOverrides::from_environment(),
     );
     crate::config::ConfigService::new(&overrides)
-        .map_err(super::detect::credential_error)
+        .map_err(super::detect::config_error)
         .map_err(Box::new)
 }
 
@@ -613,149 +516,4 @@ fn confirm(operation: &str) -> bool {
     std::io::stdin()
         .read_line(&mut answer)
         .is_ok_and(|_| matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::cell::Cell;
-    use std::io::{self, Write};
-    use std::rc::Rc;
-
-    use serde_json::json;
-
-    use super::{ExportError, write_export};
-
-    struct ShortWriter {
-        remaining: usize,
-        flush_fails: bool,
-    }
-
-    impl Write for ShortWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            if self.remaining == 0 {
-                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"));
-            }
-            let written = self.remaining.min(bytes.len());
-            self.remaining -= written;
-            Ok(written)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            if self.flush_fails {
-                Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    #[test]
-    fn export_short_write_and_broken_pipe_are_output_errors() {
-        let error = write_export(
-            &mut ShortWriter {
-                remaining: 3,
-                flush_fails: false,
-            },
-            vec![json!({"id": "long-export"})].into_iter(),
-            false,
-        )
-        .expect_err("short writer eventually closes");
-        assert!(matches!(error, ExportError::Output));
-    }
-
-    #[test]
-    fn export_flush_failure_is_an_output_error() {
-        let error = write_export(
-            &mut ShortWriter {
-                remaining: usize::MAX,
-                flush_fails: true,
-            },
-            vec![json!({"id": "complete-export"})].into_iter(),
-            false,
-        )
-        .expect_err("flush fails");
-        assert!(matches!(error, ExportError::Output));
-    }
-
-    struct CountingWriter {
-        writes: Rc<Cell<usize>>,
-        bytes: Vec<u8>,
-    }
-
-    impl Write for CountingWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.writes.set(self.writes.get() + 1);
-            self.bytes.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct StreamingProbe {
-        writes: Rc<Cell<usize>>,
-        values: std::vec::IntoIter<serde_json::Value>,
-        last_write_count: Option<usize>,
-    }
-
-    impl Iterator for StreamingProbe {
-        type Item = serde_json::Value;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            if let Some(previous) = self.last_write_count {
-                assert!(
-                    self.writes.get() > previous,
-                    "each record must reach the writer before the next is requested"
-                );
-            }
-            let value = self.values.next()?;
-            self.last_write_count = Some(self.writes.get());
-            Some(value)
-        }
-    }
-
-    #[test]
-    fn export_serializes_each_record_incrementally_to_the_writer() {
-        let writes = Rc::new(Cell::new(0));
-        let mut writer = CountingWriter {
-            writes: Rc::clone(&writes),
-            bytes: Vec::new(),
-        };
-
-        let outcome = write_export(
-            &mut writer,
-            StreamingProbe {
-                writes,
-                values: vec![json!({"id": "one"}), json!({"id": "two"})].into_iter(),
-                last_write_count: None,
-            },
-            false,
-        );
-
-        assert!(outcome.is_ok(), "the streaming export succeeds");
-        assert_eq!(writer.bytes, b"{\"id\":\"one\"}\n{\"id\":\"two\"}\n");
-
-        let writes = Rc::new(Cell::new(0));
-        let mut writer = CountingWriter {
-            writes: Rc::clone(&writes),
-            bytes: Vec::new(),
-        };
-        let outcome = write_export(
-            &mut writer,
-            StreamingProbe {
-                writes,
-                values: vec![json!({"id": "one", "text": "`"}), json!({"id": "two"})].into_iter(),
-                last_write_count: None,
-            },
-            true,
-        );
-
-        assert!(outcome.is_ok(), "the streaming Markdown export succeeds");
-        assert_eq!(
-            String::from_utf8(writer.bytes).unwrap(),
-            "# Pangram history export\n\n## `one`\n\n```json\n{\n  \"id\": \"one\",\n  \"text\": \"\\u0060\"\n}\n```\n\n## `two`\n\n```json\n{\n  \"id\": \"two\"\n}\n```\n"
-        );
-    }
 }
