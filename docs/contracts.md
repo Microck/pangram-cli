@@ -1116,6 +1116,10 @@ surface has these observable boundaries:
   the shared `Analyzer`. File input, plagiarism, and combined analysis remain
   visible but unavailable until their owning implementation phases; activating
   an unavailable control makes no request and spends no Pangram credit.
+- While the text composer owns focus and no overlay covers it, the terminal
+  cursor is visible at the canonical edit position. The composer derives
+  horizontal and vertical scroll to keep that position on-screen. Leaving the
+  composer focus hides the cursor.
 - terminals at least 120 columns wide render route rail, center workspace, and
   inspector as three stable areas. Widths 80 through 119 render top tabs and
   place inspector content below the center content. Any viewport below 80x24
@@ -1150,6 +1154,9 @@ as the noninteractive history commands. Disabling automatic history does not
 hide records already stored. It shows at most the newest 50 matching records,
 labels that value as `Showing N` rather than a total count, and includes each
 record's status, ordered checks, save state, display name, and timestamp.
+Each summary occupies exactly one terminal row. The display name is clipped at
+an extended-grapheme boundary to the remaining terminal-cell width, so wide
+Unicode cannot wrap into another record.
 Status cycles through all, queued, running, succeeded, failed, and partial;
 check cycles through all, AI detection, and plagiarism. Filter changes reload
 immediately. Search applies the literal query only when Enter is pressed. One

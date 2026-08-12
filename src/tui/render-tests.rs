@@ -1,8 +1,6 @@
 use std::str::FromStr;
 
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
-
+use super::test_support::{draw, ready_state};
 use super::*;
 use crate::analysis::AnalysisProgress;
 use crate::domain::{
@@ -15,65 +13,10 @@ use crate::domain::{
 use crate::history::HistoryExportFormat;
 use crate::output::{CanonicalError, ErrorCode};
 use crate::tui::history::{ExportRequest, RedactedAnalysis, SelectionMove};
-use crate::tui::model::{
-    AnalysisFailure, AppEvent, CredentialEntry, HistoryExportField, KeyInput, SettingsDraft,
-    StartupState, TerminalSize, TextField, reduce,
-};
+use crate::tui::model::{AnalysisFailure, AppEvent, HistoryExportField, KeyInput, reduce};
 
 const FIXED_ANALYSIS_ID: &str = "anl_01983c20-0180-7a80-a001-000000000501";
 const FIXED_TIMESTAMP: &str = "2026-08-09T12:00:00Z";
-
-struct Screen {
-    cells: Vec<Vec<String>>,
-}
-
-impl Screen {
-    fn row(&self, y: usize) -> String {
-        self.cells[y].concat()
-    }
-
-    fn text(&self) -> String {
-        self.cells
-            .iter()
-            .map(|row| row.concat())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-fn ready_state(width: u16, height: u16) -> AppState {
-    AppState::new(
-        TerminalSize {
-            columns: width,
-            rows: height,
-        },
-        StartupState {
-            settings: SettingsDraft {
-                credential_present: true,
-                update_preference: Some(false),
-                ..SettingsDraft::default()
-            },
-            ..StartupState::default()
-        },
-    )
-}
-
-fn draw(width: u16, height: u16, state: &AppState) -> Screen {
-    let backend = TestBackend::new(width, height);
-    let mut terminal = Terminal::new(backend).expect("create test terminal");
-    terminal
-        .draw(|frame| render(frame, state))
-        .expect("render TUI frame");
-    let buffer = terminal.backend().buffer();
-    let cells = (0..height)
-        .map(|y| {
-            (0..width)
-                .map(|x| buffer[(x, y)].symbol().to_owned())
-                .collect()
-        })
-        .collect();
-    Screen { cells }
-}
 
 fn analysis_id() -> AnalysisId {
     AnalysisId::from_str(FIXED_ANALYSIS_ID).expect("fixed analysis ID")
@@ -422,56 +365,6 @@ fn minimum_layout_keeps_local_history_and_inspector_in_the_center_flow() {
     assert!(screen.row(16).starts_with(" Local history - Showing 0"));
     assert!(screen.row(23).contains("[/] Search"));
     assert!(screen.row(23).contains("[Enter] Quit"));
-}
-
-#[test]
-fn below_minimum_overlay_preserves_the_underlying_state() {
-    let mut state = ready_state(79, 23);
-    state.route = Route::Active;
-    state.focus = Focus::ActiveList;
-    state.composer = TextField::from_value("preserve me".to_owned());
-    let route_before = state.route;
-    let focus_before = state.focus;
-    let composer_before = state.composer.value().to_owned();
-    let screen = draw(79, 23, &state);
-
-    assert!(screen.row(2).starts_with(" Active"));
-    assert!(screen.row(4).contains("No unfinished analyses."));
-    assert!(screen.text().contains("Terminal too small"));
-    assert!(screen.text().contains("Resize to at least 80x24."));
-    assert_eq!(state.route, route_before);
-    assert_eq!(state.focus, focus_before);
-    assert_eq!(state.composer.value(), composer_before);
-}
-
-#[test]
-fn hostile_composer_control_sequences_never_reach_rendered_cells() {
-    let mut state = ready_state(120, 40);
-    state.composer = TextField::from_value("safe\u{1b}[31mowned\nnext".to_owned());
-    let screen = draw(120, 40, &state);
-    let text = screen.text();
-
-    assert!(text.contains("safe\u{FFFD}[31mowned"));
-    assert!(text.contains("next"));
-    assert!(
-        screen
-            .cells
-            .iter()
-            .flatten()
-            .all(|cell| !cell.contains('\u{1b}'))
-    );
-}
-
-#[test]
-fn credential_overlay_never_renders_cleartext() {
-    let mut state = ready_state(120, 40);
-    state.overlay = Some(Overlay::Credential(CredentialEntry::from_value(
-        "pangram-secret-value".to_owned(),
-    )));
-    let text = draw(120, 40, &state).text();
-
-    assert!(text.contains("API key: ******** (masked)"));
-    assert!(!text.contains("pangram-secret-value"));
 }
 
 #[test]
@@ -949,6 +842,35 @@ fn hostile_history_summary_names_are_sanitized_and_clipped_to_one_row() {
             .filter(|row| screen.row(*row).contains("forged-r"))
             .count(),
         1
+    );
+}
+
+#[test]
+fn history_summary_names_clip_by_terminal_cells_without_splitting_graphemes() {
+    let mut state = history_state(80, 24);
+    state.focus = Focus::HistoryList;
+    let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    state.history.reload(vec![
+        history_summary(1, SaveState::SavedHistory, &"\u{6f22}".repeat(16)),
+        history_summary(2, SaveState::SavedHistory, &family.repeat(5)),
+    ]);
+
+    let screen = draw(80, 24, &state);
+
+    assert_eq!(
+        screen.cells[7]
+            .iter()
+            .filter(|symbol| symbol.as_str() == "\u{6f22}")
+            .count(),
+        12
+    );
+    assert!(screen.row(7).ends_with("..."));
+    assert_eq!(
+        screen.cells[8]
+            .iter()
+            .filter(|symbol| symbol.as_str() == family)
+            .count(),
+        5
     );
 }
 

@@ -265,7 +265,7 @@ exports[`compiled TUI acceptance > keeps printable input in the composer under r
 `;
 
 exports[`compiled TUI acceptance > keeps printable input in the composer under regular and Vim keymaps > vim-printable-composer screen 1`] = `
-"{"background":{"b":23,"g":17,"r":13},"cols":120,"cursor":null,"foreground":{"b":217,"g":209,"r":201},"rows":40,"version":1}
+"{"background":{"b":23,"g":17,"r":13},"cols":120,"cursor":{"blinking":false,"color":{"b":217,"g":209,"r":201},"x":58,"y":10},"foreground":{"b":217,"g":209,"r":201},"rows":40,"version":1}
 00 text="                 | Analyze                                                               |" cells=[[17,1,"|","#c9d1d9 #0d1117"],[19,7,"Analyze","#c9d1d9 #0d1117 bold"],[89,1,"|","#c9d1d9 #0d1117"]]
 01 text=" Pangram         | Checks                                                                | Inspector" cells=[[1,7,"Pangram","#c9d1d9 #0d1117 bold"],[17,1,"|","#c9d1d9 #0d1117"],[19,6,"Checks","#c9d1d9 #0d1117"],[89,1,"|","#c9d1d9 #0d1117"],[91,9,"Inspector","#c9d1d9 #0d1117 bold"]]
 02 text="                 |   [x] AI detection - available                                        |   [ ] Public link: off" cells=[[17,1,"|","#c9d1d9 #0d1117"],[21,3,"[x]","#c9d1d9 #0d1117"],[25,2,"AI","#c9d1d9 #0d1117"],[28,9,"detection","#c9d1d9 #0d1117"],[38,1,"-","#c9d1d9 #0d1117"],[40,9,"available","#c9d1d9 #0d1117"],[89,1,"|","#c9d1d9 #0d1117"],[93,1,"[","#c9d1d9 #0d1117"],[95,1,"]","#c9d1d9 #0d1117"],[97,6,"Public","#c9d1d9 #0d1117"],[104,5,"link:","#c9d1d9 #0d1117"],[110,3,"off","#c9d1d9 #0d1117"]]
@@ -441,7 +441,7 @@ exports[`compiled TUI acceptance > shows first-use state and restores the termin
 `;
 
 exports[`compiled TUI acceptance > skips authentication, navigates, covers responsive boundaries, and quits normally > analyze-wide screen 1`] = `
-"{"background":{"b":23,"g":17,"r":13},"cols":120,"cursor":null,"foreground":{"b":217,"g":209,"r":201},"rows":40,"version":1}
+"{"background":{"b":23,"g":17,"r":13},"cols":120,"cursor":{"blinking":false,"color":{"b":217,"g":209,"r":201},"x":20,"y":10},"foreground":{"b":217,"g":209,"r":201},"rows":40,"version":1}
 00 text="                 | Analyze                                                               |" cells=[[17,1,"|","#c9d1d9 #0d1117"],[19,7,"Analyze","#c9d1d9 #0d1117 bold"],[89,1,"|","#c9d1d9 #0d1117"]]
 01 text=" Pangram         | Checks                                                                | Inspector" cells=[[1,7,"Pangram","#c9d1d9 #0d1117 bold"],[17,1,"|","#c9d1d9 #0d1117"],[19,6,"Checks","#c9d1d9 #0d1117"],[89,1,"|","#c9d1d9 #0d1117"],[91,9,"Inspector","#c9d1d9 #0d1117 bold"]]
 02 text="                 |   [x] AI detection - available                                        |   [ ] Public link: off" cells=[[17,1,"|","#c9d1d9 #0d1117"],[21,3,"[x]","#c9d1d9 #0d1117"],[25,2,"AI","#c9d1d9 #0d1117"],[28,9,"detection","#c9d1d9 #0d1117"],[38,1,"-","#c9d1d9 #0d1117"],[40,9,"available","#c9d1d9 #0d1117"],[89,1,"|","#c9d1d9 #0d1117"],[93,1,"[","#c9d1d9 #0d1117"],[95,1,"]","#c9d1d9 #0d1117"],[97,6,"Public","#c9d1d9 #0d1117"],[104,5,"link:","#c9d1d9 #0d1117"],[110,3,"off","#c9d1d9 #0d1117"]]
@@ -618,7 +618,7 @@ exports[`compiled TUI acceptance > skips authentication, navigates, covers respo
 `;
 
 exports[`compiled TUI acceptance > stores a synthetic credential without exposing it and quits normally > stored-authentication-analyze screen 1`] = `
-"{"background":{"b":23,"g":17,"r":13},"cols":120,"cursor":null,"foreground":{"b":217,"g":209,"r":201},"rows":40,"version":1}
+"{"background":{"b":23,"g":17,"r":13},"cols":120,"cursor":{"blinking":false,"color":{"b":217,"g":209,"r":201},"x":20,"y":10},"foreground":{"b":217,"g":209,"r":201},"rows":40,"version":1}
 00 text="                 | Analyze                                                               |" cells=[[17,1,"|","#c9d1d9 #0d1117"],[19,7,"Analyze","#c9d1d9 #0d1117 bold"],[89,1,"|","#c9d1d9 #0d1117"]]
 01 text=" Pangram         | Checks                                                                | Inspector" cells=[[1,7,"Pangram","#c9d1d9 #0d1117 bold"],[17,1,"|","#c9d1d9 #0d1117"],[19,6,"Checks","#c9d1d9 #0d1117"],[89,1,"|","#c9d1d9 #0d1117"],[91,9,"Inspector","#c9d1d9 #0d1117 bold"]]
 02 text="                 |   [x] AI detection - available                                        |   [ ] Public link: off" cells=[[17,1,"|","#c9d1d9 #0d1117"],[21,3,"[x]","#c9d1d9 #0d1117"],[25,2,"AI","#c9d1d9 #0d1117"],[28,9,"detection","#c9d1d9 #0d1117"],[38,1,"-","#c9d1d9 #0d1117"],[40,9,"available","#c9d1d9 #0d1117"],[89,1,"|","#c9d1d9 #0d1117"],[93,1,"[","#c9d1d9 #0d1117"],[95,1,"]","#c9d1d9 #0d1117"],[97,6,"Public","#c9d1d9 #0d1117"],[104,5,"link:","#c9d1d9 #0d1117"],[110,3,"off","#c9d1d9 #0d1117"]]

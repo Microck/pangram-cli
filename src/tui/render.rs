@@ -163,6 +163,18 @@ fn render_analyze(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         "Text composer"
     };
     let composer_text = sanitize_multiline(state.composer.value());
+    let cursor_prefix = state.composer.before_cursor();
+    let cursor_row = cursor_prefix.matches('\n').count();
+    let cursor_column = Line::raw(crate::output::sanitize_terminal(
+        cursor_prefix.rsplit('\n').next().unwrap_or_default(),
+    ))
+    .width();
+    let composer_inner = inset(composer, 1, 1);
+    // The edit position owns the derived viewport. Keeping it out of AppState
+    // prevents scroll state from drifting after paste, resize, or cursor edits.
+    let scroll_x =
+        cursor_column.saturating_sub(usize::from(composer_inner.width).saturating_sub(1));
+    let scroll_y = cursor_row.saturating_sub(usize::from(composer_inner.height).saturating_sub(1));
     let content = if composer_text.is_empty() {
         Text::from("Type or paste text here")
     } else {
@@ -170,10 +182,25 @@ fn render_analyze(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     };
     frame.render_widget(
         Paragraph::new(content)
-            .wrap(Wrap { trim: false })
+            .scroll((
+                u16::try_from(scroll_y).unwrap_or(u16::MAX),
+                u16::try_from(scroll_x).unwrap_or(u16::MAX),
+            ))
             .block(Block::default().title(composer_title).borders(Borders::ALL)),
         composer,
     );
+    if state.focus == Focus::Composer
+        && state.overlay.is_none()
+        && frame.area().width >= MIN_WIDTH
+        && frame.area().height >= MIN_HEIGHT
+        && composer_inner.width > 0
+        && composer_inner.height > 0
+    {
+        frame.set_cursor_position((
+            composer_inner.x + u16::try_from(cursor_column - scroll_x).unwrap_or(u16::MAX),
+            composer_inner.y + u16::try_from(cursor_row - scroll_y).unwrap_or(u16::MAX),
+        ));
+    }
 }
 
 fn try_render_analysis_state(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> bool {
@@ -555,6 +582,14 @@ fn sanitize_multiline(value: &str) -> String {
     }
     output
 }
+
+#[cfg(test)]
+#[path = "render-composer-tests.rs"]
+mod composer_tests;
+
+#[cfg(test)]
+#[path = "render-test-support.rs"]
+mod test_support;
 
 #[cfg(test)]
 #[path = "render-tests.rs"]

@@ -6,7 +6,8 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::history::{ExportAction, ExportContent, PendingOperation};
@@ -211,7 +212,7 @@ fn push_summary_line(
         "{prefix}{}",
         fit_name(
             &name,
-            usize::from(width).saturating_sub(prefix.chars().count())
+            usize::from(width).saturating_sub(Span::raw(prefix.as_str()).width())
         )
     )));
 }
@@ -347,15 +348,29 @@ fn focused_action(focused: bool, label: &str) -> String {
 }
 
 fn fit_name(name: &str, available: usize) -> String {
-    if name.chars().count() <= available {
-        return name.to_owned();
-    }
     if available <= 3 {
-        return ".".repeat(available);
+        return if Span::raw(name).width() <= available {
+            name.to_owned()
+        } else {
+            ".".repeat(available)
+        };
     }
-    let mut fitted = name.chars().take(available - 3).collect::<String>();
-    fitted.push_str("...");
-    fitted
+    let content_width = available - 3;
+    let mut used_width = 0;
+    let mut fitted = String::new();
+    let name_span = Span::raw(name);
+    for grapheme in name_span.styled_graphemes(Style::default()) {
+        let width = Span::raw(grapheme.symbol).width();
+        used_width += width;
+        if used_width <= content_width {
+            fitted.push_str(grapheme.symbol);
+        }
+        if used_width > available {
+            fitted.push_str("...");
+            return fitted;
+        }
+    }
+    name.to_owned()
 }
 
 fn inset_left(area: Rect, columns: u16) -> Rect {

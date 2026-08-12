@@ -19,6 +19,10 @@ impl TextField {
         &self.value
     }
 
+    pub(super) fn before_cursor(&self) -> &str {
+        &self.value[..self.cursor]
+    }
+
     pub(super) fn insert(&mut self, character: char) {
         self.value.insert(self.cursor, character);
         self.cursor += character.len_utf8();
@@ -95,6 +99,12 @@ mod tests {
             assert!(field.edit(key));
         }
         assert_eq!(field.value(), format!("z{accent}o"));
+
+        let mut boundary = TextField::from_value(format!("a{accent}"));
+        assert!(boundary.edit(KeyInput::Left));
+        assert_eq!(boundary.before_cursor(), "a");
+        assert!(boundary.edit(KeyInput::Right));
+        assert_eq!(boundary.before_cursor(), format!("a{accent}"));
     }
 
     #[test]

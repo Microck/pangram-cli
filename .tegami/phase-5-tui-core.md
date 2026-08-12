@@ -26,3 +26,7 @@ and logo rights are recorded, so no unapproved Pangram or Droid material ships.
 Prevented repeated TUI activation from starting duplicate billable analysis or
 rerun work. History reloads can no longer consume a confirmed delete or export,
 erase a cleanup warning, or combine a fresh summary with stale record detail.
+
+Kept the focused composer edit position visible while long or multiline text
+scrolls. History display names now clip on whole Unicode graphemes by terminal
+cell width, so wide names cannot wrap into another record.
