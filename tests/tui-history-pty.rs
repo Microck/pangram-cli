@@ -26,7 +26,6 @@ use microck_pangram_cli::output::CanonicalError;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 const SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
-const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const TARGET_ID: &str = "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a01";
 const PLAGIARISM_ID: &str = "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a02";
@@ -441,13 +440,7 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
             b"\x1b[Z\x1b[Z\r",
             "activate the selected billable rerun",
         );
-        assert!(
-            receive_until(&output_rx, &mut transcript, ANALYSIS_TIMEOUT, |_| {
-                saved_rerun(&isolated.data, original_id).is_some()
-            },),
-            "the rerun did not finish and commit automatic history:\n{}",
-            String::from_utf8_lossy(&transcript)
-        );
+        assert_screen_text(&output_rx, &mut transcript, "Save state: saved history");
 
         // A successful rerun opens its scrollable result. Traverse the
         // focusable New analysis action before Quit without a shortcut.
@@ -480,6 +473,10 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
     }
 
     assert_eq!(status.exit_code(), 0, "the Quit action is a normal exit");
+    assert!(
+        saved_rerun(&isolated.data, original_id).is_some(),
+        "the completed rerun did not commit automatic history"
+    );
     for (sequence, behavior) in [
         (b"\x1b[?1049h".as_slice(), "enters the alternate screen"),
         (b"\x1b[?1049l".as_slice(), "restores the primary screen"),
