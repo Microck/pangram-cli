@@ -234,6 +234,7 @@ fn try_render_analysis_state(frame: &mut Frame<'_>, area: Rect, state: &AppState
             analysis,
             &state.result_viewport,
             state.focus == Focus::Result,
+            usize::from(area.width.saturating_sub(2)),
             usize::from(area.height.saturating_sub(5)),
         ));
     }
@@ -590,6 +591,10 @@ mod composer_tests;
 #[cfg(test)]
 #[path = "render-test-support.rs"]
 mod test_support;
+
+#[cfg(test)]
+#[path = "render-wrapped-result-tests.rs"]
+mod wrapped_result_tests;
 
 #[cfg(test)]
 #[path = "render-tests.rs"]

@@ -164,7 +164,7 @@ fn analysis_with_check(
     )
 }
 
-fn analysis_with_input(
+pub(super) fn analysis_with_input(
     id: AnalysisId,
     input: AnalysisInput,
     checks: OrderedChecks<Check<CanonicalError>>,
@@ -193,13 +193,17 @@ fn analysis_with_input(
     .expect("valid terminal analysis")
 }
 
-fn history_id(index: u8) -> AnalysisId {
+pub(super) fn history_id(index: u8) -> AnalysisId {
     format!("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a{index:02x}")
         .parse()
         .expect("canonical history fixture ID")
 }
 
-fn history_summary(index: u8, save_state: SaveState, display_name: &str) -> AnalysisSummary {
+pub(super) fn history_summary(
+    index: u8,
+    save_state: SaveState,
+    display_name: &str,
+) -> AnalysisSummary {
     history_summary_with_status(index, AnalysisStatus::Succeeded, save_state, display_name)
 }
 
@@ -220,7 +224,7 @@ fn history_summary_with_status(
     }
 }
 
-fn history_state(width: u16, height: u16) -> AppState {
+pub(super) fn history_state(width: u16, height: u16) -> AppState {
     let mut state = ready_state(width, height);
     state.route = Route::History;
     state.history = Default::default();
@@ -542,7 +546,7 @@ fn progress_and_terminal_events_change_only_the_matching_active_identity() {
 
 #[test]
 fn succeeded_terminal_result_renders_classification_and_sanitized_dashboard_link() {
-    let unsafe_link = "https://dashboard.example/result\u{1b}[31mforged\nsecond-line";
+    let unsafe_link = "https://d.test/r\u{1b}[31mforged\nsecond-line";
     let analysis = terminal_analysis(SaveState::Ephemeral, Some(unsafe_link.to_owned()));
     let state = reduce(ready_state(120, 40), AppEvent::AnalysisFinished(analysis)).state;
     let text = draw(120, 40, &state).text();
@@ -550,7 +554,7 @@ fn succeeded_terminal_result_renders_classification_and_sanitized_dashboard_link
     assert!(text.contains("Overall: succeeded"));
     assert!(text.contains("Classification: Human"));
     assert!(text.contains("AI 0.0% | AI-assisted 0.0% | Human 100.0%"));
-    assert!(text.contains("Public dashboard: https://dashboard.example/result [31mforged"));
+    assert!(text.contains("Public dashboard: https://d.test/r [31mforged second-line"));
     assert!(text.contains("second-line"));
     assert!(!text.contains('\u{1b}'));
 }

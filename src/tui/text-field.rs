@@ -23,9 +23,9 @@ impl TextField {
         &self.value[..self.cursor]
     }
 
-    pub(super) fn insert(&mut self, character: char) {
-        self.value.insert(self.cursor, character);
-        self.cursor += character.len_utf8();
+    pub(super) fn insert_text(&mut self, text: &str) {
+        self.value.insert_str(self.cursor, text);
+        self.cursor += text.len();
     }
 
     pub(super) fn edit(&mut self, key: KeyInput) -> bool {
@@ -121,5 +121,17 @@ mod tests {
             assert!(!field.edit(key));
         }
         assert_eq!(field.value(), "query");
+    }
+
+    #[test]
+    fn inserts_a_literal_string_at_a_unicode_boundary() {
+        let accent = '\u{e9}';
+        let mut field = TextField::from_value(format!("a{accent}z"));
+        assert!(field.edit(KeyInput::Left));
+
+        field.insert_text("X\t\n\u{3b2}");
+
+        assert_eq!(field.value(), format!("a{accent}X\t\n\u{3b2}z"));
+        assert_eq!(field.before_cursor(), format!("a{accent}X\t\n\u{3b2}"));
     }
 }

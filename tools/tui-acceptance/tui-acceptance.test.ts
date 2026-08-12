@@ -24,6 +24,8 @@ const EXIT_TIMEOUT_MS = 5_000
 const SYNTHETIC_API_KEY = "synthetic-api-key-not-a-secret"
 const ANALYSIS_ID_PATTERN = /anl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gu
 const STABLE_ANALYSIS_ID = "anl_00000000-0000-0000-0000-000000000000"
+const RFC3339_SUBSECOND_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,9}Z/gu
+const STABLE_TIMESTAMP = "[timestamp]"
 const SUPPORTED_PLATFORM = process.platform === "linux" || process.platform === "darwin"
 const ACCEPTANCE_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const ARTIFACT_DIRECTORY = join(ACCEPTANCE_DIRECTORY, ".artifacts")
@@ -776,9 +778,18 @@ function projectSettledScreen(screenText: string, frame: Frame): string {
     }
   }
 
-  // Analysis IDs are generated at runtime. The replacement has the same
-  // width, so snapshots keep exact cell geometry while remaining repeatable.
-  const textRows = screenText.split("\n")
+  for (const run of runs) {
+    const normalizedText = normalizeDynamicText(run.text)
+    if (normalizedText !== run.text) {
+      run.text = normalizedText
+      run.width = normalizedText.length
+    }
+  }
+
+  // Analysis IDs and timestamps are generated at runtime. Normalizing their
+  // visible runs keeps fixed positions and styles reviewable without making
+  // snapshots depend on one process clock.
+  const textRows = screenText.split("\n").map(normalizeScreenText)
   const rows = [JSON.stringify(geometry)]
   for (let y = 0; y < frame.rows; y += 1) {
     const rowRuns = runs
@@ -788,7 +799,7 @@ function projectSettledScreen(screenText: string, frame: Frame): string {
       `${y.toString().padStart(2, "0")} text=${JSON.stringify(textRows[y] ?? "")} cells=${JSON.stringify(rowRuns)}`,
     )
   }
-  return normalizeDynamicText(rows.join("\n"))
+  return rows.join("\n")
 }
 
 function isVisibleCell(cell: Frame["cells"][number], frame: Frame): boolean {
@@ -819,7 +830,13 @@ function projectCell(cell: Frame["cells"][number]): ProjectedRun {
 }
 
 function normalizeDynamicText(value: string): string {
-  return value.replaceAll(ANALYSIS_ID_PATTERN, STABLE_ANALYSIS_ID)
+  return value
+    .replaceAll(ANALYSIS_ID_PATTERN, STABLE_ANALYSIS_ID)
+    .replaceAll(RFC3339_SUBSECOND_PATTERN, STABLE_TIMESTAMP)
+}
+
+function normalizeScreenText(value: string): string {
+  return normalizeDynamicText(value).replace(/(\[timestamp\]) +\|/gu, "$1 |")
 }
 
 function rgb(color: { r: number; g: number; b: number }): string {

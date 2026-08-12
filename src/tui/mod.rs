@@ -307,6 +307,7 @@ impl From<io::Error> for TuiError {
 fn terminal_event(event: Event) -> Option<AppEvent> {
     match event {
         Event::Resize(columns, rows) => Some(AppEvent::Resize(TerminalSize { columns, rows })),
+        Event::Paste(text) => Some(AppEvent::Paste(text)),
         Event::Key(key) if key.kind != KeyEventKind::Release => key_input(key).map(AppEvent::Key),
         _ => None,
     }
@@ -538,6 +539,15 @@ mod tests {
             key_input(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT)),
             Some(KeyInput::Character('H'))
         );
+    }
+
+    #[test]
+    fn bracketed_paste_stays_one_atomic_event() {
+        let payload = "one\ttwo\n?j";
+        let Some(AppEvent::Paste(actual)) = terminal_event(Event::Paste(payload.to_owned())) else {
+            panic!("bracketed paste must remain atomic")
+        };
+        assert_eq!(actual, payload);
     }
 
     #[test]

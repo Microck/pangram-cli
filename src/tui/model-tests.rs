@@ -9,7 +9,7 @@ use crate::domain::{
 use crate::history::HistoryExportFormat;
 use crate::tui::history::{ExportRequest, PendingOperation};
 
-fn ready_state() -> AppState {
+pub(super) fn ready_state() -> AppState {
     AppState::new(
         TerminalSize {
             columns: WIDE_WIDTH,

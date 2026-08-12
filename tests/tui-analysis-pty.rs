@@ -106,7 +106,7 @@ fn assert_visible(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success() {
-    let text = "This synthetic TUI sentence remains human written today";
+    let text = "This synthetic TUI sentence\tremains human written\n?j today";
     let fixture = ProtocolFixture::start().await;
     fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
     fixture.on_poll(Step::Json(pangram4_success(text)));
@@ -148,11 +148,23 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
     writer.write_all(b"n").expect("decline update checks");
     writer.flush().expect("flush onboarding choice");
     assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "composer");
+    assert!(
+        transcript
+            .windows(b"\x1b[?2004h".len())
+            .any(|bytes| bytes == b"\x1b[?2004h"),
+        "the TUI enables bracketed paste before accepting composer input"
+    );
 
     writer
+        .write_all(b"\x1b[200~")
+        .expect("start bracketed paste");
+    writer
         .write_all(text.as_bytes())
-        .expect("type analysis text");
-    writer.flush().expect("flush analysis text");
+        .expect("paste analysis text");
+    writer
+        .write_all(b"\x1b[201~")
+        .expect("finish bracketed paste");
+    writer.flush().expect("flush bracketed analysis text");
 
     // Composer -> Public link -> Manual save -> Submit in the documented
     // regular keymap. Enter in the composer would insert a newline, so the
@@ -218,6 +230,8 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
     assert_eq!(status.exit_code(), 0, "the Quit action is a normal exit");
     for (sequence, behavior) in [
         (b"\x1b[?1049h".as_slice(), "enters the alternate screen"),
+        (b"\x1b[?2004h".as_slice(), "enables bracketed paste"),
+        (b"\x1b[?2004l".as_slice(), "disables bracketed paste"),
         (b"\x1b[?1049l".as_slice(), "restores the primary screen"),
         (b"\x1b[?25h".as_slice(), "restores cursor visibility"),
     ] {

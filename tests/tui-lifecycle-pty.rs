@@ -15,6 +15,8 @@ use portable_pty::{CommandBuilder, ExitStatus, NativePtySystem, PtySize, PtySyst
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
+const ENABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
+const DISABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004l";
 const LEAVE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 
@@ -186,8 +188,18 @@ fn assert_terminal_restored(outcome: &PtyOutcome) {
     let cursor = outcome
         .transcript
         .windows(SHOW_CURSOR.len())
-        .position(|bytes| bytes == SHOW_CURSOR)
+        .rposition(|bytes| bytes == SHOW_CURSOR)
         .expect("the TUI restores cursor visibility");
+    let enable_paste = outcome
+        .transcript
+        .windows(ENABLE_BRACKETED_PASTE.len())
+        .position(|bytes| bytes == ENABLE_BRACKETED_PASTE)
+        .expect("the TUI enables bracketed paste");
+    let disable_paste = outcome
+        .transcript
+        .windows(DISABLE_BRACKETED_PASTE.len())
+        .position(|bytes| bytes == DISABLE_BRACKETED_PASTE)
+        .expect("the TUI disables bracketed paste");
     let leave = outcome
         .transcript
         .windows(LEAVE_ALTERNATE_SCREEN.len())
@@ -195,7 +207,10 @@ fn assert_terminal_restored(outcome: &PtyOutcome) {
         .expect("the TUI restores the primary screen");
 
     assert!(
-        enter < cursor && enter < leave,
+        enter < enable_paste
+            && enable_paste < disable_paste
+            && disable_paste < cursor
+            && cursor < leave,
         "terminal restoration must follow alternate-screen entry"
     );
 }

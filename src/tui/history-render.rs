@@ -71,6 +71,7 @@ pub(crate) fn render_history(frame: &mut Frame<'_>, area: Rect, state: &AppState
             detail,
             &state.result_viewport,
             state.focus == Focus::Result,
+            usize::from(content_area.width),
             usize::from(content_area.height.saturating_sub(10)),
         ));
     } else {

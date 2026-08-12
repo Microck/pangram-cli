@@ -30,3 +30,8 @@ erase a cleanup warning, or combine a fresh summary with stale record detail.
 Kept the focused composer edit position visible while long or multiline text
 scrolls. History display names now clip on whole Unicode graphemes by terminal
 cell width, so wide names cannot wrap into another record.
+
+Kept bracketed paste as one literal composer edit, so pasted tabs, line breaks,
+and navigation-like characters cannot activate controls or submit work. Long
+result evidence now pages by terminal row without clipping, and completed
+results show canonical provenance and upstream task identities.

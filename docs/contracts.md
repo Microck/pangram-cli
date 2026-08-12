@@ -1120,6 +1120,11 @@ surface has these observable boundaries:
   cursor is visible at the canonical edit position. The composer derives
   horizontal and vertical scroll to keep that position on-screen. Leaving the
   composer focus hides the cursor.
+- The full-screen session enables bracketed paste and disables it through the
+  same idempotent restoration path as raw mode. One paste is one literal
+  composer edit, including tabs and line breaks; its bytes never become
+  navigation, toggle, help, or submit commands. A covered composer, another
+  focus, or the resize-required surface ignores the paste.
 - terminals at least 120 columns wide render route rail, center workspace, and
   inspector as three stable areas. Widths 80 through 119 render top tabs and
   place inspector content below the center content. Any viewport below 80x24
@@ -1169,10 +1174,19 @@ original paths, and extracted text never enter TUI state or rendered cells.
 Detail and every diagnostic still pass through terminal sanitization.
 Completed Analyze results and loaded History detail expose every ordered AI
 segment and plagiarism match through one ID-owned result viewport; projection
-never truncates evidence. Up and Down move one result line, PageUp and PageDown
-move six lines, and Home and End move to the first and last line. Vim adds
+never truncates evidence. Result paging budgets rendered terminal rows at the
+active content width. Provider-authored text is split at extended-grapheme
+boundaries without clipping, and continuation rows remain navigable even when
+one evidence value is taller than the viewport. Up and Down move one result
+row, PageUp and PageDown move six rows, and Home and End move to the first and
+last row. Vim adds
 `k`/`j`, Ctrl+u/Ctrl+d, and `gg`/`G`. Loading a different analysis starts at
-its first result line. Tab and Shift+Tab leave or enter the viewport.
+its first result row. Tab and Shift+Tab leave or enter the viewport.
+After ordered evidence, the shared projection shows canonical provider,
+version, aggregate task IDs, bulk ID, submission and completion times, then
+per-check task IDs in canonical check order. It omits absent identities and
+sanitizes every upstream value before rendering. Save state and actions follow
+that provenance block.
 
 Rerun is a focused action labeled as billable; activating it is the explicit
 request and does not add a second confirmation. It reconstructs and validates

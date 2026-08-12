@@ -649,7 +649,7 @@ marketing assets are research evidence only and MUST NOT enter the repository.
 One terminal guard owns:
 
 - raw mode
-- alternate screen
+- alternate screen and bracketed-paste mode
 - cursor visibility
 - mouse capture when enabled
 - panic restoration

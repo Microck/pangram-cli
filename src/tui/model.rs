@@ -321,6 +321,7 @@ pub enum KeyInput {
 
 pub enum AppEvent {
     Key(KeyInput),
+    Paste(String),
     Resize(TerminalSize),
     AnalysisAccepted(Analysis<CanonicalError>),
     AnalysisProgress(AnalysisProgress),
@@ -395,6 +396,15 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
     let mut effects = Vec::new();
     match event {
         AppEvent::Resize(size) => state.terminal = size,
+        AppEvent::Paste(text) => {
+            if state.layout() != ResponsiveLayout::ResizeRequired
+                && state.route == Route::Analyze
+                && state.focus == Focus::Composer
+                && state.overlay.is_none()
+            {
+                state.composer.insert_text(&text);
+            }
+        }
         AppEvent::AnalysisAccepted(analysis) => {
             if !state.history.accepts_analysis_event(analysis.id) {
                 return Transition { state, effects };
@@ -640,7 +650,7 @@ fn advance_onboarding(state: &mut AppState) {
 
 fn reduce_text_field(state: &mut AppState, key: KeyInput) -> bool {
     if state.focus == Focus::Composer && key == KeyInput::Enter {
-        state.composer.insert('\n');
+        state.composer.insert_text("\n");
         return true;
     }
     let field = match state.focus {
@@ -811,6 +821,10 @@ fn move_route_or_focus(state: &mut AppState, offset: isize) {
         .min(Route::ALL.len() - 1);
     state.route = Route::ALL[next];
 }
+
+#[cfg(test)]
+#[path = "model-paste-tests.rs"]
+mod paste_tests;
 
 #[cfg(test)]
 #[path = "model-tests.rs"]

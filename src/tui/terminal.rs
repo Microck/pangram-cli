@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crossterm::cursor;
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -173,7 +174,12 @@ impl TerminalSession {
         }
 
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, cursor::Hide) {
+        if let Err(error) = execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            cursor::Hide
+        ) {
             return Err(clean_up_failed_entry(
                 error,
                 &restore_state,
@@ -268,6 +274,10 @@ where
     }
 
     let mut first_error = None;
+    record_first_error(
+        &mut first_error,
+        execute!(&mut *writer, DisableBracketedPaste),
+    );
     record_first_error(&mut first_error, disable_raw_mode());
     record_first_error(&mut first_error, execute!(&mut *writer, cursor::Show));
     record_first_error(
