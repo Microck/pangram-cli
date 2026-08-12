@@ -151,7 +151,16 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
         assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "Update");
         writer.write_all(b"n").expect("decline update checks");
         writer.flush().expect("flush onboarding choice");
-        assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "composer");
+        assert!(
+            receive_until(&output_rx, &mut transcript, SCREEN_TIMEOUT, |bytes| {
+                let mut terminal = vt100::Parser::new(40, 120, 0);
+                terminal.process(bytes);
+                let screen = terminal.screen().contents();
+                screen.contains("composer") && !screen.contains("Automatic checks:")
+            }),
+            "update preference did not persist before composer input:\n{}",
+            String::from_utf8_lossy(&transcript)
+        );
         assert!(
             transcript
                 .windows(b"\x1b[?2004h".len())
