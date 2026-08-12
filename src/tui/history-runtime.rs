@@ -19,7 +19,7 @@ use crate::domain::{Analysis, AnalysisId, SaveState, TextOrigin};
 use crate::history::{HistoryError, HistoryErrorCode, HistoryExportError, HistoryStore};
 use crate::output::{CanonicalError, ErrorCode, ExitCode};
 
-use super::history::{ExportRequest, HistoryLoadRequest, RedactedAnalysis};
+use super::history::{ExportRequest, HistoryLoadRequest, HistoryLoadResult, RedactedAnalysis};
 use super::model::{AnalysisFailure, AppEvent};
 
 pub(super) struct FreshAnalysisOptions {
@@ -393,20 +393,30 @@ fn prepare_rerun(
 fn history_items(
     service: &ConfigService,
     request: &HistoryLoadRequest,
-) -> Result<Vec<crate::domain::AnalysisSummary>, CanonicalError> {
+) -> Result<HistoryLoadResult, CanonicalError> {
     let Some(store) = HistoryStore::open_existing(service.paths().data_dir())
         .map_err(|error| error.into_canonical())?
     else {
-        return Ok(Vec::new());
+        return Ok(HistoryLoadResult {
+            page: Vec::new(),
+            unfinished: Vec::new(),
+        });
     };
-    let hits = match request.query.as_deref() {
+    let page_hits = match request.query.as_deref() {
         Some(query) => store.search_filtered(query, request.status, request.check, request.limit),
         None => store.list_filtered(request.status, request.check, request.limit, 0),
     }
     .map_err(|error| error.into_canonical())?;
-    crate::history::summary_page(hits)
-        .map(|page| page.items)
-        .map_err(|error| error.into_canonical())
+    let unfinished_hits = store
+        .list_unfinished()
+        .map_err(|error| error.into_canonical())?;
+    let page = crate::history::summary_page(page_hits)
+        .map_err(|error| error.into_canonical())?
+        .items;
+    let unfinished = crate::history::summary_page(unfinished_hits)
+        .map_err(|error| error.into_canonical())?
+        .items;
+    Ok(HistoryLoadResult { page, unfinished })
 }
 
 fn existing_record_store(service: &ConfigService) -> Result<HistoryStore, CanonicalError> {

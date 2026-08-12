@@ -6,7 +6,8 @@
 use ratatui::text::Line;
 
 use crate::domain::{
-    AiClassification, Analysis, AnalysisStatus, Check, CheckState, CheckStatus, Provider, SaveState,
+    AiClassification, Analysis, AnalysisStatus, Check, CheckState, CheckStatus, Confidence,
+    Provider, SaveState,
 };
 use crate::output::CanonicalError;
 
@@ -50,10 +51,18 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
                 )));
                 for (index, segment) in result.segments.iter().enumerate() {
                     lines.push(Line::raw(format!(
-                        "{}. {} - {:.1}% AI assistance",
+                        "{}. {} - {:.1}% AI assistance | Text: {} | Confidence: {} | Offsets: {}..{} | Words: {} | Tokens: {} | Humanizer score: {:.1}% | Humanized: {}",
                         index + 1,
                         sanitize_single_line(segment.label.as_str()),
                         segment.ai_assistance_score.get() * 100.0,
+                        sanitize_single_line(&segment.text),
+                        confidence_label(segment.confidence),
+                        segment.start_index,
+                        segment.end_index,
+                        segment.word_count,
+                        segment.token_length,
+                        segment.humanizer_score.get() * 100.0,
+                        if segment.is_humanized { "yes" } else { "no" },
                     )));
                 }
                 if let Some(link) = &result.dashboard_link {
@@ -213,8 +222,25 @@ fn classification_label(classification: AiClassification) -> &'static str {
     }
 }
 
+fn confidence_label(confidence: Confidence) -> &'static str {
+    match confidence {
+        Confidence::High => "high",
+        Confidence::Medium => "medium",
+        Confidence::Low => "low",
+    }
+}
+
 pub(crate) fn sanitize_single_line(value: &str) -> String {
-    crate::output::sanitize_terminal(value).replace('\u{FFFD}', " ")
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() || character == '\u{FFFD}' {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -223,9 +249,10 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        AnalysisId, AnalysisInput, NonEmptyString, OrderedChecks, Provenance, Provider, Sha256Hash,
-        SubmissionOutcome, TextInput, TextOrigin, UpstreamBulkId, UpstreamIdentity, UpstreamTaskId,
-        UpstreamTaskIds, UtcTimestamp,
+        AiDetectionResult, AnalysisId, AnalysisInput, Confidence, Fraction, NonEmptyString,
+        OrderedChecks, Provenance, Provider, Segment, Sha256Hash, SubmissionOutcome, TextInput,
+        TextOrigin, UpstreamBulkId, UpstreamIdentity, UpstreamTaskId, UpstreamTaskIds,
+        UtcTimestamp,
     };
     use crate::output::ErrorCode;
 
@@ -276,6 +303,87 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    #[test]
+    fn complete_segment_evidence_is_ordered_terminal_safe_and_one_line_per_segment() {
+        let result = AiDetectionResult {
+            classification: AiClassification::Mixed,
+            headline: "Mixed\u{1b}[31m\nauthorship".to_owned(),
+            prediction: "The document\u{009b}contains mixed authorship.".to_owned(),
+            fraction_ai: Fraction::new(0.5).expect("valid fraction"),
+            fraction_ai_assisted: Fraction::new(0.25).expect("valid fraction"),
+            fraction_human: Fraction::new(0.25).expect("valid fraction"),
+            num_ai_segments: 1,
+            num_ai_assisted_segments: 0,
+            num_human_segments: 1,
+            segments: vec![
+                Segment {
+                    text: "provider\u{1b}[2J\ntext\u{FFFD}tail".to_owned(),
+                    label: NonEmptyString::new("AI\u{1b}[31m\nlabel").expect("segment label"),
+                    ai_assistance_score: Fraction::new(0.725).expect("valid fraction"),
+                    confidence: Confidence::Low,
+                    start_index: 4,
+                    end_index: 29,
+                    word_count: 5,
+                    token_length: 7,
+                    humanizer_score: Fraction::new(0.31).expect("valid fraction"),
+                    is_humanized: true,
+                },
+                Segment {
+                    text: "second segment".to_owned(),
+                    label: NonEmptyString::new("Human Written").expect("segment label"),
+                    ai_assistance_score: Fraction::new(0.0).expect("valid fraction"),
+                    confidence: Confidence::Medium,
+                    start_index: 29,
+                    end_index: 43,
+                    word_count: 2,
+                    token_length: 3,
+                    humanizer_score: Fraction::new(0.0).expect("valid fraction"),
+                    is_humanized: false,
+                },
+            ],
+            dashboard_link: Some("https://dashboard.test/result\u{1b}[0m\nforged".to_owned()),
+        };
+        let checks = OrderedChecks::new([Check::AiDetection(CheckState::Succeeded {
+            upstream: None,
+            result,
+        })])
+        .expect("canonical checks");
+        let analysis = analysis_with_identity(
+            checks,
+            Provenance {
+                provider: Provider::Pangram,
+                upstream_version: None,
+                upstream_task_ids: None,
+                upstream_bulk_id: None,
+                submitted_at: None,
+                completed_at: None,
+            },
+        );
+
+        let lines = analysis_result_lines(&analysis);
+        let text: Vec<_> = lines.iter().map(line_text).collect();
+
+        assert_eq!(lines.len(), 12, "each segment remains one viewport line");
+        assert_eq!(
+            text,
+            [
+                "Overall: succeeded",
+                "Analysis: anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8aff",
+                "Classification: Mixed",
+                "AI 50.0% | AI-assisted 25.0% | Human 25.0%",
+                "Result: Mixed [31m authorship",
+                "Prediction: The document contains mixed authorship.",
+                "Segments: 2 (AI 1, AI-assisted 0, Human 1)",
+                "1. AI [31m label - 72.5% AI assistance | Text: provider [2J text tail | Confidence: low | Offsets: 4..29 | Words: 5 | Tokens: 7 | Humanizer score: 31.0% | Humanized: yes",
+                "2. Human Written - 0.0% AI assistance | Text: second segment | Confidence: medium | Offsets: 29..43 | Words: 2 | Tokens: 3 | Humanizer score: 0.0% | Humanized: no",
+                "Public dashboard: https://dashboard.test/result [0m forged",
+                "Provider: Pangram",
+                "Save state: saved history",
+            ]
+        );
+        assert!(text.iter().all(|line| !line.contains(['\u{1b}', '\n'])));
     }
 
     #[test]

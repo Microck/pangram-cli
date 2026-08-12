@@ -33,6 +33,14 @@ pub(crate) struct HistoryLoadRequest {
     pub limit: u32,
 }
 
+/// One history display page plus the complete saved unfinished set used by
+/// Active. The two projections have independent filtering and size rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HistoryLoadResult {
+    pub page: Vec<AnalysisSummary>,
+    pub unfinished: Vec<AnalysisSummary>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SelectionMove {
     Previous,

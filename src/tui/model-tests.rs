@@ -7,7 +7,7 @@ use crate::domain::{
     UtcTimestamp,
 };
 use crate::history::HistoryExportFormat;
-use crate::tui::history::{ExportRequest, PendingOperation};
+use crate::tui::history::{ExportRequest, HistoryLoadResult, PendingOperation};
 
 pub(super) fn ready_state() -> AppState {
     AppState::new(
@@ -33,11 +33,25 @@ fn history_state(items: Vec<AnalysisSummary>) -> AppState {
         state,
         AppEvent::HistoryLoaded {
             request,
-            result: Ok(items),
+            result: Ok(history_load(items)),
         },
     );
     assert!(transition.effects.is_empty());
     transition.state
+}
+
+fn history_load(page: Vec<AnalysisSummary>) -> HistoryLoadResult {
+    let unfinished = page
+        .iter()
+        .filter(|summary| {
+            matches!(
+                summary.status,
+                AnalysisStatus::Queued | AnalysisStatus::Running
+            )
+        })
+        .cloned()
+        .collect();
+    HistoryLoadResult { page, unfinished }
 }
 
 fn history_id(index: u8) -> AnalysisId {
@@ -70,10 +84,10 @@ fn saved_active_rows_survive_page_omission_and_exact_terminal_evidence_removes_o
         state,
         AppEvent::HistoryLoaded {
             request: initial_request,
-            result: Ok(vec![
+            result: Ok(history_load(vec![
                 history_summary_with_status(1, AnalysisStatus::Queued),
                 history_summary_with_status(2, AnalysisStatus::Running),
-            ]),
+            ])),
         },
     );
     assert_eq!(
@@ -93,10 +107,13 @@ fn saved_active_rows_survive_page_omission_and_exact_terminal_evidence_removes_o
         changed.state,
         AppEvent::HistoryLoaded {
             request: filtered_request.clone(),
-            result: Ok(vec![history_summary_with_status(
-                2,
-                AnalysisStatus::Running,
-            )]),
+            result: Ok(HistoryLoadResult {
+                page: vec![history_summary_with_status(2, AnalysisStatus::Running)],
+                unfinished: vec![
+                    history_summary_with_status(1, AnalysisStatus::Queued),
+                    history_summary_with_status(2, AnalysisStatus::Running),
+                ],
+            }),
         },
     );
     assert_eq!(
@@ -112,7 +129,10 @@ fn saved_active_rows_survive_page_omission_and_exact_terminal_evidence_removes_o
         changed.state,
         AppEvent::HistoryLoaded {
             request: terminal_request.clone(),
-            result: Ok(vec![history_summary(1)]),
+            result: Ok(HistoryLoadResult {
+                page: vec![history_summary(1)],
+                unfinished: vec![history_summary_with_status(2, AnalysisStatus::Running)],
+            }),
         },
     );
     assert_eq!(terminal.state.active.status(history_id(1)), None);
@@ -120,6 +140,56 @@ fn saved_active_rows_survive_page_omission_and_exact_terminal_evidence_removes_o
         terminal.state.active.status(history_id(2)),
         Some(AnalysisStatus::Running)
     );
+}
+
+#[test]
+fn complete_unfinished_projection_reconciles_rows_outside_the_visible_page() {
+    let state = ready_state();
+    let initial_request = state.history.load_request();
+    let loaded = reduce(
+        state,
+        AppEvent::HistoryLoaded {
+            request: initial_request,
+            result: Ok(HistoryLoadResult {
+                page: vec![history_summary(3)],
+                unfinished: vec![
+                    history_summary_with_status(1, AnalysisStatus::Queued),
+                    history_summary_with_status(2, AnalysisStatus::Running),
+                ],
+            }),
+        },
+    );
+    assert_eq!(loaded.state.history.showing_count(), 1);
+    assert_eq!(
+        loaded.state.active.status(history_id(1)),
+        Some(AnalysisStatus::Queued)
+    );
+    assert_eq!(
+        loaded.state.active.status(history_id(2)),
+        Some(AnalysisStatus::Running)
+    );
+
+    let changed = reduce(loaded.state, AppEvent::HistoryChanged);
+    let [Effect::LoadHistory(request)] = changed.effects.as_slice() else {
+        panic!("history change must request a reload")
+    };
+    let reconciled = reduce(
+        changed.state,
+        AppEvent::HistoryLoaded {
+            request: request.clone(),
+            result: Ok(HistoryLoadResult {
+                page: vec![history_summary(4)],
+                unfinished: vec![history_summary_with_status(2, AnalysisStatus::Running)],
+            }),
+        },
+    );
+
+    assert_eq!(reconciled.state.active.status(history_id(1)), None);
+    assert_eq!(
+        reconciled.state.active.status(history_id(2)),
+        Some(AnalysisStatus::Running)
+    );
+    assert_eq!(reconciled.state.history.selected_id(), Some(history_id(4)));
 }
 
 #[test]
@@ -526,7 +596,7 @@ fn history_filter_changes_coalesce_behind_the_exact_pending_reload() {
         check_changed.state,
         AppEvent::HistoryLoaded {
             request: first_request,
-            result: Ok(vec![history_summary(1)]),
+            result: Ok(history_load(vec![history_summary(1)])),
         },
     );
     assert_eq!(superseded.state.history.showing_count(), 0);
@@ -543,7 +613,7 @@ fn history_filter_changes_coalesce_behind_the_exact_pending_reload() {
         changed_again.state,
         AppEvent::HistoryLoaded {
             request: latest_request,
-            result: Ok(vec![history_summary(2)]),
+            result: Ok(history_load(vec![history_summary(2)])),
         },
     );
     assert_eq!(superseded_again.state.history.showing_count(), 0);
@@ -564,7 +634,7 @@ fn a_mismatched_history_completion_cannot_release_the_operation_gate() {
         state,
         AppEvent::HistoryLoaded {
             request: wrong_request,
-            result: Ok(Vec::new()),
+            result: Ok(history_load(Vec::new())),
         },
     );
     assert!(transition.effects.is_empty());
@@ -813,7 +883,7 @@ fn history_reload_cannot_consume_a_confirmed_delete_or_export() {
         confirmed_while_busy.state,
         AppEvent::HistoryLoaded {
             request: request.clone(),
-            result: Ok(vec![history_summary(1)]),
+            result: Ok(history_load(vec![history_summary(1)])),
         },
     );
     let confirmed = reduce(reloaded.state, AppEvent::Key(KeyInput::Character('y')));
@@ -849,7 +919,7 @@ fn successful_history_reload_preserves_an_existing_notice() {
         changed.state,
         AppEvent::HistoryLoaded {
             request: request.clone(),
-            result: Ok(vec![history_summary(1)]),
+            result: Ok(history_load(vec![history_summary(1)])),
         },
     );
     assert_eq!(

@@ -12,7 +12,7 @@ use crate::domain::{
 };
 use crate::history::HistoryExportFormat;
 use crate::output::{CanonicalError, ErrorCode};
-use crate::tui::history::{ExportRequest, RedactedAnalysis, SelectionMove};
+use crate::tui::history::{ExportRequest, HistoryLoadResult, RedactedAnalysis, SelectionMove};
 use crate::tui::model::{AnalysisFailure, AppEvent, HistoryExportField, KeyInput, reduce};
 
 const FIXED_ANALYSIS_ID: &str = "anl_01983c20-0180-7a80-a001-000000000501";
@@ -414,21 +414,37 @@ fn active_combines_session_work_with_saved_unfinished_history() {
         state,
         AppEvent::HistoryLoaded {
             request,
-            result: Ok(vec![
-                history_summary_with_status(
-                    1,
-                    AnalysisStatus::Queued,
-                    SaveState::SavedManual,
-                    "queued record",
-                ),
-                history_summary_with_status(
-                    2,
-                    AnalysisStatus::Running,
-                    SaveState::SavedHistory,
-                    "running record",
-                ),
-                history_summary(3, SaveState::SavedHistory, "finished record"),
-            ]),
+            result: Ok(HistoryLoadResult {
+                page: vec![
+                    history_summary_with_status(
+                        1,
+                        AnalysisStatus::Queued,
+                        SaveState::SavedManual,
+                        "queued record",
+                    ),
+                    history_summary_with_status(
+                        2,
+                        AnalysisStatus::Running,
+                        SaveState::SavedHistory,
+                        "running record",
+                    ),
+                    history_summary(3, SaveState::SavedHistory, "finished record"),
+                ],
+                unfinished: vec![
+                    history_summary_with_status(
+                        1,
+                        AnalysisStatus::Queued,
+                        SaveState::SavedManual,
+                        "queued record",
+                    ),
+                    history_summary_with_status(
+                        2,
+                        AnalysisStatus::Running,
+                        SaveState::SavedHistory,
+                        "running record",
+                    ),
+                ],
+            }),
         },
     );
     let mut state = reduce(
@@ -451,7 +467,7 @@ fn active_combines_session_work_with_saved_unfinished_history() {
 fn active_selection_reaches_rows_beyond_the_first_viewport() {
     let state = ready_state(120, 40);
     let request = state.history.load_request();
-    let summaries = (1..=8)
+    let summaries: Vec<_> = (1..=8)
         .map(|index| {
             history_summary_with_status(
                 index,
@@ -465,7 +481,10 @@ fn active_selection_reaches_rows_beyond_the_first_viewport() {
         state,
         AppEvent::HistoryLoaded {
             request,
-            result: Ok(summaries),
+            result: Ok(HistoryLoadResult {
+                page: summaries.clone(),
+                unfinished: summaries,
+            }),
         },
     )
     .state;
@@ -782,13 +801,15 @@ fn history_detail_is_redacted_and_uses_the_shared_terminal_safe_result_lines() {
     assert!(first_page.contains("Result: headline [31mforged next"));
     assert!(first_page.contains("Prediction: prediction [2Jcleared"));
 
-    for _ in 0..3 {
+    let mut evidence_pages = String::new();
+    for _ in 0..12 {
         state = reduce(state, AppEvent::Key(KeyInput::PageDown)).state;
+        evidence_pages.push_str(&draw(120, 24, &state).text());
     }
-    let evidence_page = draw(120, 24, &state).text();
-    assert!(evidence_page.contains("8. segment-8 - 40.0% AI assistance"));
-    assert!(evidence_page.contains("Plagiarism: detected - 100.0% across 8/8 sentences"));
-    assert!(evidence_page.contains("https://source.test/ [31murl - matched [2Jtext"));
+    assert!(evidence_pages.contains("8. segment-8 - 40.0% AI assistance"));
+    assert!(evidence_pages.contains("Text: segment evidence 8"));
+    assert!(evidence_pages.contains("Plagiarism: detected - 100.0% across 8/8 sentences"));
+    assert!(evidence_pages.contains("https://source.test/ [31murl - matched [2Jtext"));
 
     state = reduce(state, AppEvent::Key(KeyInput::End)).state;
     let last_page = draw(120, 24, &state).text();
@@ -797,15 +818,14 @@ fn history_detail_is_redacted_and_uses_the_shared_terminal_safe_result_lines() {
     for secret in [
         "SECRET_RETAINED_FILE",
         "SECRET_EXTRACTED_TEXT",
-        "SECRET_SEGMENT_TEXT",
         "/secret/original/path.txt",
     ] {
         assert!(!first_page.contains(secret), "leaked {secret}");
-        assert!(!evidence_page.contains(secret), "leaked {secret}");
+        assert!(!evidence_pages.contains(secret), "leaked {secret}");
         assert!(!last_page.contains(secret), "leaked {secret}");
     }
     assert!(!first_page.contains('\u{1b}'));
-    assert!(!evidence_page.contains('\u{1b}'));
+    assert!(!evidence_pages.contains('\u{1b}'));
     assert!(!last_page.contains('\u{1b}'));
 }
 

@@ -4,14 +4,14 @@
 //! Completion events must carry the exact request or analysis ID that owns
 //! that gate, so stale worker messages cannot release newer work.
 
-use crate::domain::{AnalysisId, AnalysisSummary};
+use crate::domain::AnalysisId;
 use crate::output::CanonicalError;
 
 const RERUN_STARTED_NOTICE: &str = "Rerun started.";
 
 use super::history::{
-    ExportResolution, HistoryExportField, HistoryLoadRequest, PendingOperation, RedactedAnalysis,
-    SelectionMove,
+    ExportResolution, HistoryExportField, HistoryLoadRequest, HistoryLoadResult, PendingOperation,
+    RedactedAnalysis, SelectionMove,
 };
 use super::model::{
     ANALYSIS_IN_PROGRESS_NOTICE, AppState, Effect, Focus, KeyInput, Overlay, Route,
@@ -51,7 +51,7 @@ pub(super) fn history_changed(state: &mut AppState, effects: &mut Vec<Effect>) {
 pub(super) fn complete_load(
     state: &mut AppState,
     request: HistoryLoadRequest,
-    result: Result<Vec<AnalysisSummary>, CanonicalError>,
+    result: Result<HistoryLoadResult, CanonicalError>,
     effects: &mut Vec<Effect>,
 ) {
     let operation = PendingOperation::Reload(request);
@@ -63,12 +63,12 @@ pub(super) fn complete_load(
         return;
     }
     match result {
-        Ok(items) => {
-            // A filtered page can add or update saved unfinished work, but
-            // omission is not evidence that another saved item completed.
-            // Only a returned terminal summary removes its exact saved row.
-            state.active.merge_saved(&items);
-            state.history.reload(items);
+        Ok(loaded) => {
+            // A terminal row on the visible page is exact lifecycle evidence,
+            // while the independent unfinished projection owns completeness.
+            state.active.merge_saved(&loaded.page);
+            state.active.replace_saved(&loaded.unfinished);
+            state.history.reload(loaded.page);
         }
         Err(error) => history_error(state, error),
     }

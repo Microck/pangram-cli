@@ -81,6 +81,43 @@ fn analysis(id: &str, input_text: &str) -> StoredAnalysis {
     }
 }
 
+fn unfinished_analysis(
+    id: &str,
+    input_text: &str,
+    status: AnalysisStatus,
+    created_at: &str,
+) -> StoredAnalysis {
+    assert!(matches!(
+        status,
+        AnalysisStatus::Queued | AnalysisStatus::Running
+    ));
+    let mut record = analysis(id, input_text);
+    record.status = status;
+    record.submission_outcome = SubmissionOutcome::Accepted;
+    record.result_json = None;
+    record.upstream_version = None;
+    record.created_at = timestamp(created_at);
+    record.updated_at = record.created_at;
+    record.completed_at = None;
+    record.search_headline = None;
+    record
+}
+
+fn save_unfinished(store: &mut HistoryStore, record: &StoredAnalysis) {
+    store
+        .save_analysis_atomic(
+            record,
+            &[StoredUpstreamTask {
+                analysis_id: record.id,
+                check_kind: CheckKind::AiDetection,
+                upstream_task_id: format!("task-{}", record.id),
+                last_stage: Some("accepted".to_owned()),
+                observed_at: record.updated_at,
+            }],
+        )
+        .expect("save unfinished analysis fixture");
+}
+
 fn bulk_collection(id: &str) -> StoredBulkCollection {
     StoredBulkCollection {
         id: BulkId::from_str(id).expect("bulk id"),
@@ -509,6 +546,51 @@ fn list_returns_recent_first_and_search_uses_fts5_match() {
     let hits: Vec<StoredSearchHit> = store.search("gamma", 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].analysis_id, newer.id);
+}
+
+#[test]
+fn unfinished_list_is_uncapped_and_excludes_newer_terminal_history() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = open_store(&root);
+    let queued = unfinished_analysis(
+        "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8801",
+        "older queued text",
+        AnalysisStatus::Queued,
+        "2026-08-01T08:00:00Z",
+    );
+    let running = unfinished_analysis(
+        "anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8802",
+        "older running text",
+        AnalysisStatus::Running,
+        "2026-08-01T08:01:00Z",
+    );
+    save_unfinished(&mut store, &queued);
+    save_unfinished(&mut store, &running);
+
+    for index in 0..50 {
+        let id = format!("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f89{index:02x}");
+        let terminal = analysis(&id, "newer terminal text");
+        save_complete(&mut store, &terminal);
+    }
+
+    let visible_page = store.list(50, 0).unwrap();
+    assert_eq!(visible_page.len(), 50);
+    assert!(visible_page.iter().all(|hit| matches!(
+        hit.status,
+        AnalysisStatus::Succeeded | AnalysisStatus::Failed | AnalysisStatus::Partial
+    )));
+
+    let unfinished = store.list_unfinished().unwrap();
+    assert_eq!(
+        unfinished
+            .iter()
+            .map(|hit| (hit.analysis_id, hit.status))
+            .collect::<Vec<_>>(),
+        vec![
+            (running.id, AnalysisStatus::Running),
+            (queued.id, AnalysisStatus::Queued),
+        ]
+    );
 }
 
 #[test]

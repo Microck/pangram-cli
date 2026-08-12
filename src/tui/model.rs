@@ -8,12 +8,14 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 use crate::analysis::AnalysisProgress;
-use crate::domain::{Analysis, AnalysisId, AnalysisSummary, text_billable_units};
+use crate::domain::{Analysis, AnalysisId, text_billable_units};
 use crate::output::CanonicalError;
 
 use super::active::ActiveState;
 pub(crate) use super::history::HistoryExportField;
-use super::history::{ExportRequest, HistoryLoadRequest, HistoryState, RedactedAnalysis};
+use super::history::{
+    ExportRequest, HistoryLoadRequest, HistoryLoadResult, HistoryState, RedactedAnalysis,
+};
 use super::result_viewport::{ResultMove, ResultViewport};
 pub use super::text_field::TextField;
 use super::text_field::edit_value;
@@ -332,7 +334,7 @@ pub enum AppEvent {
     HistoryChanged,
     HistoryLoaded {
         request: HistoryLoadRequest,
-        result: Result<Vec<AnalysisSummary>, CanonicalError>,
+        result: Result<HistoryLoadResult, CanonicalError>,
     },
     HistoryDetailLoaded {
         analysis_id: AnalysisId,

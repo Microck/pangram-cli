@@ -1,7 +1,9 @@
 //! Derived projection for unfinished in-session and saved analyses.
 //!
-//! Saved rows are merged from certified history pages. A filtered or limited
-//! page may omit an existing saved row, so omission is not completion proof.
+//! Saved rows are reconciled from a complete certified unfinished projection,
+//! independent of the filtered and limited History display page.
+
+use std::collections::HashSet;
 
 use crate::domain::{Analysis, AnalysisId, AnalysisStatus, AnalysisSummary};
 use crate::output::CanonicalError;
@@ -155,6 +157,24 @@ impl ActiveState {
                 row.status = summary.status;
             }
         }
+    }
+
+    /// Reconciles saved rows against the complete durable unfinished set.
+    /// Session-owned rows survive because they may be intentionally ephemeral.
+    pub(super) fn replace_saved(&mut self, summaries: &[AnalysisSummary]) {
+        let unfinished = summaries
+            .iter()
+            .map(|summary| summary.id)
+            .collect::<HashSet<_>>();
+        self.rows
+            .retain(|row| row.source == ActiveSource::Session || unfinished.contains(&row.id));
+        if self
+            .selected_id
+            .is_some_and(|selected| !self.rows.iter().any(|row| row.id == selected))
+        {
+            self.selected_id = self.rows.first().map(|row| row.id);
+        }
+        self.merge_saved(summaries);
     }
 
     pub(super) fn remove(&mut self, analysis_id: AnalysisId) {

@@ -1139,9 +1139,11 @@ interactive surface has these observable boundaries:
   intro frames but does not block the reducer, Analyze workflow, layout, or
   terminal restoration.
 
-The TUI Active route is an ID-keyed union of in-session operations and saved
-unfinished analyses discovered through certified History pages. Queued and
-running summaries merge into Active without duplicating an in-session entry.
+The TUI Active route is an ID-keyed union of in-session operations and every
+saved unfinished analysis. A dedicated certified SQLite read loads the complete
+queued/running union independently of the filtered, newest-50 History display
+page. Queued and running summaries merge into Active without duplicating an
+in-session entry.
 A newly accepted in-session entry precedes saved entries and becomes the
 ID-owned selection. Up, Down, Home, End, and Vim `j`/`k` traverse every entry;
 the derived six-row window follows that selection without a separate mutable
@@ -1172,12 +1174,14 @@ original paths, and extracted text never enter TUI state or rendered cells.
 Detail and every diagnostic still pass through terminal sanitization.
 Completed Analyze results and loaded History detail expose every ordered AI
 segment and plagiarism match through one ID-owned result viewport; projection
-never truncates evidence. Result paging budgets rendered terminal rows at the
-active content width. Provider-authored text is split at extended-grapheme
-boundaries without clipping, and continuation rows remain navigable even when
-one evidence value is taller than the viewport. Up and Down move one result
-row, PageUp and PageDown move six rows, and Home and End move to the first and
-last row. Vim adds
+never truncates evidence. Each AI segment shows its canonical label, text,
+confidence, start and end offsets, word and token counts, AI-assistance
+score, and humanizer score and decision. Result paging budgets
+rendered terminal rows at the active content width. Provider-authored text is
+sanitized, split at extended-grapheme boundaries without clipping, and its
+continuation rows remain navigable even when one evidence value is taller than
+the viewport. Up and Down move one result row, PageUp and PageDown move six
+rows, and Home and End move to the first and last row. Vim adds
 `k`/`j`, Ctrl+u/Ctrl+d, and `gg`/`G`. Loading a different analysis starts at
 its first result row. Tab and Shift+Tab leave or enter the viewport.
 After ordered evidence, the shared projection shows canonical provider,

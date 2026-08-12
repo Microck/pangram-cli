@@ -485,10 +485,6 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
         assert!(contains_bytes(&transcript, sequence), "the TUI {behavior}");
     }
     assert!(
-        !transcript_contains_rendered_text(&transcript, RERUN_TEXT),
-        "retained plaintext stays out of the complete terminal transcript"
-    );
-    assert!(
         !contains_bytes(&transcript, SYNTHETIC_KEY.as_bytes()),
         "the API key stays secret"
     );
