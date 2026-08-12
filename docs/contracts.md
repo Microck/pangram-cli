@@ -1134,6 +1134,9 @@ interactive surface has these observable boundaries:
   the CLI and become visible only after persistence succeeds. Enabling local
   history requires an explicit plaintext-retention warning and confirmation;
   cancelling that overlay leaves the disabled default unchanged.
+- Update-preference onboarding advertises an Escape Back action only when the
+  credential setup overlay is reachable. With a configured credential, the
+  preference remains required and no inert Back action is shown.
 - eligible intro playback remains unconsumed while the viewport is below
   80x24. Missing approved source geometry or logo rights suppresses generated
   intro frames but does not block the reducer, Analyze workflow, layout, or

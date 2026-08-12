@@ -13,7 +13,10 @@ use crate::domain::{
 use crate::history::HistoryExportFormat;
 use crate::output::{CanonicalError, ErrorCode};
 use crate::tui::history::{ExportRequest, HistoryLoadResult, RedactedAnalysis, SelectionMove};
-use crate::tui::model::{AnalysisFailure, AppEvent, HistoryExportField, KeyInput, reduce};
+use crate::tui::model::{
+    AnalysisFailure, AppEvent, HistoryExportField, KeyInput, SettingsDraft, StartupState,
+    TerminalSize, reduce,
+};
 
 const FIXED_ANALYSIS_ID: &str = "anl_01983c20-0180-7a80-a001-000000000501";
 const FIXED_TIMESTAMP: &str = "2026-08-09T12:00:00Z";
@@ -24,6 +27,38 @@ fn analysis_id() -> AnalysisId {
 
 fn timestamp() -> UtcTimestamp {
     UtcTimestamp::from_str(FIXED_TIMESTAMP).expect("fixed timestamp")
+}
+
+#[test]
+fn update_onboarding_only_advertises_back_when_credential_setup_is_reachable() {
+    let configured = AppState::new(
+        TerminalSize {
+            columns: 120,
+            rows: 40,
+        },
+        StartupState {
+            settings: SettingsDraft {
+                credential_present: true,
+                update_preference: None,
+                ..SettingsDraft::default()
+            },
+            ..StartupState::default()
+        },
+    );
+    let configured_text = draw(120, 40, &configured).text();
+    assert!(configured_text.contains("[Enter] Continue"));
+    assert!(!configured_text.contains("[Esc] Back"));
+
+    let missing = AppState::new(
+        TerminalSize {
+            columns: 120,
+            rows: 40,
+        },
+        StartupState::default(),
+    );
+    let update_overlay = reduce(missing, AppEvent::Key(KeyInput::Escape)).state;
+    let missing_text = draw(120, 40, &update_overlay).text();
+    assert!(missing_text.contains("[Esc] Back"));
 }
 
 fn canonical_error(code: ErrorCode, message: &str) -> CanonicalError {

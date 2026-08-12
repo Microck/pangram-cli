@@ -497,7 +497,11 @@ fn render_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppState, overlay: 
                     if *choice { "on" } else { "off" }
                 )),
                 Line::raw(""),
-                Line::raw("[Enter] Continue   [Esc] Back"),
+                Line::raw(if state.settings.credential_present {
+                    "[Enter] Continue"
+                } else {
+                    "[Enter] Continue   [Esc] Back"
+                }),
             ],
         ),
         Overlay::HistoryConsent => (
