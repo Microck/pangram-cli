@@ -13,7 +13,8 @@ use super::history_render;
 use super::model::{
     AppState, Focus, IntroFrequency, MIN_HEIGHT, MIN_WIDTH, MotionLevel, Overlay, Route, WIDE_WIDTH,
 };
-use super::result_lines::{analysis_result_lines, analysis_status_label, sanitize_single_line};
+use super::result_lines::{analysis_status_label, sanitize_single_line};
+use super::result_viewport::visible_analysis_result_lines;
 
 const ROUTE_RAIL_WIDTH: u16 = 17;
 const INSPECTOR_WIDTH: u16 = 30;
@@ -202,7 +203,12 @@ fn try_render_analysis_state(frame: &mut Frame<'_>, area: Rect, state: &AppState
             sanitize_single_line(progress.last_stage.as_str())
         )));
     } else if let Some(analysis) = &state.analysis.current {
-        lines.extend(analysis_result_lines(analysis));
+        lines.extend(visible_analysis_result_lines(
+            analysis,
+            &state.result_viewport,
+            state.focus == Focus::Result,
+            usize::from(area.height.saturating_sub(5)),
+        ));
     }
     lines.push(Line::raw(""));
     lines.push(action_line(state.focus == Focus::Submit, "New analysis"));
@@ -248,10 +254,10 @@ fn render_active(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             Line::raw(format!("{} unfinished analysis(es)", state.active.len())),
         ]
     };
-    for (index, row) in state.active.rows().iter().take(6).enumerate() {
+    for row in state.active.visible_rows() {
         content.push(Line::raw(format!(
             "{}{} - {} - {}",
-            if index == 0 && state.focus == Focus::ActiveList {
+            if state.active.selected_id() == Some(row.id) && state.focus == Focus::ActiveList {
                 "> "
             } else {
                 "  "
@@ -418,6 +424,9 @@ fn render_command_bar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         Route::History => actions.push("[/] Search"),
         Route::Settings => actions.push("[Enter] Change"),
         Route::Active => {}
+    }
+    if state.focus == Focus::Result {
+        actions.push("[Arrows/Page] Result");
     }
     let quit = if state.focus == Focus::Quit {
         "> [Enter] Quit <"

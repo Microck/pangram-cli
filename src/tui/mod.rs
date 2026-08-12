@@ -17,6 +17,8 @@ mod model;
 mod render;
 #[path = "result-lines.rs"]
 mod result_lines;
+#[path = "result-viewport.rs"]
+mod result_viewport;
 mod terminal;
 #[path = "text-field.rs"]
 mod text_field;

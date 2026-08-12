@@ -6,10 +6,29 @@
 use crate::domain::{Analysis, AnalysisId, AnalysisStatus, AnalysisSummary};
 use crate::output::CanonicalError;
 
+use super::model::{AppState, Focus, KeyInput, Keymap, Route};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ActiveSource {
     Session,
     Saved,
+}
+
+pub(super) fn reduce_key(state: &mut AppState, key: KeyInput) -> bool {
+    if state.route != Route::Active || state.focus != Focus::ActiveList {
+        return false;
+    }
+    let movement = match key {
+        KeyInput::Up => SelectionMove::Previous,
+        KeyInput::Down => SelectionMove::Next,
+        KeyInput::Home => SelectionMove::First,
+        KeyInput::End => SelectionMove::Last,
+        KeyInput::Character('k') if state.keymap == Keymap::Vim => SelectionMove::Previous,
+        KeyInput::Character('j') if state.keymap == Keymap::Vim => SelectionMove::Next,
+        _ => return false,
+    };
+    state.active.move_selection(movement);
+    true
 }
 
 impl ActiveSource {
@@ -28,49 +47,79 @@ pub(super) struct ActiveRow {
     pub(super) source: ActiveSource,
 }
 
+const VISIBLE_ROWS: usize = 6;
+
 #[derive(Clone, Default)]
-pub(super) struct ActiveState(Vec<ActiveRow>);
+pub(super) struct ActiveState {
+    rows: Vec<ActiveRow>,
+    selected_id: Option<AnalysisId>,
+}
+
+#[derive(Clone, Copy)]
+enum SelectionMove {
+    Previous,
+    Next,
+    First,
+    Last,
+}
 
 impl ActiveState {
     pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.rows.is_empty()
     }
 
     pub(super) fn len(&self) -> usize {
-        self.0.len()
+        self.rows.len()
     }
 
     pub(super) fn has_session(&self) -> bool {
-        self.0.iter().any(|row| row.source == ActiveSource::Session)
+        self.rows
+            .iter()
+            .any(|row| row.source == ActiveSource::Session)
     }
 
-    pub(super) fn rows(&self) -> &[ActiveRow] {
-        &self.0
+    pub(super) fn selected_id(&self) -> Option<AnalysisId> {
+        self.selected_id
+    }
+
+    pub(super) fn visible_rows(&self) -> &[ActiveRow] {
+        let selected = self
+            .selected_id
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+            .unwrap_or(0);
+        let start = selected
+            .saturating_add(1)
+            .saturating_sub(VISIBLE_ROWS)
+            .min(self.rows.len().saturating_sub(VISIBLE_ROWS));
+        let end = (start + VISIBLE_ROWS).min(self.rows.len());
+        &self.rows[start..end]
     }
 
     #[cfg(test)]
     pub(super) fn status(&self, analysis_id: AnalysisId) -> Option<AnalysisStatus> {
-        self.0
+        self.rows
             .iter()
             .find(|row| row.id == analysis_id)
             .map(|row| row.status)
     }
 
     pub(super) fn accept(&mut self, analysis: &Analysis<CanonicalError>) {
-        if let Some(row) = self.0.iter_mut().find(|row| row.id == analysis.id) {
-            row.status = analysis.status();
-            row.source = ActiveSource::Session;
-        } else {
-            self.0.push(ActiveRow {
+        if let Some(index) = self.rows.iter().position(|row| row.id == analysis.id) {
+            self.rows.remove(index);
+        }
+        self.rows.insert(
+            0,
+            ActiveRow {
                 id: analysis.id,
                 status: analysis.status(),
                 source: ActiveSource::Session,
-            });
-        }
+            },
+        );
+        self.selected_id = Some(analysis.id);
     }
 
     pub(super) fn progress(&mut self, analysis_id: AnalysisId) -> bool {
-        let Some(row) = self.0.iter_mut().find(|row| row.id == analysis_id) else {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == analysis_id) else {
             return false;
         };
         row.status = AnalysisStatus::Running;
@@ -83,22 +132,23 @@ impl ActiveState {
                 summary.status,
                 AnalysisStatus::Queued | AnalysisStatus::Running
             );
-            let Some(index) = self.0.iter().position(|row| row.id == summary.id) else {
+            let Some(index) = self.rows.iter().position(|row| row.id == summary.id) else {
                 if unfinished {
-                    self.0.push(ActiveRow {
+                    self.rows.push(ActiveRow {
                         id: summary.id,
                         status: summary.status,
                         source: ActiveSource::Saved,
                     });
+                    self.selected_id.get_or_insert(summary.id);
                 }
                 continue;
             };
             if !unfinished {
-                self.0.remove(index);
+                self.remove_at(index);
                 continue;
             }
 
-            let row = &mut self.0[index];
+            let row = &mut self.rows[index];
             // A delayed saved snapshot must not regress fresher in-session
             // progress from running back to queued.
             if row.source == ActiveSource::Saved || summary.status == AnalysisStatus::Running {
@@ -108,7 +158,40 @@ impl ActiveState {
     }
 
     pub(super) fn remove(&mut self, analysis_id: AnalysisId) {
-        self.0.retain(|row| row.id != analysis_id);
+        let Some(index) = self.rows.iter().position(|row| row.id == analysis_id) else {
+            return;
+        };
+        self.remove_at(index);
+    }
+
+    fn remove_at(&mut self, index: usize) {
+        let analysis_id = self.rows[index].id;
+        self.rows.remove(index);
+        if self.selected_id == Some(analysis_id) {
+            self.selected_id = self
+                .rows
+                .get(index)
+                .or_else(|| self.rows.last())
+                .map(|row| row.id);
+        }
+    }
+
+    fn move_selection(&mut self, movement: SelectionMove) {
+        if self.rows.is_empty() {
+            self.selected_id = None;
+            return;
+        }
+        let current = self
+            .selected_id
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+            .unwrap_or(0);
+        let next = match movement {
+            SelectionMove::Previous => current.saturating_sub(1),
+            SelectionMove::Next => (current + 1).min(self.rows.len() - 1),
+            SelectionMove::First => 0,
+            SelectionMove::Last => self.rows.len() - 1,
+        };
+        self.selected_id = Some(self.rows[next].id);
     }
 }
 
@@ -142,11 +225,14 @@ mod tests {
     #[test]
     fn saved_pages_do_not_regress_session_progress_but_terminal_evidence_removes_it() {
         let id = analysis_id(1);
-        let mut active = ActiveState(vec![ActiveRow {
-            id,
-            status: AnalysisStatus::Running,
-            source: ActiveSource::Session,
-        }]);
+        let mut active = ActiveState {
+            rows: vec![ActiveRow {
+                id,
+                status: AnalysisStatus::Running,
+                source: ActiveSource::Session,
+            }],
+            selected_id: Some(id),
+        };
 
         active.merge_saved(&[summary(1, AnalysisStatus::Queued)]);
         assert_eq!(active.status(id), Some(AnalysisStatus::Running));
@@ -154,5 +240,29 @@ mod tests {
 
         active.merge_saved(&[summary(1, AnalysisStatus::Succeeded)]);
         assert_eq!(active.status(id), None);
+    }
+
+    #[test]
+    fn selection_reaches_every_row_and_follows_exact_removal() {
+        let mut active = ActiveState::default();
+        active.merge_saved(
+            &(1..=8)
+                .map(|index| summary(index, AnalysisStatus::Queued))
+                .collect::<Vec<_>>(),
+        );
+
+        active.move_selection(SelectionMove::Last);
+        assert_eq!(active.selected_id(), Some(analysis_id(8)));
+        assert_eq!(
+            active.visible_rows().first().map(|row| row.id),
+            Some(analysis_id(3))
+        );
+        assert_eq!(
+            active.visible_rows().last().map(|row| row.id),
+            Some(analysis_id(8))
+        );
+
+        active.remove(analysis_id(8));
+        assert_eq!(active.selected_id(), Some(analysis_id(7)));
     }
 }

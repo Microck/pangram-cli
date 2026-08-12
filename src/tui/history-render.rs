@@ -11,9 +11,8 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::history::{ExportAction, ExportContent, PendingOperation};
 use super::model::{AppState, Focus, HistoryExportField, Overlay};
-use super::result_lines::{
-    analysis_result_lines, analysis_status_label, sanitize_single_line, save_state_label,
-};
+use super::result_lines::{analysis_status_label, sanitize_single_line, save_state_label};
+use super::result_viewport::visible_analysis_result_lines;
 use crate::domain::{AnalysisInput, AnalysisInputKind, AnalysisSummary, CheckKind};
 use crate::history::HistoryExportFormat;
 
@@ -67,7 +66,12 @@ pub(crate) fn render_history(frame: &mut Frame<'_>, area: Rect, state: &AppState
         }
         lines.push(Line::raw("Selected detail - retained input redacted"));
         push_redacted_input(&mut lines, detail.input());
-        lines.extend(analysis_result_lines(detail));
+        lines.extend(visible_analysis_result_lines(
+            detail,
+            &state.result_viewport,
+            state.focus == Focus::Result,
+            usize::from(content_area.height.saturating_sub(10)),
+        ));
     } else {
         for summary in state.history.visible_items() {
             push_summary_line(

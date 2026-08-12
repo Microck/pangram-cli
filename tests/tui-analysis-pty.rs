@@ -189,9 +189,9 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
     assert_eq!(requests[1].method, "GET");
     assert_eq!(requests[1].path, format!("/task/{TASK_ID}"));
 
-    // Submit remains focused on the completed view, so one Tab reaches the
-    // documented normal-exit action rather than relying on a quit shortcut.
-    writer.write_all(b"\t").expect("focus Quit");
+    // Completed results focus the scrollable evidence first. Traverse the
+    // focusable New analysis action before reaching Quit without a shortcut.
+    writer.write_all(b"\t\t").expect("focus Quit");
     writer.flush().expect("flush Quit navigation");
     writer.write_all(b"\r").expect("activate Quit");
     writer.flush().expect("flush Quit");

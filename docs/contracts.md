@@ -1135,6 +1135,10 @@ surface has these observable boundaries:
 The TUI Active route is an ID-keyed union of in-session operations and saved
 unfinished analyses discovered through certified History pages. Queued and
 running summaries merge into Active without duplicating an in-session entry.
+A newly accepted in-session entry precedes saved entries and becomes the
+ID-owned selection. Up, Down, Home, End, and Vim `j`/`k` traverse every entry;
+the derived six-row window follows that selection without a separate mutable
+scroll position.
 A matching progress event advances only that analysis to running. A returned
 terminal summary, successful deletion, or matching terminal analysis event
 removes only that exact ID. Omission from a later History page does not remove
@@ -1155,12 +1159,19 @@ analysis ID and survives a reload when that ID remains present.
 
 Opening a selected record loads `canonical_analysis(ID, false)`. Retained text,
 original paths, and extracted text never enter TUI state or rendered cells.
-Detail and every diagnostic still pass through terminal sanitization. Rerun is
-a focused action labeled as billable; activating it is the explicit request and
-does not add a second confirmation. It reconstructs and validates the retained
-text inside the shared history/analysis module before credential resolution,
-creates a fresh analysis with `rerun_of`, always requests no public dashboard
-link, and never implies manual save. The current automatic-history setting
+Detail and every diagnostic still pass through terminal sanitization.
+Completed Analyze results and loaded History detail expose every ordered AI
+segment and plagiarism match through one ID-owned result viewport; projection
+never truncates evidence. Up and Down move one result line, PageUp and PageDown
+move six lines, and Home and End move to the first and last line. Vim adds
+`k`/`j`, Ctrl+u/Ctrl+d, and `gg`/`G`. Loading a different analysis starts at
+its first result line. Tab and Shift+Tab leave or enter the viewport.
+
+Rerun is a focused action labeled as billable; activating it is the explicit
+request and does not add a second confirmation. It reconstructs and validates
+the retained text inside the shared history/analysis module before credential
+resolution, creates a fresh analysis with `rerun_of`, always requests no public
+dashboard link, and never implies manual save. The current automatic-history setting
 still determines whether a successful rerun is saved automatically.
 
 Delete exists only in the selected record's contextual action menu. Enter on

@@ -48,7 +48,7 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
                     result.num_ai_assisted_segments,
                     result.num_human_segments,
                 )));
-                for (index, segment) in result.segments.iter().take(6).enumerate() {
+                for (index, segment) in result.segments.iter().enumerate() {
                     lines.push(Line::raw(format!(
                         "{}. {} - {:.1}% AI assistance",
                         index + 1,
@@ -85,7 +85,7 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
                     result.plagiarized_sentence_count,
                     result.total_sentences,
                 )));
-                for (index, matched) in result.matches.iter().take(6).enumerate() {
+                for (index, matched) in result.matches.iter().enumerate() {
                     lines.push(Line::raw(format!(
                         "Match {}: {:.1}% - {} - {}",
                         index + 1,
@@ -113,6 +113,20 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
         save_state_label(analysis.save_state)
     )));
     lines
+}
+
+/// Counts canonical result lines without formatting or sanitizing their text.
+pub(crate) fn analysis_result_line_count(analysis: &Analysis<CanonicalError>) -> usize {
+    analysis.checks().iter().fold(3, |count, check| {
+        count
+            + match check {
+                Check::AiDetection(CheckState::Succeeded { result, .. }) => {
+                    5 + result.segments.len() + usize::from(result.dashboard_link.is_some())
+                }
+                Check::Plagiarism(CheckState::Succeeded { result, .. }) => 1 + result.matches.len(),
+                Check::AiDetection(_) | Check::Plagiarism(_) => 1,
+            }
+    })
 }
 
 pub(crate) const fn save_state_label(state: SaveState) -> &'static str {

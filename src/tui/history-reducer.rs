@@ -17,8 +17,8 @@ use super::model::{
     ANALYSIS_IN_PROGRESS_NOTICE, AppState, Effect, Focus, KeyInput, Overlay, Route,
 };
 
-pub(super) const fn focus_order() -> &'static [Focus] {
-    &[
+pub(super) const fn focus_order(detail_loaded: bool) -> &'static [Focus] {
+    const LIST: &[Focus] = &[
         Focus::Routes,
         Focus::HistorySearch,
         Focus::HistoryStatusFilter,
@@ -28,7 +28,20 @@ pub(super) const fn focus_order() -> &'static [Focus] {
         Focus::HistoryExport,
         Focus::HistoryDelete,
         Focus::Quit,
-    ]
+    ];
+    const DETAIL: &[Focus] = &[
+        Focus::Routes,
+        Focus::HistorySearch,
+        Focus::HistoryStatusFilter,
+        Focus::HistoryCheckFilter,
+        Focus::HistoryList,
+        Focus::Result,
+        Focus::HistoryRerun,
+        Focus::HistoryExport,
+        Focus::HistoryDelete,
+        Focus::Quit,
+    ];
+    if detail_loaded { DETAIL } else { LIST }
 }
 
 pub(super) fn history_changed(state: &mut AppState, effects: &mut Vec<Effect>) {
@@ -78,8 +91,13 @@ pub(super) fn complete_detail(
     }
     match result {
         Ok(detail) if detail.analysis().id == analysis_id => {
-            state.history.load_detail(detail);
-            state.notice = None;
+            if state.history.load_detail(detail) {
+                state.notice = None;
+                if state.route == Route::History {
+                    state.result_viewport.reset(analysis_id);
+                    state.focus = Focus::Result;
+                }
+            }
         }
         Ok(_) => {}
         Err(error) => history_error(state, error),

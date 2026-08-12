@@ -14,6 +14,7 @@ use crate::output::CanonicalError;
 use super::active::ActiveState;
 pub(crate) use super::history::HistoryExportField;
 use super::history::{ExportRequest, HistoryLoadRequest, HistoryState, RedactedAnalysis};
+use super::result_viewport::{ResultMove, ResultViewport};
 pub use super::text_field::TextField;
 use super::text_field::edit_value;
 
@@ -120,6 +121,7 @@ pub enum Focus {
     PublicLink,
     ManualSave,
     Submit,
+    Result,
     ActiveList,
     HistorySearch,
     HistoryStatusFilter,
@@ -235,6 +237,7 @@ pub struct AppState {
     pub keymap: Keymap,
     pub notice: Option<String>,
     pub analysis: AnalysisView,
+    pub(crate) result_viewport: ResultViewport,
     pub(crate) active: ActiveState,
     pub history: HistoryState,
     pub settings: SettingsDraft,
@@ -267,6 +270,7 @@ impl AppState {
             keymap: startup.keymap,
             notice: None,
             analysis: AnalysisView::default(),
+            result_viewport: ResultViewport::default(),
             active: ActiveState::default(),
             history: HistoryState::initial_loading(),
             settings: startup.settings,
@@ -421,6 +425,10 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
             state.active.remove(analysis.id);
             state.analysis.current = Some(analysis);
             super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
+            if state.route == Route::Analyze {
+                state.result_viewport.reset(analysis_id);
+                state.focus = Focus::Result;
+            }
         }
         AppEvent::AnalysisFailed(failure) => {
             if !state.history.accepts_analysis_event(failure.analysis_id) {
@@ -507,10 +515,20 @@ fn reduce_key(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>) {
     if super::history_reducer::reduce_key(state, key, effects) {
         return;
     }
+    if super::result_viewport::reduce_key(state, key) {
+        return;
+    }
+    if super::active::reduce_key(state, key) {
+        return;
+    }
 
     state.vim_prefix_g = match (state.keymap, state.vim_prefix_g, key) {
         (Keymap::Vim, true, KeyInput::Character('g')) => {
-            state.focus = first_focus(state.route);
+            if state.focus == Focus::Result {
+                super::result_viewport::navigate(state, ResultMove::First);
+            } else {
+                state.focus = first_focus(state.route);
+            }
             false
         }
         (Keymap::Vim, false, KeyInput::Character('g')) => true,
@@ -530,7 +548,11 @@ fn reduce_key(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>) {
         KeyInput::Character('k') if state.keymap == Keymap::Vim => move_focus(state, -1),
         KeyInput::Character('j') if state.keymap == Keymap::Vim => move_focus(state, 1),
         KeyInput::Character('G') if state.keymap == Keymap::Vim => {
-            state.focus = Focus::Quit;
+            if state.focus == Focus::Result {
+                super::result_viewport::navigate(state, ResultMove::Last);
+            } else {
+                state.focus = Focus::Quit;
+            }
         }
         KeyInput::Character('n') | KeyInput::CtrlD if state.keymap == Keymap::Vim => {
             move_focus(state, 1);
@@ -707,6 +729,7 @@ fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
         Focus::Quit => effects.push(Effect::Exit(0)),
         Focus::Routes
         | Focus::Composer
+        | Focus::Result
         | Focus::ActiveList
         | Focus::HistorySearch
         | Focus::HistoryStatusFilter
@@ -727,7 +750,7 @@ fn first_focus(route: Route) -> Focus {
     }
 }
 
-fn focus_order(route: Route) -> &'static [Focus] {
+fn focus_order(state: &AppState) -> &'static [Focus] {
     const ANALYZE: &[Focus] = &[
         Focus::Routes,
         Focus::CheckAi,
@@ -741,6 +764,7 @@ fn focus_order(route: Route) -> &'static [Focus] {
         Focus::Submit,
         Focus::Quit,
     ];
+    const ANALYZE_RESULT: &[Focus] = &[Focus::Routes, Focus::Result, Focus::Submit, Focus::Quit];
     const ACTIVE: &[Focus] = &[Focus::Routes, Focus::ActiveList, Focus::Quit];
     const SETTINGS: &[Focus] = &[
         Focus::Routes,
@@ -752,16 +776,19 @@ fn focus_order(route: Route) -> &'static [Focus] {
         Focus::SettingsUpdates,
         Focus::Quit,
     ];
-    match route {
+    match state.route {
+        Route::Analyze if state.analysis.current.is_some() => ANALYZE_RESULT,
         Route::Analyze => ANALYZE,
         Route::Active => ACTIVE,
-        Route::History => super::history_reducer::focus_order(),
+        Route::History => {
+            super::history_reducer::focus_order(state.history.selected_detail().is_some())
+        }
         Route::Settings => SETTINGS,
     }
 }
 
 fn move_focus(state: &mut AppState, offset: isize) {
-    let order = focus_order(state.route);
+    let order = focus_order(state);
     let current = order
         .iter()
         .position(|focus| *focus == state.focus)

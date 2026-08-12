@@ -292,33 +292,54 @@ fn hostile_history_analysis() -> Analysis<CanonicalError> {
         fraction_ai: Fraction::new(0.4).expect("valid fraction"),
         fraction_ai_assisted: Fraction::new(0.2).expect("valid fraction"),
         fraction_human: Fraction::new(0.4).expect("valid fraction"),
-        num_ai_segments: 1,
+        num_ai_segments: 8,
         num_ai_assisted_segments: 0,
         num_human_segments: 0,
-        segments: vec![Segment {
-            text: "SECRET_SEGMENT_TEXT".to_owned(),
-            label: NonEmptyString::new("segment\u{1b}[32mlabel").expect("segment label"),
-            ai_assistance_score: Fraction::new(0.4).expect("valid fraction"),
-            confidence: Confidence::High,
-            start_index: 0,
-            end_index: 7,
-            word_count: 1,
-            token_length: 1,
-            humanizer_score: Fraction::new(0.0).expect("valid fraction"),
-            is_humanized: false,
-        }],
+        segments: (1..=8)
+            .map(|index| Segment {
+                text: if index == 1 {
+                    "SECRET_SEGMENT_TEXT".to_owned()
+                } else {
+                    format!("segment evidence {index}")
+                },
+                label: NonEmptyString::new(if index == 1 {
+                    "segment\u{1b}[32mlabel".to_owned()
+                } else {
+                    format!("segment-{index}")
+                })
+                .expect("segment label"),
+                ai_assistance_score: Fraction::new(0.4).expect("valid fraction"),
+                confidence: Confidence::High,
+                start_index: (index - 1) * 10,
+                end_index: index * 10,
+                word_count: 1,
+                token_length: 1,
+                humanizer_score: Fraction::new(0.0).expect("valid fraction"),
+                is_humanized: false,
+            })
+            .collect(),
         dashboard_link: Some("https://example.test/result\u{1b}[0mreset".to_owned()),
     };
     let plagiarism_result = PlagiarismResult {
         plagiarism_detected: true,
-        total_sentences: 1,
-        plagiarized_sentence_count: 1,
+        total_sentences: 8,
+        plagiarized_sentence_count: 8,
         percent_plagiarized: Percentage::new(100.0).expect("valid percentage"),
-        matches: vec![PlagiarismMatch {
-            source_url: "https://source.test/\u{1b}[31murl".to_owned(),
-            matched_text: "matched\u{1b}[2Jtext".to_owned(),
-            similarity_score: Fraction::new(0.9).expect("valid fraction"),
-        }],
+        matches: (1..=8)
+            .map(|index| PlagiarismMatch {
+                source_url: if index == 1 {
+                    "https://source.test/\u{1b}[31murl".to_owned()
+                } else {
+                    format!("https://source.test/{index}")
+                },
+                matched_text: if index == 1 {
+                    "matched\u{1b}[2Jtext".to_owned()
+                } else {
+                    format!("match evidence {index}")
+                },
+                similarity_score: Fraction::new(0.9).expect("valid fraction"),
+            })
+            .collect(),
     };
     let checks = OrderedChecks::new([
         Check::AiDetection(CheckState::Succeeded {
@@ -523,10 +544,42 @@ fn active_combines_session_work_with_saved_unfinished_history() {
 
     let text = draw(120, 40, &state).text();
 
-    assert!(text.contains(FIXED_ANALYSIS_ID));
+    assert!(text.contains(&format!("> {FIXED_ANALYSIS_ID} - queued - this session")));
     assert!(text.contains(&format!("{} - queued - saved history", history_id(1))));
     assert!(text.contains(&format!("{} - running - saved history", history_id(2))));
     assert!(!text.contains(&history_id(3).to_string()));
+}
+
+#[test]
+fn active_selection_reaches_rows_beyond_the_first_viewport() {
+    let state = ready_state(120, 40);
+    let request = state.history.load_request();
+    let summaries = (1..=8)
+        .map(|index| {
+            history_summary_with_status(
+                index,
+                AnalysisStatus::Queued,
+                SaveState::SavedHistory,
+                "queued record",
+            )
+        })
+        .collect();
+    let mut state = reduce(
+        state,
+        AppEvent::HistoryLoaded {
+            request,
+            result: Ok(summaries),
+        },
+    )
+    .state;
+    state.route = Route::Active;
+    state.focus = Focus::ActiveList;
+
+    state = reduce(state, AppEvent::Key(KeyInput::End)).state;
+    let text = draw(120, 40, &state).text();
+
+    assert!(text.contains(&format!("> {} - queued - saved history", history_id(8))));
+    assert!(!text.contains(&history_id(1).to_string()));
 }
 
 #[test]
@@ -808,7 +861,7 @@ fn history_window_keeps_selection_after_the_first_six_records_visible() {
 
 #[test]
 fn history_detail_is_redacted_and_uses_the_shared_terminal_safe_result_lines() {
-    let mut state = history_state(120, 40);
+    let mut state = history_state(120, 24);
     state.focus = Focus::HistoryList;
     state.history.reload(vec![history_summary(
         1,
@@ -820,28 +873,59 @@ fn history_detail_is_redacted_and_uses_the_shared_terminal_safe_result_lines() {
             .history
             .load_detail(RedactedAnalysis::new(hostile_history_analysis()))
     );
+    state.result_viewport.reset(history_id(1));
+    state.focus = Focus::Result;
 
-    let text = draw(120, 40, &state).text();
+    let first_page = draw(120, 24, &state).text();
 
-    assert!(text.contains("Selected detail - retained input redacted"));
-    assert!(text.contains("Input file: report [31m.txt - text/plain [0m - 20 bytes"));
-    assert!(text.contains("Retained input content: redacted"));
-    assert!(text.contains("Classification: Mixed"));
-    assert!(text.contains("Result: headline [31mforged next"));
-    assert!(text.contains("Prediction: prediction [2Jcleared"));
-    assert!(text.contains("1. segment [32mlabel - 40.0% AI assistance"));
-    assert!(text.contains("Plagiarism: detected - 100.0% across 1/1 sentences"));
-    assert!(text.contains("https://source.test/ [31murl - matched [2Jtext"));
-    assert!(text.contains("Save state: saved history"));
+    assert!(first_page.contains("Selected detail - retained input redacted"));
+    assert!(first_page.contains("Input file: report [31m.txt - text/plain [0m - 20 bytes"));
+    assert!(first_page.contains("Retained input content: redacted"));
+    assert!(first_page.contains("Classification: Mixed"));
+    assert!(first_page.contains("Result: headline [31mforged next"));
+    assert!(first_page.contains("Prediction: prediction [2Jcleared"));
+
+    for _ in 0..3 {
+        state = reduce(state, AppEvent::Key(KeyInput::PageDown)).state;
+    }
+    let evidence_page = draw(120, 24, &state).text();
+    assert!(evidence_page.contains("8. segment-8 - 40.0% AI assistance"));
+    assert!(evidence_page.contains("Plagiarism: detected - 100.0% across 8/8 sentences"));
+    assert!(evidence_page.contains("https://source.test/ [31murl - matched [2Jtext"));
+
+    state = reduce(state, AppEvent::Key(KeyInput::End)).state;
+    let last_page = draw(120, 24, &state).text();
+    assert!(last_page.contains("Match 8: 90.0% - https://source.test/8 - match evidence 8"));
+    assert!(last_page.contains("Save state: saved history"));
     for secret in [
         "SECRET_RETAINED_FILE",
         "SECRET_EXTRACTED_TEXT",
         "SECRET_SEGMENT_TEXT",
         "/secret/original/path.txt",
     ] {
-        assert!(!text.contains(secret), "leaked {secret}");
+        assert!(!first_page.contains(secret), "leaked {secret}");
+        assert!(!evidence_page.contains(secret), "leaked {secret}");
+        assert!(!last_page.contains(secret), "leaked {secret}");
     }
-    assert!(!text.contains('\u{1b}'));
+    assert!(!first_page.contains('\u{1b}'));
+    assert!(!evidence_page.contains('\u{1b}'));
+    assert!(!last_page.contains('\u{1b}'));
+}
+
+#[test]
+fn analyze_result_viewport_reaches_the_last_ordered_evidence() {
+    let mut state = reduce(
+        ready_state(120, 24),
+        AppEvent::AnalysisFinished(hostile_history_analysis()),
+    )
+    .state;
+    assert_eq!(state.focus, Focus::Result);
+
+    state = reduce(state, AppEvent::Key(KeyInput::End)).state;
+    let text = draw(120, 24, &state).text();
+
+    assert!(text.contains("Match 8: 90.0% - https://source.test/8 - match evidence 8"));
+    assert!(text.contains("Save state: saved history"));
 }
 
 #[test]

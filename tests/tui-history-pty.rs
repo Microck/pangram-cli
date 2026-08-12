@@ -449,9 +449,9 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
             String::from_utf8_lossy(&transcript)
         );
 
-        // A successful rerun moves to Active with ActiveList focused. One Tab
-        // reaches the documented Quit action without a hidden shortcut.
-        write_keys(&mut writer, b"\t\r", "activate the focusable Quit action");
+        // A successful rerun opens its scrollable result. Traverse the
+        // focusable New analysis action before Quit without a shortcut.
+        write_keys(&mut writer, b"\t\t\r", "activate the focusable Quit action");
     }));
 
     let mut killer = child.clone_killer();
