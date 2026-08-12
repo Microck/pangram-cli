@@ -11,6 +11,7 @@ use crate::analysis::AnalysisProgress;
 use crate::domain::{Analysis, AnalysisId, AnalysisSummary, text_billable_units};
 use crate::output::CanonicalError;
 
+use super::active::ActiveState;
 pub(crate) use super::history::HistoryExportField;
 use super::history::{ExportRequest, HistoryLoadRequest, HistoryState, RedactedAnalysis};
 pub use super::text_field::TextField;
@@ -234,7 +235,7 @@ pub struct AppState {
     pub keymap: Keymap,
     pub notice: Option<String>,
     pub analysis: AnalysisView,
-    pub active: Vec<Analysis<CanonicalError>>,
+    pub(crate) active: ActiveState,
     pub history: HistoryState,
     pub settings: SettingsDraft,
     vim_prefix_g: bool,
@@ -266,7 +267,7 @@ impl AppState {
             keymap: startup.keymap,
             notice: None,
             analysis: AnalysisView::default(),
-            active: Vec::new(),
+            active: ActiveState::default(),
             history: HistoryState::initial_loading(),
             settings: startup.settings,
             vim_prefix_g: false,
@@ -397,10 +398,13 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
             state.analysis.submitting = false;
             state.analysis.failure = None;
             state.analysis.current = Some(analysis.clone());
-            upsert_active(&mut state.active, analysis);
+            state.active.accept(&analysis);
         }
         AppEvent::AnalysisProgress(progress) => {
             if !state.history.accepts_analysis_event(progress.analysis_id) {
+                return Transition { state, effects };
+            }
+            if !state.active.progress(progress.analysis_id) {
                 return Transition { state, effects };
             }
             state.analysis.submitting = false;
@@ -414,7 +418,7 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
             state.analysis.submitting = false;
             state.analysis.progress = None;
             state.analysis.failure = None;
-            state.active.retain(|item| item.id != analysis.id);
+            state.active.remove(analysis.id);
             state.analysis.current = Some(analysis);
             super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
         }
@@ -425,7 +429,7 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> Transition {
             let analysis_id = failure.analysis_id;
             state.analysis.submitting = false;
             state.analysis.progress = None;
-            state.active.retain(|item| item.id != failure.analysis_id);
+            state.active.remove(failure.analysis_id);
             state.analysis.failure = Some(failure);
             super::history_reducer::complete_rerun_analysis(&mut state, analysis_id, &mut effects);
         }
@@ -640,7 +644,7 @@ fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
         Focus::PublicLink => state.public_link = !state.public_link,
         Focus::ManualSave => state.manual_save = !state.manual_save,
         Focus::Submit => {
-            if state.analysis.submitting || !state.active.is_empty() {
+            if state.analysis.submitting || state.active.has_session() {
                 state.notice = Some(ANALYSIS_IN_PROGRESS_NOTICE.to_owned());
             } else if state.analysis.current.is_some()
                 || state.analysis.progress.is_some()
@@ -779,14 +783,6 @@ fn move_route_or_focus(state: &mut AppState, offset: isize) {
         .saturating_add_signed(offset)
         .min(Route::ALL.len() - 1);
     state.route = Route::ALL[next];
-}
-
-fn upsert_active(active: &mut Vec<Analysis<CanonicalError>>, analysis: Analysis<CanonicalError>) {
-    if let Some(existing) = active.iter_mut().find(|item| item.id == analysis.id) {
-        *existing = analysis;
-    } else {
-        active.push(analysis);
-    }
 }
 
 #[cfg(test)]

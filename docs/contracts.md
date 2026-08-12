@@ -1132,6 +1132,15 @@ surface has these observable boundaries:
   intro frames but does not block the reducer, Analyze workflow, layout, or
   terminal restoration.
 
+The TUI Active route is an ID-keyed union of in-session operations and saved
+unfinished analyses discovered through certified History pages. Queued and
+running summaries merge into Active without duplicating an in-session entry.
+A matching progress event advances only that analysis to running. A returned
+terminal summary, successful deletion, or matching terminal analysis event
+removes only that exact ID. Omission from a later History page does not remove
+an Active entry because search, filters, and the 50-record page limit can omit
+an otherwise unfinished saved analysis.
+
 The TUI History route uses the same certified SQLite records and closed filters
 as the noninteractive history commands. Disabling automatic history does not
 hide records already stored. It shows at most the newest 50 matching records,

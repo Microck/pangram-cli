@@ -21,6 +21,8 @@ mod terminal;
 #[path = "text-field.rs"]
 mod text_field;
 
+mod active;
+
 use std::io::{self, IsTerminal as _};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;

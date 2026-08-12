@@ -10,7 +10,7 @@ use crate::domain::{
     AnalysisStatus, AnalysisSummary, Check, CheckKind, CheckState, Confidence, FileInput, Fraction,
     NonEmptyString, OrderedChecks, Percentage, PlagiarismMatch, PlagiarismResult, Provenance,
     Provider, SaveState, Segment, Sha256Hash, SubmissionOutcome, TextInput, TextOrigin,
-    UpstreamTaskId, UtcTimestamp,
+    UpstreamTaskId, UpstreamTaskIds, UtcTimestamp,
 };
 use crate::history::HistoryExportFormat;
 use crate::output::{CanonicalError, ErrorCode};
@@ -109,6 +109,42 @@ fn terminal_analysis(
         result,
     };
     analysis_with_check(Check::AiDetection(check), save_state)
+}
+
+fn queued_analysis(id: AnalysisId) -> Analysis<CanonicalError> {
+    let input = TextInput::new(
+        TextOrigin::Literal,
+        None,
+        Sha256Hash::digest(b"A queued analysis fixture."),
+        26,
+        4,
+        None,
+    )
+    .expect("valid text input");
+    let task_id = UpstreamTaskId::new(format!("task-{id}")).expect("valid task ID");
+    let checks = OrderedChecks::new([Check::AiDetection(CheckState::Queued { upstream: None })])
+        .expect("one check");
+    Analysis::new(
+        id,
+        SubmissionOutcome::Accepted,
+        AnalysisInput::Text(input),
+        checks,
+        SaveState::Ephemeral,
+        Provenance {
+            provider: Provider::Pangram,
+            upstream_version: None,
+            upstream_task_ids: Some(UpstreamTaskIds::new(vec![task_id]).expect("one task ID")),
+            upstream_bulk_id: None,
+            submitted_at: Some(timestamp()),
+            completed_at: None,
+        },
+        None,
+        None,
+        timestamp(),
+        timestamp(),
+        None,
+    )
+    .expect("valid queued analysis")
 }
 
 fn failed_terminal_analysis() -> Analysis<CanonicalError> {
@@ -221,9 +257,18 @@ fn history_id(index: u8) -> AnalysisId {
 }
 
 fn history_summary(index: u8, save_state: SaveState, display_name: &str) -> AnalysisSummary {
+    history_summary_with_status(index, AnalysisStatus::Succeeded, save_state, display_name)
+}
+
+fn history_summary_with_status(
+    index: u8,
+    status: AnalysisStatus,
+    save_state: SaveState,
+    display_name: &str,
+) -> AnalysisSummary {
     AnalysisSummary {
         id: history_id(index),
-        status: AnalysisStatus::Succeeded,
+        status,
         checks: OrderedChecks::new([CheckKind::AiDetection]).expect("one check"),
         save_state,
         input_kind: AnalysisInputKind::Text,
@@ -370,11 +415,7 @@ fn below_minimum_overlay_preserves_the_underlying_state() {
     let screen = draw(79, 23, &state);
 
     assert!(screen.row(2).starts_with(" Active"));
-    assert!(
-        screen
-            .row(4)
-            .contains("No active analyses in this session.")
-    );
+    assert!(screen.row(4).contains("No unfinished analyses."));
     assert!(screen.text().contains("Terminal too small"));
     assert!(screen.text().contains("Resize to at least 80x24."));
     assert_eq!(state.route, route_before);
@@ -425,18 +466,132 @@ fn submitting_state_distinguishes_the_one_time_request_from_polling() {
 
 #[test]
 fn progress_state_preserves_the_canonical_identity_and_upstream_stage() {
+    let accepted = reduce(
+        ready_state(120, 40),
+        AppEvent::AnalysisAccepted(queued_analysis(analysis_id())),
+    );
     let progress = AnalysisProgress {
         analysis_id: analysis_id(),
         task_id: UpstreamTaskId::new("task-render-progress").expect("valid task ID"),
         last_stage: NonEmptyString::new("DETECTING_AI").expect("valid stage"),
     };
-    let state = reduce(ready_state(120, 40), AppEvent::AnalysisProgress(progress)).state;
+    let mut state = reduce(accepted.state, AppEvent::AnalysisProgress(progress)).state;
     let text = draw(120, 40, &state).text();
 
     assert!(text.contains("Analysis in progress"));
-    assert!(text.contains(FIXED_ANALYSIS_ID));
     assert!(text.contains("Stage: DETECTING_AI"));
     assert!(!text.contains("Submitting analysis"));
+
+    state.route = Route::Active;
+    state.focus = Focus::ActiveList;
+    let active_text = draw(120, 40, &state).text();
+    assert!(active_text.contains(&format!("{FIXED_ANALYSIS_ID} - running - this session")));
+}
+
+#[test]
+fn active_combines_session_work_with_saved_unfinished_history() {
+    let state = ready_state(120, 40);
+    let request = state.history.load_request();
+    let loaded = reduce(
+        state,
+        AppEvent::HistoryLoaded {
+            request,
+            result: Ok(vec![
+                history_summary_with_status(
+                    1,
+                    AnalysisStatus::Queued,
+                    SaveState::SavedManual,
+                    "queued record",
+                ),
+                history_summary_with_status(
+                    2,
+                    AnalysisStatus::Running,
+                    SaveState::SavedHistory,
+                    "running record",
+                ),
+                history_summary(3, SaveState::SavedHistory, "finished record"),
+            ]),
+        },
+    );
+    let mut state = reduce(
+        loaded.state,
+        AppEvent::AnalysisAccepted(queued_analysis(analysis_id())),
+    )
+    .state;
+    state.route = Route::Active;
+    state.focus = Focus::ActiveList;
+
+    let text = draw(120, 40, &state).text();
+
+    assert!(text.contains(FIXED_ANALYSIS_ID));
+    assert!(text.contains(&format!("{} - queued - saved history", history_id(1))));
+    assert!(text.contains(&format!("{} - running - saved history", history_id(2))));
+    assert!(!text.contains(&history_id(3).to_string()));
+}
+
+#[test]
+fn progress_and_terminal_events_change_only_the_matching_active_identity() {
+    let other_id = history_id(2);
+    let first = reduce(
+        ready_state(120, 40),
+        AppEvent::AnalysisAccepted(queued_analysis(analysis_id())),
+    );
+    let accepted = reduce(
+        first.state,
+        AppEvent::AnalysisAccepted(queued_analysis(other_id)),
+    );
+    let progressed = reduce(
+        accepted.state,
+        AppEvent::AnalysisProgress(AnalysisProgress {
+            analysis_id: analysis_id(),
+            task_id: UpstreamTaskId::new("task-progress-owner").expect("valid task ID"),
+            last_stage: NonEmptyString::new("DETECTING_AI").expect("valid stage"),
+        }),
+    );
+    assert_eq!(
+        progressed.state.active.status(analysis_id()),
+        Some(AnalysisStatus::Running)
+    );
+    assert_eq!(
+        progressed.state.active.status(other_id),
+        Some(AnalysisStatus::Queued)
+    );
+
+    let stale = reduce(
+        progressed.state,
+        AppEvent::AnalysisProgress(AnalysisProgress {
+            analysis_id: history_id(9),
+            task_id: UpstreamTaskId::new("task-stale").expect("valid task ID"),
+            last_stage: NonEmptyString::new("STALE").expect("valid stage"),
+        }),
+    );
+    assert_eq!(
+        stale.state.active.status(analysis_id()),
+        Some(AnalysisStatus::Running)
+    );
+    assert_eq!(
+        stale.state.active.status(other_id),
+        Some(AnalysisStatus::Queued)
+    );
+    assert_eq!(
+        stale
+            .state
+            .analysis
+            .progress
+            .as_ref()
+            .map(|progress| progress.analysis_id),
+        Some(analysis_id())
+    );
+
+    let completed = reduce(
+        stale.state,
+        AppEvent::AnalysisFinished(terminal_analysis(SaveState::Ephemeral, None)),
+    );
+    assert_eq!(completed.state.active.status(analysis_id()), None);
+    assert_eq!(
+        completed.state.active.status(other_id),
+        Some(AnalysisStatus::Queued)
+    );
 }
 
 #[test]

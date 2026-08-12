@@ -47,15 +47,132 @@ fn history_id(index: u8) -> AnalysisId {
 }
 
 fn history_summary(index: u8) -> AnalysisSummary {
+    history_summary_with_status(index, AnalysisStatus::Succeeded)
+}
+
+fn history_summary_with_status(index: u8, status: AnalysisStatus) -> AnalysisSummary {
     AnalysisSummary {
         id: history_id(index),
-        status: AnalysisStatus::Succeeded,
+        status,
         checks: OrderedChecks::new([CheckKind::AiDetection]).expect("one check"),
         save_state: SaveState::SavedHistory,
         input_kind: AnalysisInputKind::Text,
         display_name: Some(format!("record-{index}")),
         created_at: UtcTimestamp::from_str("2026-08-01T10:00:00Z").expect("canonical timestamp"),
     }
+}
+
+#[test]
+fn saved_active_rows_survive_page_omission_and_exact_terminal_evidence_removes_one() {
+    let state = ready_state();
+    let initial_request = state.history.load_request();
+    let loaded = reduce(
+        state,
+        AppEvent::HistoryLoaded {
+            request: initial_request,
+            result: Ok(vec![
+                history_summary_with_status(1, AnalysisStatus::Queued),
+                history_summary_with_status(2, AnalysisStatus::Running),
+            ]),
+        },
+    );
+    assert_eq!(
+        loaded.state.active.status(history_id(1)),
+        Some(AnalysisStatus::Queued)
+    );
+    assert_eq!(
+        loaded.state.active.status(history_id(2)),
+        Some(AnalysisStatus::Running)
+    );
+
+    let changed = reduce(loaded.state, AppEvent::HistoryChanged);
+    let [Effect::LoadHistory(filtered_request)] = changed.effects.as_slice() else {
+        panic!("history change must request a reload")
+    };
+    let omitted = reduce(
+        changed.state,
+        AppEvent::HistoryLoaded {
+            request: filtered_request.clone(),
+            result: Ok(vec![history_summary_with_status(
+                2,
+                AnalysisStatus::Running,
+            )]),
+        },
+    );
+    assert_eq!(
+        omitted.state.active.status(history_id(1)),
+        Some(AnalysisStatus::Queued)
+    );
+
+    let changed = reduce(omitted.state, AppEvent::HistoryChanged);
+    let [Effect::LoadHistory(terminal_request)] = changed.effects.as_slice() else {
+        panic!("history change must request a reload")
+    };
+    let terminal = reduce(
+        changed.state,
+        AppEvent::HistoryLoaded {
+            request: terminal_request.clone(),
+            result: Ok(vec![history_summary(1)]),
+        },
+    );
+    assert_eq!(terminal.state.active.status(history_id(1)), None);
+    assert_eq!(
+        terminal.state.active.status(history_id(2)),
+        Some(AnalysisStatus::Running)
+    );
+}
+
+#[test]
+fn successful_history_delete_removes_only_its_exact_active_identity() {
+    let mut state = history_state(vec![
+        history_summary_with_status(1, AnalysisStatus::Queued),
+        history_summary_with_status(2, AnalysisStatus::Running),
+    ]);
+    state.route = Route::History;
+    state.focus = Focus::HistoryDelete;
+
+    let opened = reduce(state, AppEvent::Key(KeyInput::Enter));
+    let requested = reduce(opened.state, AppEvent::Key(KeyInput::Character('y')));
+    assert!(matches!(
+        requested.effects.as_slice(),
+        [Effect::DeleteHistory(id)] if *id == history_id(1)
+    ));
+    let deleted = reduce(
+        requested.state,
+        AppEvent::HistoryDeleted {
+            analysis_id: history_id(1),
+            result: Ok(()),
+        },
+    );
+
+    assert_eq!(deleted.state.active.status(history_id(1)), None);
+    assert_eq!(
+        deleted.state.active.status(history_id(2)),
+        Some(AnalysisStatus::Running)
+    );
+}
+
+#[test]
+fn saved_unfinished_rows_do_not_block_a_new_in_session_submission() {
+    let mut state = history_state(vec![history_summary_with_status(
+        1,
+        AnalysisStatus::Running,
+    )]);
+    state.route = Route::Analyze;
+    state.focus = Focus::Submit;
+    state.composer = TextField::from_value("new local submission".to_owned());
+
+    let submitted = reduce(state, AppEvent::Key(KeyInput::Enter));
+
+    assert!(matches!(
+        submitted.effects.as_slice(),
+        [Effect::SubmitText { .. }]
+    ));
+    assert!(submitted.state.analysis.submitting);
+    assert_eq!(
+        submitted.state.active.status(history_id(1)),
+        Some(AnalysisStatus::Running)
+    );
 }
 
 fn assert_pending_rerun(

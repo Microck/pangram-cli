@@ -51,6 +51,10 @@ pub(super) fn complete_load(
     }
     match result {
         Ok(items) => {
+            // A filtered page can add or update saved unfinished work, but
+            // omission is not evidence that another saved item completed.
+            // Only a returned terminal summary removes its exact saved row.
+            state.active.merge_saved(&items);
             state.history.reload(items);
         }
         Err(error) => history_error(state, error),
@@ -96,6 +100,7 @@ pub(super) fn complete_delete(
     }
     match result {
         Ok(()) => {
+            state.active.remove(analysis_id);
             // The row remains visible until this committed completion. A
             // fresh certified page, rather than local removal, now decides
             // what is visible and preserves deterministic selection rules.
@@ -307,7 +312,7 @@ fn load_selected_detail(state: &mut AppState, effects: &mut Vec<Effect>) {
 }
 
 fn rerun_selected(state: &mut AppState, effects: &mut Vec<Effect>) {
-    if state.analysis.submitting || !state.active.is_empty() {
+    if state.analysis.submitting || state.active.has_session() {
         state.notice = Some(ANALYSIS_IN_PROGRESS_NOTICE.to_owned());
         return;
     }

@@ -232,7 +232,7 @@ fn render_active(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             heading("Active"),
             Line::raw(""),
             Line::raw(format!(
-                "{}No active analyses in this session.",
+                "{}No unfinished analyses.",
                 if state.focus == Focus::ActiveList {
                     "> "
                 } else {
@@ -245,19 +245,20 @@ fn render_active(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         vec![
             heading("Active"),
             Line::raw(""),
-            Line::raw(format!("{} in-session operation(s)", state.active.len())),
+            Line::raw(format!("{} unfinished analysis(es)", state.active.len())),
         ]
     };
-    for (index, analysis) in state.active.iter().take(6).enumerate() {
+    for (index, row) in state.active.rows().iter().take(6).enumerate() {
         content.push(Line::raw(format!(
-            "{}{} - {}",
+            "{}{} - {} - {}",
             if index == 0 && state.focus == Focus::ActiveList {
                 "> "
             } else {
                 "  "
             },
-            analysis.id,
-            analysis_status_label(analysis.status()),
+            row.id,
+            analysis_status_label(row.status),
+            row.source.label(),
         )));
     }
     frame.render_widget(

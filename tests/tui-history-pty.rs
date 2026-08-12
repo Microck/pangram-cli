@@ -394,6 +394,7 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
         assert!(
             receive_until(&output_rx, &mut transcript, SCREEN_TIMEOUT, |bytes| {
                 screen_contains(bytes, "searched AI target")
+                    && screen_contains(bytes, "Showing 1")
                     && screen_contains(bytes, "Check filter: AI detection")
                     && screen_contains(bytes, "Status filter: succeeded")
             }),
