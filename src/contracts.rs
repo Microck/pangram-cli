@@ -16,14 +16,15 @@ use thiserror::Error;
 
 use crate::cli::{FULL_GRAMMAR, runtime_command};
 use crate::domain::{
-    Analysis, AnalysisSummaryPage, BulkCollection, BulkItem, BulkPage, Check, CheckStatus,
-    OrderedChecks, SubmissionOutcomeUnknownDetails,
+    Analysis, BulkCollection, BulkItem, Check, CheckStatus, OrderedChecks,
+    SubmissionOutcomeUnknownDetails,
 };
 use crate::output::{
-    CanonicalError, EnvelopeMeta, ErrorCode, ExitCode, ResolvedCommand,
-    SUBMISSION_OUTCOME_UNKNOWN_RECOVERY_MESSAGE,
+    CanonicalError, ErrorCode, ExitCode, SUBMISSION_OUTCOME_UNKNOWN_RECOVERY_MESSAGE,
 };
 
+mod mcp;
+mod output;
 mod schema_types;
 
 const CONTRACT_OWNER: &str = "rust:microck_pangram_cli::contracts";
@@ -53,6 +54,8 @@ pub enum ContractGenerationError {
 pub fn generated_artifacts() -> Result<Vec<GeneratedArtifact>, ContractGenerationError> {
     let mut help_command = runtime_command();
     let help = format!("{}\n", help_command.render_help().to_string().trim_end());
+    let output_schema = output::output_schema();
+    let (mcp_tools, agent_reference) = mcp::artifacts(&output_schema);
 
     Ok(vec![
         json_artifact("contracts/config.schema.json", config_schema())?,
@@ -64,7 +67,7 @@ pub fn generated_artifacts() -> Result<Vec<GeneratedArtifact>, ContractGeneratio
             "contracts/manifest-signature.schema.json",
             manifest_signature_schema(),
         )?,
-        json_artifact("contracts/output.schema.json", output_schema())?,
+        json_artifact("contracts/output.schema.json", output_schema)?,
         json_artifact("contracts/tui-state.schema.json", tui_state_schema())?,
         json_artifact(
             "contracts/update-manifest.schema.json",
@@ -77,7 +80,27 @@ pub fn generated_artifacts() -> Result<Vec<GeneratedArtifact>, ContractGeneratio
         },
         compact_json_artifact("generated/cli-reference.json", cli_reference())?,
         json_artifact("generated/error-reference.json", error_reference())?,
+        json_artifact("generated/mcp-tools.json", mcp_tools)?,
+        GeneratedArtifact {
+            path: "generated/agent-reference.md".into(),
+            bytes: agent_reference.into_bytes(),
+        },
     ])
+}
+
+/// Returns the canonical output envelope narrowed to one resolved command.
+///
+/// MCP descriptors use this interface instead of maintaining a second
+/// command-to-data mapping outside the contract module.
+pub(crate) fn mcp_output_schema() -> Value {
+    output::output_schema()
+}
+
+pub(crate) fn specialize_mcp_output_schema(
+    schema: &Value,
+    command: crate::output::ResolvedCommand,
+) -> Value {
+    output::specialized_output_schema(schema, command.as_str())
 }
 
 /// Writes the canonical artifacts below `root`.
@@ -221,7 +244,7 @@ fn remove_null_variant(schema: &mut Value) {
     }
 }
 
-fn object_mut(value: &mut Value) -> &mut Map<String, Value> {
+pub(super) fn object_mut(value: &mut Value) -> &mut Map<String, Value> {
     value
         .as_object_mut()
         .expect("contract schemas are JSON objects")
@@ -398,136 +421,11 @@ fn error_reference() -> Value {
 
 // The output schema combines Schemars-owned definitions with cross-field JSON
 // Schema constraints which Rust's type system cannot express by derivation.
-fn output_schema() -> Value {
-    let mut registry = rust_schema::<schema_types::OutputRegistry>();
-    strip_optional_nulls(&mut registry);
-    let mut definitions = object_mut(&mut registry)
-        .remove("$defs")
-        .expect("the output registry has definitions");
-
-    patch_output_definitions(&mut definitions);
-    let analysis = schema_ref::<Analysis<CanonicalError>>();
-    let array = json!({"type": "array", "minItems": 1, "items": analysis});
-    let conditions = vec![
-        data_condition(
-            &["detect", "plagiarism", "analyze"],
-            json!({"oneOf": [analysis, array]}),
-        ),
-        data_condition(
-            &["task_status", "task_wait", "history_show", "history_rerun"],
-            schema_ref::<Analysis<CanonicalError>>(),
-        ),
-        data_condition(
-            &["bulk_submit"],
-            json!({"oneOf": [
-                schema_ref::<BulkCollection>(),
-                schema_ref::<crate::output::BulkDryRun>(),
-            ]}),
-        ),
-        data_condition(
-            &["bulk_status", "bulk_wait"],
-            schema_ref::<BulkCollection>(),
-        ),
-        data_condition(&["bulk_results"], schema_ref::<BulkPage<CanonicalError>>()),
-        data_condition(
-            &["history_list", "history_search"],
-            schema_ref::<AnalysisSummaryPage>(),
-        ),
-        data_condition(
-            &[
-                "history_delete",
-                "history_clear",
-                "auth_set",
-                "auth_logout",
-                "config_set",
-                "mcp_install",
-                "mcp_uninstall",
-            ],
-            schema_ref::<crate::output::MutationAcknowledgement>(),
-        ),
-        data_condition(&["auth_status"], schema_ref::<crate::output::AuthStatus>()),
-        data_condition(
-            &["config_list"],
-            schema_ref::<crate::output::ConfigListStatus>(),
-        ),
-        data_condition(
-            &["config_get"],
-            schema_ref::<crate::output::ConfigGetStatus>(),
-        ),
-        data_condition(
-            &["config_path"],
-            schema_ref::<crate::output::ConfigPathStatus>(),
-        ),
-        data_condition(&["doctor"], schema_ref::<crate::output::DoctorStatus>()),
-        data_condition(&["mcp_status"], schema_ref::<crate::output::McpStatus>()),
-        data_condition(
-            &["update_check", "update_install"],
-            schema_ref::<crate::output::UpdateStatus>(),
-        ),
-    ];
-    let json_commands: Vec<_> = ResolvedCommand::ALL
-        .iter()
-        .copied()
-        .filter(|command| command.uses_json_envelope())
-        .map(ResolvedCommand::as_str)
-        .collect();
-    let all_commands: Vec<_> = ResolvedCommand::ALL
-        .iter()
-        .copied()
-        .map(ResolvedCommand::as_str)
-        .collect();
-
-    let definitions = object_mut(&mut definitions);
-    definitions.insert(
-        "successEnvelope".into(),
-        json!({
-            "type": "object",
-            "required": ["schema_version", "command", "data", "meta"],
-            "properties": {
-                "schema_version": {"const": "1"},
-                "command": {"enum": json_commands},
-                "data": {"oneOf": [{"type": "object"}, {"type": "array"}]},
-                "meta": schema_ref::<EnvelopeMeta>(),
-            },
-            "allOf": conditions,
-            "not": {"required": ["error"]},
-            "additionalProperties": true,
-        }),
-    );
-    definitions.insert(
-        "errorEnvelope".into(),
-        json!({
-            "type": "object",
-            "required": ["schema_version", "command", "error", "meta"],
-            "properties": {
-                "schema_version": {"const": "1"},
-                "command": {"enum": all_commands},
-                "error": schema_ref::<CanonicalError>(),
-                "meta": schema_ref::<EnvelopeMeta>(),
-            },
-            "not": {"required": ["data"]},
-            "additionalProperties": true,
-        }),
-    );
-
-    json!({
-        "$schema": DRAFT_2020_12,
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
-        "x-contract-owner": CONTRACT_OWNER,
-        "title": "Pangram CLI output envelope v1",
-        "oneOf": [
-            {"$ref": "#/$defs/successEnvelope"},
-            {"$ref": "#/$defs/errorEnvelope"}
-        ],
-        "$defs": definitions,
-    })
-}
-
-fn schema_ref<T: JsonSchema>() -> Value {
+pub(super) fn schema_ref<T: JsonSchema>() -> Value {
     json!({"$ref": format!("#/$defs/{}", T::schema_name())})
 }
 
-fn data_condition(commands: &[&str], data: Value) -> Value {
+pub(super) fn data_condition(commands: &[&str], data: Value) -> Value {
     let command = if commands.len() == 1 {
         json!({"const": commands[0]})
     } else {
@@ -543,7 +441,7 @@ fn definition_mut<T: JsonSchema>(definitions: &mut Value) -> &mut Value {
     &mut definitions[T::schema_name().as_ref()]
 }
 
-fn patch_output_definitions(definitions: &mut Value) {
+pub(super) fn patch_output_definitions(definitions: &mut Value) {
     if let Some(timestamp) = definitions.get_mut("UtcTimestamp") {
         object_mut(timestamp).insert("pattern".into(), "Z$".into());
     }

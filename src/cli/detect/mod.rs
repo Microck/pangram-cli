@@ -339,10 +339,10 @@ pub(crate) fn execute(
         match flow {
             Flow::Failed(error) => {
                 outcome.attach_failure(command, output, started_at, error);
-                if outcome.primary_ok {
-                    if let Some(exit_code) = required_save_exit {
-                        outcome.exit_code = exit_code;
-                    }
+                if outcome.primary_ok
+                    && let Some(exit_code) = required_save_exit
+                {
+                    outcome.exit_code = exit_code;
                 }
             }
             Flow::Interrupted(error, note) => {
@@ -617,10 +617,10 @@ impl ProgressSink {
                     observed,
                 )
                 .with_upstream_stage(event.last_stage.as_str());
-                if let Ok(progress) = progress {
-                    if let Ok(line) = serde_json::to_string(&progress) {
-                        eprintln!("{line}");
-                    }
+                if let Ok(progress) = progress
+                    && let Ok(line) = serde_json::to_string(&progress)
+                {
+                    eprintln!("{line}");
                 }
             }
         }

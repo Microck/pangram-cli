@@ -251,6 +251,14 @@ impl<C: Clock> AnalysisConfig<C> {
         self.max_requests_per_second
     }
 
+    /// Replaces the rate with a value already validated by the effective
+    /// configuration boundary. Session-aware adapters use this when they
+    /// retain an injected client's test policy but refresh its rate.
+    pub(crate) fn with_max_requests_per_second(mut self, rate: f64) -> Self {
+        self.max_requests_per_second = rate;
+        self
+    }
+
     pub(crate) const fn clock(&self) -> C {
         self.clock
     }

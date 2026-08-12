@@ -48,15 +48,14 @@ pub fn stored_analysis_with_retained_text(
 ) -> Result<StoredAnalysis, HistoryError> {
     let mut input_value = serde_json::to_value(&analysis.input)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
-    if let (Some(text), Some(input)) = (retained_text, input_value.as_object_mut()) {
-        if input.get("type").and_then(serde_json::Value::as_str) == Some("text")
-            && input.get("text").and_then(serde_json::Value::as_str) != Some(text)
-        {
-            input.insert(
-                "text".to_owned(),
-                serde_json::Value::String(text.to_owned()),
-            );
-        }
+    if let (Some(text), Some(input)) = (retained_text, input_value.as_object_mut())
+        && input.get("type").and_then(serde_json::Value::as_str) == Some("text")
+        && input.get("text").and_then(serde_json::Value::as_str) != Some(text)
+    {
+        input.insert(
+            "text".to_owned(),
+            serde_json::Value::String(text.to_owned()),
+        );
     }
     let input_json = serde_json::to_string(&input_value)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
@@ -199,29 +198,29 @@ pub fn stored_observations(analysis: &Analysis<CanonicalError>) -> Vec<StoredUps
                 check_state_upstream(state),
             ),
         };
-        if let Some(identity) = upstream {
-            if let Some(task_id) = &identity.task_id {
-                tasks.push(StoredUpstreamTask {
-                    analysis_id: analysis.id,
-                    check_kind: kind,
-                    upstream_task_id: task_id.to_string(),
-                    last_stage: identity.last_stage.as_ref().map(|stage| stage.to_string()),
-                    observed_at,
-                });
-            }
+        if let Some(identity) = upstream
+            && let Some(task_id) = &identity.task_id
+        {
+            tasks.push(StoredUpstreamTask {
+                analysis_id: analysis.id,
+                check_kind: kind,
+                upstream_task_id: task_id.to_string(),
+                last_stage: identity.last_stage.as_ref().map(|stage| stage.to_string()),
+                observed_at,
+            });
         }
     }
-    if tasks.is_empty() {
-        if let Some(ids) = &analysis.provenance().upstream_task_ids {
-            for task_id in ids.as_slice() {
-                tasks.push(StoredUpstreamTask {
-                    analysis_id: analysis.id,
-                    check_kind: crate::domain::CheckKind::AiDetection,
-                    upstream_task_id: task_id.to_string(),
-                    last_stage: None,
-                    observed_at,
-                });
-            }
+    if tasks.is_empty()
+        && let Some(ids) = &analysis.provenance().upstream_task_ids
+    {
+        for task_id in ids.as_slice() {
+            tasks.push(StoredUpstreamTask {
+                analysis_id: analysis.id,
+                check_kind: crate::domain::CheckKind::AiDetection,
+                upstream_task_id: task_id.to_string(),
+                last_stage: None,
+                observed_at,
+            });
         }
     }
     tasks

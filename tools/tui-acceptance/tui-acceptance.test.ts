@@ -123,9 +123,11 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.keyboard.press("Enter")
         await session.screen.waitForText("Update checks", { timeoutMs: START_TIMEOUT_MS })
         await session.keyboard.type("n")
-        await session.screen.waitForText("Type or paste text here", {
-          timeoutMs: START_TIMEOUT_MS,
-        })
+        await session.screen.waitUntil(
+          ({ text }) =>
+            text.includes("Type or paste text here") && !text.includes("Update checks"),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
         await expectSettledScreen(session, "stored-authentication-analyze")
 
         await quitNormally(session)

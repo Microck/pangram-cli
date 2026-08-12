@@ -321,10 +321,11 @@ Spawn the actual stdio MCP server.
 Verify:
 
 - `server/discover` and protocol version `2026-07-28`
-- required protocol version, client identity, and client capabilities in
-  request `_meta`
+- required protocol version and client capabilities in request `_meta`, with
+  client identity accepted as optional
 - rejection of the removed initialization lifecycle and older protocol versions
-- tool discovery with default capabilities
+- exact Phase 6 tool discovery: text detection, ordinary task get/wait, bulk
+  submit/get/wait/results, and no later-phase tools
 - ordinary `get_task` and `wait_task` tools without the Tasks extension
 - structured and text result content
 - `resultType: "complete"` on success and tool execution failure
@@ -335,17 +336,23 @@ Verify:
 - no generic CLI tool
 - no history tools by default
 - each capability gate
+- `save: true` rejection unless both `--history` and
+  `--allow-history-mutations` are enabled
+- local analysis and bulk ID rejection without history, while upstream IDs
+  remain usable
 - public-link rejection
-- no file tools without `--allow-file-root`
 - absolute, existing, repeatable file-root startup validation
 - installer refusal to approve file roots automatically
+- inline bulk items without roots, and `jsonl_path` rejection without a root
 - symlink and Windows reparse-point escape
 - path replacement between authorization and open
 - handle-relative open never escapes a pre-opened root
-- no-root file rejection
+- invalid startup configuration fails before stdin read, writes no stdout,
+  writes one sanitized stderr diagnostic, and exits 1
 - stderr logging without stdout frame corruption
-- check-only update behavior
-- static resources
+- exact static resource bytes and MIME types from
+  `contracts/output.schema.json`, `generated/error-reference.json`, and
+  `skills/pangram/SKILL.md`
 - no prompts and no history resources
 - deterministic tool and resource ordering
 - `ttlMs: 0` and `cacheScope: "private"` on list and resource-read results
@@ -353,16 +360,41 @@ Verify:
 - exact per-tool success and failure envelope schemas
 - absence of `io.modelcontextprotocol/tasks`, `tasks/get`, `tasks/update`, and
   `tasks/cancel`
-- JSON-RPC cancellation stops local observation without claiming upstream
-  cancellation
+- JSON-RPC cancellation stops local observation, produces no response for the
+  cancelled request, and does not claim upstream cancellation
 - `--allow-history-mutations` startup rejection without `--history`
+- `history_get` returns the canonical `history_show` envelope
+- generated `mcp-tools.json` is the one ordered descriptor and per-tool schema
+  inventory, and `agent-reference.md` matches the embedded bytes
 
-Run the official MCP conformance suite against the compiled server.
+Pin RMCP exactly to 3.1.2 and verify its locked source/archive identity, Rust
+1.88 minimum, and Apache-2.0 license transition notice. Pin
+`@modelcontextprotocol/conformance` exactly to 0.2.0-alpha.11 with npm
+`gitHead` `c321dd32035556e6769d3724a8ee97d87c3faaac` and integrity
+`sha512-imPK9tx5gQsL6ZKQq4MrsyDYfSaIwpRmX6+ogjbeAXs9LGvxkBxWcY7KcS7TvwaBk/ZiVWl6b/naF4q83UwDRA==`.
+
+The official suite cannot drive stdio while upstream issue 258 remains open.
+Its frozen `2026-07-28` server requirements also mandate diagnostic `test_*`
+tools, prompts, templates, binary resources, completion, SSE streams,
+DNS-rebinding checks, sampling, elicitation, roots, and input-required flows
+regardless of the server's advertised capabilities. Do not add those surfaces
+to a test-only HTTP server and call that Pangram conformance. Individual
+overlapping scenarios may exercise shared handler code, but the expanded
+fixture cannot prove Pangram's full-profile or stdio conformance. Prove the
+selected product contract through the compiled `pangram mcp` stdio subprocess
+suite. Re-run the applicability review when the official suite supports stdio
+and capability-aware scenario selection. Verify that HTTP transport and
+conformance-only `test_*` tools/resources are absent from normal builds and
+release artifacts.
 
 Installer tests use real temporary client config files for every supported
-client. Verify parsed atomic writes, idempotence, dry run, preservation of
-unrelated entries, exact named uninstall, and malformed-config failure without
-replacement.
+client whose current path and schema have been pinned from authoritative
+evidence. Verify explicit target selection, parsed atomic writes, idempotence,
+dry run, preservation of unrelated fields and bytes where the format permits,
+exact server-name ownership, conflicting-entry rejection, exact matching owned
+uninstall, and malformed-config failure without replacement. Verify installers
+add no root or optional capability flag by default. Do not enable a client
+target until its path, schema, and exact owned-entry match rule are pinned.
 
 ## 11. Updater tests
 

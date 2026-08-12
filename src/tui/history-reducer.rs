@@ -245,13 +245,13 @@ pub(super) fn reduce_key(state: &mut AppState, key: KeyInput, effects: &mut Vec<
             }
         }
         (Focus::HistoryDelete, KeyInput::Enter) => {
-            if state.history.pending().is_none() {
-                if let Some(analysis_id) = state.history.selected_id() {
-                    state.overlay = Some(Overlay::ConfirmHistoryDelete {
-                        analysis_id,
-                        confirm: false,
-                    });
-                }
+            if state.history.pending().is_none()
+                && let Some(analysis_id) = state.history.selected_id()
+            {
+                state.overlay = Some(Overlay::ConfirmHistoryDelete {
+                    analysis_id,
+                    confirm: false,
+                });
             }
         }
         _ => return false,

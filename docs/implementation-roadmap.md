@@ -357,44 +357,80 @@ signals.
 - `src/mcp.rs`
 - `tests/mcp-contract.rs`
 - `skills/pangram/SKILL.md`
-- generated agent reference
+- `generated/mcp-tools.json`
+- `generated/agent-reference.md`
 
 ### Work
 
-1. Implement MCP `2026-07-28` over stdio with `server/discover`, per-request
-   protocol metadata, typed tools, and `additionalProperties: false`.
+1. Pin stable RMCP exactly to 3.1.2, raise the dependency-driven MSRV to Rust
+   1.88, and implement MCP `2026-07-28` over stdio with `server/discover`,
+   required protocol version and client capabilities in request `_meta`,
+   optional client information, typed tools, and `additionalProperties: false`.
 2. Publish exact canonical success and failure envelopes as
-   `structuredContent` through generated per-tool output schemas, with
-   `resultType: "complete"`.
-3. Add repeated `--allow-file-root PATH` startup configuration and
-   handle-relative, no-follow file opening; omit file tools when no root is
-   configured.
-4. Apply separate history, history-mutation, config-mutation, and public-link
-   startup gates; reject history mutation without history read capability.
-5. Add correct read-only, destructive, idempotent, and open-world annotations.
-6. Implement safe, idempotent client install and uninstall plans.
-7. Expose ordinary `get_task` and `wait_task` tools without implementing the
+   `structuredContent` through command-specialized output schemas in the one
+   generated tool inventory, with `resultType: "complete"`.
+3. Advertise only Phase 6 tools: `detect_text`, ordinary task get/wait, bulk
+   submit/get/wait/results, and gated history/configuration tools. Leave file
+   detection, plagiarism, and combined analysis absent until Phase 7, and
+   update checks absent until Phase 8, without compatibility shims.
+4. Add repeated `--allow-file-root PATH` startup configuration and
+   handle-relative, no-follow opening for bulk `jsonl_path`; keep inline bulk
+   items usable without roots.
+5. Apply separate history, history-mutation, config-mutation, and public-link
+   startup gates. Require history plus history mutations for `save: true`, and
+   resolve local analysis/bulk IDs only from history. Do not add a transient
+   ledger.
+6. Add correct read-only, destructive, idempotent, and open-world annotations.
+7. Implement safe, idempotent client install and uninstall plans after each
+   target's current path, schema, and exact owned-entry match rule are pinned
+   from authoritative evidence. Preflight every selected target before writes,
+   return one typed mutation report for dry-run and normal success, never edit
+   legacy Cascade for `windsurf`, and refuse ambiguous `roo-code` storage.
+8. Expose ordinary `get_task` and `wait_task` tools without implementing the
    experimental Tasks extension or owning MCP protocol types.
-8. Emit deterministic private list and resource results with `ttlMs: 0`.
-9. Embed the Pangram skill and compact agent reference in the binary.
+9. Emit deterministic private list and resource results with `ttlMs: 0`, and
+   return the exact embedded output schema, error reference, and skill bytes
+   with their contracted MIME types.
+10. Generate `mcp-tools.json` as the one ordered tool/schema inventory and
+    `agent-reference.md`, then embed both and the Pangram skill in the binary.
+    Map `agent`, compact/full skill reads, skill listing, and skill locators to
+    their exact contracted newline-terminated bytes.
+11. Pin the official conformance applicability reference exactly to
+    `@modelcontextprotocol/conformance` 0.2.0-alpha.11. Record that its frozen
+    full-server profile cannot be scoped to Pangram's selected capabilities or
+    stdio transport, and do not fabricate a broader HTTP fixture. Keep compiled
+    `pangram mcp` stdio tests as the required Phase 6 product proof. Re-evaluate
+    the official suite when it supports stdio and capability-aware selection.
 
 ### Tests
 
-- `server/discover`, per-request metadata, protocol-version rejection, and
-  MCP 2026-07-28 conformance
+- `server/discover`, required per-request metadata, optional client identity,
+  protocol-version rejection, and MCP 2026-07-28 behavior
 - every tool schema and annotation
-- file-root startup validation, traversal, symlink, reparse-point, and path-race
-  cases
+- bulk `jsonl_path` root validation, traversal, symlink, reparse-point, and
+  path-race cases; inline bulk with no roots
 - capability combinations
+- history-only local ID resolution and upstream-ID operation without history
+- no hidden task ledger and no later-phase tool names
 - no billable retry hidden behind idempotent metadata
 - required result type, cache metadata, and deterministic inventory ordering
-- installer dry-run, idempotency, preservation, and conflict behavior
+- cancellation sends no response for the cancelled request
+- exact embedded resource bytes and MIME types
+- compiled stdio contract tests plus a pinned official-suite applicability
+  audit that prevents a fixture-only pass from being claimed as product proof
+- installer explicit target, dry-run, idempotency, preservation, ownership,
+  conflict, exact uninstall, zero-write preflight failure, typed report, Devin
+  Local-only Windsurf, Claude Desktop Linux, and Roo ambiguity behavior
+- byte-exact compact/full agent guidance, skill list, and embedded locators
 
 ### Exit criteria
 
 - agents need no TTY and receive no decorative output
 - billable operations are visibly non-idempotent
 - disabled capabilities remove or reject the protected operations
+- HTTP and conformance-only `test_*` inventory are absent from shipping builds
+- compiled product stdio tests pass, and the official-suite incompatibility is
+  recorded without a fabricated conformance claim
 
 ## 10. Phase 7: File, plagiarism, and combined analysis
 

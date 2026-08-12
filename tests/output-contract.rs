@@ -7,8 +7,9 @@ use microck_pangram_cli::domain::{
 use microck_pangram_cli::output::{
     AnalysisOutput, AuthSource, AuthStatus, CanonicalError, CommandData, CommandEnvelope,
     ConfigGetStatus, ConfigPathStatus, DoctorCheck, DoctorCheckStatus, EnvelopeMeta, ErrorCategory,
-    ErrorCode, ExitCode, McpClientStatus, MutationAcknowledgement, NonEmptyAnalyses, ProgressEvent,
-    Recovery, ResolvedCommand, UpdateStatus, UpdateStatusKind,
+    ErrorCode, ExitCode, McpClientStatus, McpMutationAction, McpMutationReport, McpMutationTarget,
+    MutationAcknowledgement, NonEmptyAnalyses, ProgressEvent, Recovery, ResolvedCommand,
+    UpdateStatus, UpdateStatusKind,
 };
 use proptest::prelude::*;
 use schemars::JsonSchema;
@@ -322,6 +323,34 @@ fn output_status_constructors_and_deserializers_enforce_schema_constraints() {
     assert!(ConfigPathStatus::new("").is_err());
     assert!(DoctorCheck::new("", DoctorCheckStatus::Pass, None).is_err());
     assert!(McpClientStatus::new("", false, None).is_err());
+    assert!(McpMutationReport::new(false, Vec::new()).is_err());
+    assert!(
+        McpMutationTarget::new(
+            "",
+            "/home/example/.config/client/mcp.json",
+            McpMutationAction::Create,
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        McpMutationTarget::new(
+            "codex",
+            "relative/config.toml",
+            McpMutationAction::Update,
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        McpMutationTarget::new(
+            "codex",
+            "/home/example/.codex/config.toml",
+            McpMutationAction::Unchanged,
+            Some("unsafe\u{1b}[31m".into()),
+        )
+        .is_err()
+    );
     assert!(UpdateStatus::new(UpdateStatusKind::NoUpdate, "1.2", None, None).is_err());
     assert!(UpdateStatus::new(UpdateStatusKind::NoUpdate, "1.2.3", None, None).is_ok());
 
@@ -337,6 +366,129 @@ fn output_status_constructors_and_deserializers_enforce_schema_constraints() {
         serde_json::from_value::<UpdateStatus>(json!({
             "status": "no_update",
             "current_version": "v1.2.3"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn mcp_mutation_report_preserves_exact_order_and_closed_json_shape() {
+    let report = McpMutationReport::new(
+        true,
+        vec![
+            McpMutationTarget::new(
+                "windsurf",
+                "/home/example/.config/devin/mcp_config.json",
+                McpMutationAction::Create,
+                None,
+            )
+            .unwrap(),
+            McpMutationTarget::new(
+                "codex",
+                r"C:\Users\example\.codex\config.toml",
+                McpMutationAction::Unchanged,
+                Some("The exact Pangram entry is already installed.".into()),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(CommandEnvelope::success(
+            CommandData::McpInstall(report),
+            EnvelopeMeta::default(),
+        ))
+        .unwrap(),
+        json!({
+            "schema_version": "1",
+            "command": "mcp_install",
+            "data": {
+                "dry_run": true,
+                "targets": [
+                    {
+                        "client": "windsurf",
+                        "path": "/home/example/.config/devin/mcp_config.json",
+                        "action": "create"
+                    },
+                    {
+                        "client": "codex",
+                        "path": r"C:\Users\example\.codex\config.toml",
+                        "action": "unchanged",
+                        "reason": "The exact Pangram entry is already installed."
+                    }
+                ]
+            },
+            "meta": {}
+        })
+    );
+}
+
+#[test]
+fn mcp_mutation_report_json_boundary_rejects_invalid_or_open_values() {
+    assert!(
+        serde_json::from_value::<McpMutationReport>(json!({
+            "dry_run": false,
+            "targets": []
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<McpMutationReport>(json!({
+            "dry_run": false,
+            "targets": [{
+                "client": "codex",
+                "path": "relative/config.toml",
+                "action": "update"
+            }]
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<McpMutationReport>(json!({
+            "dry_run": false,
+            "targets": [{
+                "client": "codex",
+                "path": "/home/example/.codex/config.toml",
+                "action": "unchanged",
+                "reason": null
+            }]
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<McpMutationReport>(json!({
+            "dry_run": false,
+            "targets": [{
+                "client": "codex",
+                "path": "/home/example/.codex/config.toml",
+                "action": "unchanged",
+                "reason": "unsafe\nreason"
+            }]
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<McpMutationReport>(json!({
+            "dry_run": false,
+            "targets": [{
+                "client": "codex",
+                "path": "/home/example/.codex/config.toml",
+                "action": "unchanged",
+                "extra": true
+            }]
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<McpMutationReport>(json!({
+            "dry_run": false,
+            "targets": [{
+                "client": "codex",
+                "path": "/home/example/.codex/config.toml",
+                "action": "unchanged"
+            }],
+            "extra": true
         }))
         .is_err()
     );
@@ -382,6 +534,46 @@ fn derived_status_schemas_preserve_the_runtime_constraints() {
     assert!(!schema_accepts::<McpClientStatus>(
         &json!({"client": "", "installed": false})
     ));
+    let mcp_report_schema = serde_json::to_value(schemars::schema_for!(McpMutationReport)).unwrap();
+    let mcp_report_validator = jsonschema::validator_for(&mcp_report_schema).unwrap();
+    assert!(mcp_report_validator.is_valid(&json!({
+        "dry_run": true,
+        "targets": [{
+            "client": "codex",
+            "path": "/home/example/.codex/config.toml",
+            "action": "update"
+        }]
+    })));
+    assert!(!mcp_report_validator.is_valid(&json!({
+        "dry_run": true,
+        "targets": []
+    })));
+    assert!(!mcp_report_validator.is_valid(&json!({
+        "dry_run": true,
+        "targets": [{
+            "client": "codex",
+            "path": "/home/example/.codex/config.toml",
+            "action": "replace"
+        }]
+    })));
+    assert!(!mcp_report_validator.is_valid(&json!({
+        "dry_run": true,
+        "targets": [{
+            "client": "codex",
+            "path": "/home/example/.codex/config.toml",
+            "action": "unchanged",
+            "extra": true
+        }]
+    })));
+    assert!(!mcp_report_validator.is_valid(&json!({
+        "dry_run": true,
+        "targets": [{
+            "client": "codex",
+            "path": "/home/example/.codex/config.toml",
+            "action": "unchanged"
+        }],
+        "extra": true
+    })));
     assert!(schema_accepts::<UpdateStatus>(
         &json!({"status": "no_update", "current_version": "1.2.3"})
     ));

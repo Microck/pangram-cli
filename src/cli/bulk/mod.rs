@@ -169,10 +169,9 @@ pub(super) fn emit_bulk_jsonl_progress(progress: &crate::analysis::BulkProgress)
     let observed = UtcTimestamp::now();
     if let Ok(event) = ProgressEvent::bulk(progress.bulk_id, progress.status, observed)
         .with_counters(progress.counters)
+        && let Ok(line) = serde_json::to_string(&event)
     {
-        if let Ok(line) = serde_json::to_string(&event) {
-            eprintln!("{line}");
-        }
+        eprintln!("{line}");
     }
 }
 

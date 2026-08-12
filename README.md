@@ -12,9 +12,10 @@ and AI agents that need stable JSON and MCP contracts.
 > wait, and results for asynchronous bulk detection), `task`
 > (status and wait for one Pangram text task), and `history` (list, show,
 > literal-text search, delete, clear, export, and rerun) are compiled and available.
-> Plagiarism and combined analysis, and the TUI and stdio MCP
-> server remain planned and are not available yet. Live Pangram conformance
-> is pending and public release support (including live file and plagiarism
+> Plagiarism and combined analysis remain planned and are not available yet.
+> The TUI and typed stdio MCP server are compiled and available. Official MCP
+> conformance and live Pangram conformance are pending, and public release support
+> (including live file and plagiarism
 > conformance) is still gated; compiled contract and loopback protocol tests
 > are the current correctness gates.
 
@@ -32,7 +33,7 @@ agent workflows need a different interface:
 - typed MCP tools with billing, filesystem, and mutation safeguards
 - signed native releases with package-manager-aware updates
 
-AI detection is the primary planned workflow. Plagiarism is planned as an
+AI detection is the primary workflow. Plagiarism remains planned as an
 independent check and as an explicit combined analysis.
 
 ## Quickstart
@@ -50,8 +51,7 @@ Detect text in a shell pipeline (a bare launch reads piped stdin):
 printf 'Text to analyze' | pangram
 ```
 
-Open the interactive terminal interface (planned; the all-TTY bare launch
-currently falls back to help):
+Open the interactive terminal interface with an all-TTY bare launch:
 
 ```bash
 pangram
@@ -102,7 +102,7 @@ Available today:
 
 | Command | Purpose |
 | --- | --- |
-| `pangram` | Bare literal text or piped stdin runs AI detection; an all-TTY launch falls back to help until the TUI arrives |
+| `pangram` | Bare literal text or piped stdin runs AI detection; an all-TTY launch opens the TUI |
 | `pangram detect` | Run Pangram 4 AI text detection |
 | `pangram auth` | Configure and inspect API-key authentication |
 | `pangram config` | Inspect and update non-secret configuration |
@@ -110,17 +110,16 @@ Available today:
 | `pangram bulk` | Submit and inspect asynchronous bulk detection |
 | `pangram task` | Inspect or wait for a Pangram text task |
 | `pangram history` | List, show, search, delete, clear, export, and rerun optional local history |
+| `pangram mcp` | Run or install the typed stdio MCP server |
+| `pangram agent` | Print the embedded agent usage guide |
+| `pangram skills` | List and load version-matched embedded skills |
 
 Planned:
 
 | Command | Purpose |
 | --- | --- |
-| `pangram` (TUI) | Launch the interactive terminal interface |
 | `pangram plagiarism` | Run plagiarism checking |
 | `pangram analyze` | Run AI detection and plagiarism together |
-| `pangram mcp` | Run or install the typed stdio MCP server |
-| `pangram agent` | Print the embedded agent usage guide |
-| `pangram skills` | List and load version-matched embedded skills |
 | `pangram completions` | Generate shell completions |
 | `pangram update` | Check for or install an eligible direct update |
 
@@ -129,8 +128,8 @@ errors, and exit codes.
 
 ## Agent-native behavior
 
-The CLI is being designed so agents do not need to scrape help text or parse
-terminal decoration:
+The CLI gives agents structured surfaces so they do not need to scrape help
+text or parse terminal decoration:
 
 - JSON is canonical and remains the default outside the TUI.
 - stdout contains primary results; stderr contains progress and diagnostics.
@@ -138,8 +137,8 @@ terminal decoration:
 - the stdio MCP server targets protocol version `2026-07-28`.
 - MCP tools map directly to analysis operations rather than spawning the CLI.
 - billable MCP tools are marked non-idempotent and require explicit bulk limits.
-- file tools are absent by default and use only directories approved through
-  repeated `--allow-file-root PATH` startup options.
+- filesystem-path inputs use only directories approved through repeated
+  `--allow-file-root PATH` startup options.
 - history, public links, configuration changes, and destructive operations are
   separately gated.
 - long-running Pangram work uses ordinary typed tools, not the experimental MCP
@@ -161,8 +160,8 @@ retention, and unsupported-parity boundaries.
 ## Architecture
 
 The runtime uses Rust. A single deep analysis module owns Pangram HTTP
-behavior, polling, normalization, retries, and task state. The CLI, and later
-the TUI and MCP server, are adapters over that module.
+behavior, polling, normalization, retries, and task state. The CLI, TUI, and
+MCP server are adapters over that module.
 
 Fumadocs will live in a separate TypeScript workspace and consume generated
 schemas and reference material rather than duplicating runtime contracts.

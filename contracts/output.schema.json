@@ -2181,6 +2181,65 @@
         "ok"
       ]
     },
+    "McpMutationReport": {
+      "description": "Successful MCP installer output. Target order is part of the public\ncontract, so this type preserves the caller-selected order without sorting.",
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/McpMutationTarget"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dry_run",
+        "targets"
+      ]
+    },
+    "McpMutationTarget": {
+      "description": "One ordered MCP client configuration result.",
+      "type": "object",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "action": {
+          "$ref": "#/$defs/McpMutationAction"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client",
+        "path",
+        "action"
+      ]
+    },
+    "McpMutationAction": {
+      "description": "The exact filesystem change made, or planned by a dry run, for one MCP\nclient configuration.",
+      "type": "string",
+      "enum": [
+        "create",
+        "update",
+        "remove",
+        "unchanged"
+      ]
+    },
     "AuthStatus": {
       "type": "object",
       "properties": {
@@ -2675,7 +2734,27 @@
                   "history_clear",
                   "auth_set",
                   "auth_logout",
-                  "config_set",
+                  "config_set"
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/MutationAcknowledgement"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "command": {
+                "enum": [
                   "mcp_install",
                   "mcp_uninstall"
                 ]
@@ -2688,7 +2767,7 @@
           "then": {
             "properties": {
               "data": {
-                "$ref": "#/$defs/MutationAcknowledgement"
+                "$ref": "#/$defs/McpMutationReport"
               }
             }
           }

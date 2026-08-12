@@ -57,10 +57,23 @@ deterministically for fixtures.
 ### 1.1 MCP protocol compatibility
 
 The stdio MCP server targets protocol version `2026-07-28` without a legacy
-protocol path or the experimental Tasks extension. File access requires an
-explicit repeatable `--allow-file-root PATH`. The complete normative interface,
-including discovery, result metadata, and file-opening rules, lives in
-[mcp-contract.md](mcp-contract.md).
+protocol path or the experimental Tasks extension. Request `_meta` requires
+the protocol version and client capabilities; client information is optional.
+Phase 6 exposes text detection, ordinary task get/wait, bulk
+submit/get/wait/results, and capability-gated history and configuration tools.
+File detection, plagiarism, and combined analysis remain absent until Phase 7;
+update checks remain absent until Phase 8. There are no compatibility aliases
+or rejection-only placeholders for later tools.
+
+File-backed MCP input requires an explicit repeatable `--allow-file-root PATH`
+and handle-relative no-follow opening. Inline bulk items do not require a root;
+bulk `jsonl_path` does. Local analysis and bulk IDs resolve only from enabled
+history, while upstream IDs work without history. `save: true` requires both
+`--history` and `--allow-history-mutations`. Invalid startup configuration
+fails before stdin is read, with empty stdout, one sanitized stderr diagnostic,
+and exit 1. The complete normative interface, including discovery, result
+metadata, cancellation, generated inventory, resources, and file-opening
+rules, lives in [mcp-contract.md](mcp-contract.md).
 
 ## 2. Primitive conventions
 
@@ -145,7 +158,8 @@ JSON envelope commands and their `data` roots are closed:
 | `bulk_status`, `bulk_wait` | one bulk collection |
 | `bulk_results` | one ordered bulk-item page |
 | `history_list`, `history_search` | an ordered analysis summary page |
-| `history_delete`, `history_clear`, `auth_set`, `auth_logout`, `config_set`, `mcp_install`, `mcp_uninstall` | mutation acknowledgement |
+| `history_delete`, `history_clear`, `auth_set`, `auth_logout`, `config_set` | mutation acknowledgement |
+| `mcp_install`, `mcp_uninstall` | one `McpMutationReport` (section 14.7) |
 | `auth_status`, `config_list`, `config_get`, `config_path`, `doctor`, `mcp_status`, `update_check`, `update_install` | the command-specific typed status object |
 
 Commands that emit Markdown, shell completion source, JSONL export, or start the
@@ -1799,6 +1813,60 @@ Clients are `claude-code`, `claude-desktop`, `codex`, `cursor`, `vscode`,
 
 Default server name is `pangram`.
 
+Install and uninstall require explicit selected targets or `--all`. Dry run
+writes nothing. Each operation owns only the exact selected server name,
+preserves unrelated configuration, rejects malformed or conflicting entries,
+and uninstalls only an exact matching Pangram-owned entry. Installers never add
+file roots or optional capability flags by default. A client target is not
+enabled until its current path, schema, and exact owned-entry match rule are
+pinned from authoritative client evidence.
+
+All selected targets are preflighted before the first write. Any unavailable or
+ambiguous target, malformed configuration, ownership conflict, or unsafe plan
+returns the canonical failure envelope and writes nothing. Successful dry-run
+and normal commands return the same closed `McpMutationReport`:
+
+```json
+{
+  "dry_run": false,
+  "targets": [
+    {
+      "client": "claude-desktop",
+      "path": "/home/example/.config/Claude/claude_desktop_config.json",
+      "action": "unchanged",
+      "reason": "The exact Pangram entry is already installed."
+    }
+  ]
+}
+```
+
+`targets` preserves explicit target order after first-occurrence
+deduplication; `--all` uses generated client order. Each record contains a
+closed client identifier, exact resolved absolute path, a closed `action` of
+`create`, `update`, `remove`, or `unchanged`, and an optional sanitized
+`reason`. Install reports only `create`, `update`, or `unchanged`; uninstall
+reports only `remove` or `unchanged`. Normal operation returns success only
+after every planned atomic write succeeds. If an unexpected write failure
+occurs after a prior target commits atomically, the failure preserves that
+change and its sanitized recovery message identifies the successfully changed
+client/path records without claiming later writes. `mcp_status` remains its
+read-only `McpStatus` payload.
+
+`windsurf` targets current Devin Local only. It never reads or edits the legacy
+Cascade MCP configuration. Devin Local uses
+`~/.config/devin/mcp_config.json` on Linux and macOS and
+`%APPDATA%\devin\mcp_config.json` on Windows. Its JSON-with-comments owned entry
+is `mcpServers.pangram` for the default name, with `command` equal to the
+absolute Pangram executable path and `args` exactly `["mcp"]`; a custom server
+name changes only the entry key.
+
+On Linux, `claude-desktop` resolves
+`${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json`. For
+`roo-code`, exactly one supported custom or host-managed configuration path
+must be discoverable. No path or multiple paths make the target unavailable or
+ambiguous and fail the complete preflight with zero writes; no precedence or
+multi-file compatibility path is allowed.
+
 ### 14.8 Skills and agents
 
 ```text
@@ -1808,8 +1876,23 @@ pangram skills get pangram [--full]
 pangram skills path [pangram]
 ```
 
-`agent` and `skills get` emit Markdown only. `skills path` returns an
-`embedded://` locator.
+`pangram agent` and `pangram skills get pangram` emit the exact bytes of
+`generated/agent-reference.md`. `pangram skills get pangram --full` emits the
+exact bytes of `skills/pangram/SKILL.md`. Both Markdown owner files end with one
+newline.
+
+`pangram skills list` emits exactly this newline-terminated Markdown:
+
+```text
+# Embedded skills
+
+- `pangram`
+```
+
+`pangram skills path` emits exactly `embedded://skills` followed by one
+newline. `pangram skills path pangram` emits exactly
+`embedded://skills/pangram/SKILL.md` followed by one newline. These commands
+are raw primary stdout surfaces and do not use the JSON envelope.
 
 ### 14.9 Configuration and diagnostics
 
@@ -1888,3 +1971,16 @@ run MCP conformance
 
 The generated artifacts MUST point back to their owner and MUST NOT be edited
 by hand.
+
+Phase 6 adds `generated/mcp-tools.json` as the one ordered immutable inventory
+of tool descriptors, closed input schemas, and command-specialized output
+schemas. Per-tool schemas are not separate files. It also adds
+`generated/agent-reference.md`. The MCP server embeds those files together with
+`contracts/output.schema.json`, `generated/error-reference.json`, and
+`skills/pangram/SKILL.md` at build time.
+
+The generator owns the compact bytes used by both `pangram agent` and the
+non-full `skills get` command. It also owns the exact `skills list` Markdown and
+the two newline-terminated locator projections. Drift tests compare each
+compiled command's stdout byte-for-byte with its owning generated or embedded
+source.

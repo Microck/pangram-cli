@@ -613,9 +613,9 @@ Before public release, update networking is disabled.
 ## 14. Agent behavior
 
 The MCP server is stdio-only in v1 and implements MCP `2026-07-28`. It exposes
-typed tools for analysis, waiting, bulk retrieval, optional history, and update
-checks. It does not implement the experimental Tasks extension, MCP Apps, or a
-legacy protocol path.
+typed tools for analysis, waiting, bulk retrieval, and optional history. Update
+checks remain owned by Phase 8. It does not implement the experimental Tasks
+extension, MCP Apps, or a legacy protocol path.
 
 Default MCP behavior:
 
@@ -624,7 +624,7 @@ Default MCP behavior:
 - no destructive tools
 - no configuration mutation
 - no public links
-- no file tools without explicit startup-approved roots
+- no filesystem-path inputs without explicit startup-approved roots
 - file access only within directories approved by repeated
   `--allow-file-root PATH`
 - no API key arguments
@@ -654,7 +654,7 @@ The complete MCP tool contract is in [mcp-contract.md](mcp-contract.md).
 | AI-assistance fractions, segments, and humanizer evidence | Blocked pending Pangram 4 REST conformance |
 | Multilingual model behavior | Blocked pending Pangram 4 REST conformance |
 | Text public dashboard link | Blocked with text submission, then opt-in |
-| Bulk AI detection | Planned for Phase 3 against the documented Pangram 4 contract; blocked from public support pending implementation and live conformance |
+| Bulk AI detection | Implemented against the documented Pangram 4 contract; blocked from public support pending live conformance |
 | PDF, DOCX, and RTF AI detection | Blocked pending live response conformance |
 | Plagiarism text check | Blocked from public conformance pending field validation |
 | Combined AI and plagiarism report | Local composition of supported checks |

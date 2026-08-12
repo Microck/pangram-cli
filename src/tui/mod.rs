@@ -279,13 +279,13 @@ fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, Tui
         if redraw {
             session.draw(|frame| render::render(frame, &state))?;
         }
-        if event::poll(EVENT_POLL)? {
-            if let Some(event) = terminal_event(event::read()?) {
-                if let Some(loop_exit) = effects.apply_event(&mut state, event) {
-                    break loop_exit;
-                }
-                session.draw(|frame| render::render(frame, &state))?;
+        if event::poll(EVENT_POLL)?
+            && let Some(event) = terminal_event(event::read()?)
+        {
+            if let Some(loop_exit) = effects.apply_event(&mut state, event) {
+                break loop_exit;
             }
+            session.draw(|frame| render::render(frame, &state))?;
         }
     };
 

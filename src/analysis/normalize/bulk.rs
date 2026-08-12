@@ -325,10 +325,10 @@ fn parse_epoch_seconds(
         Some((integer, fraction)) => (integer, Some(fraction)),
         None => (raw, None),
     };
-    if let Some(fraction) = fraction {
-        if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(contract_changed(field, raw));
-        }
+    if let Some(fraction) = fraction
+        && (fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(contract_changed(field, raw));
     }
     let seconds: i64 = integer.parse().map_err(|_| contract_changed(field, raw))?;
     let timestamp = Timestamp::from_second(seconds).map_err(|_| contract_changed(field, raw))?;
@@ -700,15 +700,13 @@ fn validate_page_identity(
 fn validate_ascending(indexes: impl Iterator<Item = u64>) -> Result<(), CanonicalError> {
     let mut previous: Option<u64> = None;
     for index in indexes {
-        if let Some(previous) = previous {
-            if index <= previous {
-                return Err(contract_changed(
-                    "index",
-                    format!(
-                        "source positions are not strictly ascending ({previous} then {index})"
-                    ),
-                ));
-            }
+        if let Some(previous) = previous
+            && index <= previous
+        {
+            return Err(contract_changed(
+                "index",
+                format!("source positions are not strictly ascending ({previous} then {index})"),
+            ));
         }
         previous = Some(index);
     }

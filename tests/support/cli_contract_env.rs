@@ -63,6 +63,9 @@ Commands:
   bulk     Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
   task     Inspect or wait for a Pangram 4 text task
   history  Inspect and manage optional local analysis history
+  mcp      Run and configure the Pangram MCP server
+  agent    Print compact Pangram MCP guidance as Markdown
+  skills   Inspect Pangram's embedded agent skill
   help     Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -77,17 +80,12 @@ Options:
   -V, --version                Print version
 ";
 
-pub(crate) const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[
-    "agent",
-    "analyze",
-    "completions",
-    "mcp",
-    "plagiarism",
-    "skills",
-    "update",
-];
+pub(crate) const PLANNED_TOP_LEVEL_COMMANDS: &[&str] =
+    &["analyze", "completions", "plagiarism", "update"];
 
-pub(crate) const PHASE_5_RUNTIME_DEPENDENCIES: &[&str] = &[
+pub(crate) const RUNTIME_DEPENDENCIES: &[&str] = &[
+    "cap-fs-ext",
+    "cap-std",
     "clap",
     "crossterm",
     "directories",
@@ -95,6 +93,7 @@ pub(crate) const PHASE_5_RUNTIME_DEPENDENCIES: &[&str] = &[
     "jiff",
     "ratatui",
     "reqwest",
+    "rmcp",
     "rpassword",
     "rusqlite",
     "schemars",

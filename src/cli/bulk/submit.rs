@@ -8,7 +8,7 @@ use clap::ArgMatches;
 use crate::analysis::{BulkAnalysisRequest, StopObserving, WaitOptions};
 use crate::cli::StreamTty;
 use crate::cli::detect::{self, DetectOutcome, GlobalFlags, ProgressMode};
-use crate::domain::{AnalysisStatus, BulkCollection, Sha256Hash, SubmissionOutcome, UtcTimestamp};
+use crate::domain::{BulkCollection, Sha256Hash, UtcTimestamp};
 use crate::output::{
     CanonicalError, CommandData, CommandEnvelope, EnvelopeMeta, ErrorCode, ExitCode, OutputFormat,
     ResolvedCommand,
@@ -193,16 +193,16 @@ pub(super) fn bulk_submit(
         accepted_at,
         ..
     } = &result
+        && history_armed
+        && !matches!(outcome, Ok(Ok(_)))
     {
-        if history_armed && !matches!(outcome, Ok(Ok(_))) {
-            let _ = persist_accepted_snapshot(
-                accepted,
-                source_name.as_deref(),
-                *accepted_at,
-                &service,
-                &mut bulk_warning,
-            );
-        }
+        let _ = persist_accepted_snapshot(
+            accepted,
+            source_name.as_deref(),
+            *accepted_at,
+            &service,
+            &mut bulk_warning,
+        );
     }
     match result {
         Analyzed::Accepted(running) => {
@@ -391,20 +391,13 @@ fn submit_accepted_outcome(
     started: UtcTimestamp,
 ) -> DetectOutcome {
     let mut bulk_warning = detect::save::BulkSaveWarning::new();
-    let Some(collection) = persist_accepted_snapshot(
+    let collection = persist_accepted_snapshot(
         running,
         source_name,
         UtcTimestamp::now(),
         service,
         &mut bulk_warning,
-    ) else {
-        return detect::failure_outcome(
-            ResolvedCommand::BulkSubmit,
-            output,
-            started,
-            detect::internal_error("the accepted bulk state could not be projected"),
-        );
-    };
+    );
     succeed(
         ResolvedCommand::BulkSubmit,
         CommandData::BulkSubmit(crate::output::BulkSubmitOutput::collection(collection)),
@@ -417,41 +410,18 @@ fn submit_accepted_outcome(
 /// Persists the independently certified HTTP 202 acceptance unit. A failed or
 /// interrupted later observation may still save this earlier snapshot because
 /// its parent, children, local inputs, and task identities all come from the
-/// same acceptance response. `None` denotes the structurally impossible case
-/// where that already validated acceptance cannot be projected into its domain
-/// type.
+/// same acceptance response. The analysis module owns the infallible
+/// projection from that validated snapshot into the canonical collection.
 fn persist_accepted_snapshot(
     running: &crate::analysis::RunningBulk,
     source_name: Option<&str>,
     accepted_at: UtcTimestamp,
     service: &crate::config::ConfigService,
     warning: &mut detect::save::BulkSaveWarning,
-) -> Option<BulkCollection> {
-    let identity = running.identity();
-    let plan = running.plan();
-    let estimated = plan.map(|plan| plan.estimated_billable_units());
-    let (status, counters) = running.accepted_snapshot();
-    // A 202 may immediately reject every item. That accepted snapshot is
-    // already terminal, so its observation time is also its completion time.
-    let completed_at = matches!(
-        status,
-        AnalysisStatus::Succeeded | AnalysisStatus::Failed | AnalysisStatus::Partial
-    )
-    .then_some(accepted_at);
-    let collection = BulkCollection::new(
-        identity.bulk_id,
-        identity.upstream_bulk_id.clone(),
-        status,
-        SubmissionOutcome::Accepted,
-        counters,
-        estimated,
-        accepted_at,
-        accepted_at,
-        completed_at,
-    )
-    .ok()?;
+) -> BulkCollection {
+    let collection = running.accepted_collection(accepted_at);
     let children = running.acceptance_children(source_name, accepted_at);
-    Some(detect::save::persist_bulk_collection(&collection, children, service, warning).0)
+    detect::save::persist_bulk_collection(&collection, children, service, warning).0
 }
 
 /// The dry-run outcome: the canonical typed reconciliation shape at exit 0

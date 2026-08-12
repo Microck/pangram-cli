@@ -99,6 +99,40 @@ pub(crate) fn save_complete_analysis(
     )
 }
 
+/// Persists one canonical bulk snapshot and its ordered child membership in
+/// exactly one store-owned reconciliation transaction. Adapters own policy
+/// (automatic versus explicit) and store opening; this history seam owns the
+/// complete durable projection. Projection finishes before SQLite mutates,
+/// so a malformed child cannot leave a parent-only or partial snapshot.
+pub(crate) fn save_bulk_snapshot(
+    store: &mut HistoryStore,
+    collection: &crate::domain::BulkCollection,
+    children: &[(
+        crate::domain::Analysis<crate::output::CanonicalError>,
+        Option<String>,
+    )],
+) -> Result<(), HistoryError> {
+    let provisional_id = collection.id();
+    let prepared = children
+        .iter()
+        .enumerate()
+        .map(|(index, (child, caller_id))| {
+            let bulk_index =
+                i64::try_from(index).expect("a validated bulk plan has at most 1,000 children");
+            let mut record = save::stored_analysis(child, crate::domain::SaveState::SavedHistory)?;
+            record.bulk = Some((provisional_id, bulk_index));
+            record.caller_id = caller_id.clone();
+            let checks = save::stored_checks(child)?;
+            let observations = save::stored_observations(child);
+            Ok((record, checks, observations))
+        })
+        .collect::<Result<Vec<_>, HistoryError>>()?;
+    let row = save::stored_bulk_collection(collection);
+    store
+        .reconcile_bulk_collection_complete(&row, &prepared)
+        .map(|_| ())
+}
+
 use std::fmt;
 
 impl HistoryError {
@@ -198,5 +232,107 @@ impl HistoryError {
     /// embed SQL text and binding values (submitted content).
     pub(crate) fn from_sqlite(code: HistoryErrorCode, operation: &'static str) -> Self {
         Self::new(code, format!("{operation}: the database reported an error"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use crate::domain::{
+        Analysis, AnalysisStatus, BulkCollection, BulkCounters, BulkId, Check, CheckState,
+        OrderedChecks, Provenance, Provider, SaveState, SubmissionOutcome, UpstreamBulkId,
+        UpstreamIdentity, UpstreamTaskId, UpstreamTaskIds, UtcTimestamp,
+    };
+
+    use super::{HistoryStore, save_bulk_snapshot};
+
+    fn accepted_child(
+        upstream_bulk_id: &UpstreamBulkId,
+        task: &str,
+        observed_at: UtcTimestamp,
+    ) -> Analysis<crate::output::CanonicalError> {
+        let task_id = UpstreamTaskId::from_str(task).unwrap();
+        let checks = OrderedChecks::new([Check::AiDetection(CheckState::Queued {
+            upstream: Some(UpstreamIdentity {
+                task_id: Some(task_id.clone()),
+                last_stage: None,
+            }),
+        })])
+        .unwrap();
+        Analysis::with_optional_input(
+            crate::domain::AnalysisId::new(),
+            SubmissionOutcome::Accepted,
+            None,
+            checks,
+            SaveState::Ephemeral,
+            Provenance {
+                provider: Provider::Pangram,
+                upstream_version: None,
+                upstream_task_ids: Some(UpstreamTaskIds::new(vec![task_id]).unwrap()),
+                upstream_bulk_id: Some(upstream_bulk_id.clone()),
+                submitted_at: Some(observed_at),
+                completed_at: None,
+            },
+            None,
+            None,
+            observed_at,
+            observed_at,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn save_bulk_snapshot_commits_parent_children_and_memberships_together() {
+        let root = tempfile::tempdir().unwrap();
+        let observed_at = UtcTimestamp::from_str("2026-08-12T20:00:00Z").unwrap();
+        let upstream_bulk_id = UpstreamBulkId::from_str("bulk-atomic-snapshot").unwrap();
+        let collection = BulkCollection::new(
+            BulkId::new(),
+            Some(upstream_bulk_id.clone()),
+            AnalysisStatus::Queued,
+            SubmissionOutcome::Accepted,
+            BulkCounters::new(2, 2, 0, 0).unwrap(),
+            Some(2),
+            observed_at,
+            observed_at,
+            None,
+        )
+        .unwrap();
+        let children = vec![
+            (
+                accepted_child(&upstream_bulk_id, "task-atomic-0", observed_at),
+                Some("caller-0".to_owned()),
+            ),
+            (
+                accepted_child(&upstream_bulk_id, "task-atomic-1", observed_at),
+                Some("caller-1".to_owned()),
+            ),
+        ];
+        let mut store = HistoryStore::open(root.path()).unwrap();
+
+        save_bulk_snapshot(&mut store, &collection, &children).unwrap();
+
+        let (collection_count, memberships): (i64, Vec<(i64, String)>) = store
+            .with_connection(|connection| {
+                let collection_count =
+                    connection.query_row("SELECT COUNT(*) FROM bulk_collections", [], |row| {
+                        row.get(0)
+                    })?;
+                let mut statement = connection
+                    .prepare("SELECT bulk_index, caller_id FROM analyses ORDER BY bulk_index")?;
+                let memberships = statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok::<_, rusqlite::Error>((collection_count, memberships))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(collection_count, 1);
+        assert_eq!(
+            memberships,
+            vec![(0, "caller-0".to_owned()), (1, "caller-1".to_owned())]
+        );
     }
 }

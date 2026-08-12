@@ -17,8 +17,9 @@ mod value;
 pub use value::{
     AnalysisOutput, AuthSource, AuthStatus, BulkDryRun, BulkSubmitOutput, CommandData,
     CommandEnvelope, ConfigGetStatus, ConfigListStatus, ConfigPathStatus, DoctorCheck,
-    DoctorCheckStatus, DoctorStatus, EnvelopeMeta, McpClientStatus, McpStatus,
-    MutationAcknowledgement, NonEmptyAnalyses, UpdateStatus, UpdateStatusKind,
+    DoctorCheckStatus, DoctorStatus, EnvelopeMeta, McpClientStatus, McpMutationAction,
+    McpMutationReport, McpMutationTarget, McpStatus, MutationAcknowledgement, NonEmptyAnalyses,
+    UpdateStatus, UpdateStatusKind,
 };
 
 mod projection;
@@ -43,6 +44,12 @@ pub enum OutputValidationError {
     SubmissionDetailsRequired,
     #[error("{0} does not emit a JSON success envelope")]
     NonEnvelopeCommand(ResolvedCommand),
+    #[error("MCP mutation path must be absolute")]
+    RelativeMcpMutationPath,
+    #[error("MCP mutation path must be valid UTF-8")]
+    NonUtf8McpMutationPath,
+    #[error("MCP mutation reason must not contain control characters")]
+    UnsafeMcpMutationReason,
     #[error("analysis-only progress data cannot be attached to a bulk event")]
     AnalysisProgressDataOnBulk,
     #[error("bulk-only progress data cannot be attached to an analysis event")]

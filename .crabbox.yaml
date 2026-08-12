@@ -56,7 +56,7 @@ jobs:
       export RUSTC_WRAPPER=/usr/bin/sccache &&
       export SCCACHE_DIR=/work/sccache &&
       export CARGO_TARGET_DIR=/work/cargo-target/pangram-cli-msrv &&
-      export RUSTUP_TOOLCHAIN=1.87.0 &&
+      export RUSTUP_TOOLCHAIN=1.88.0 &&
       rustc --version &&
       cargo --version &&
       cargo build --locked --all-features &&

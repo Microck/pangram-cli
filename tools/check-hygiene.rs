@@ -12,9 +12,14 @@ const LINE_ERROR_THRESHOLD: usize = 1_000;
 // line limit through a large unvalidated allocation.
 const MAX_TEXT_FILE_BYTES: u64 = 1_048_576; // 1 MiB
 // ADR 0008 grants the generated output-schema union a line-limit exception;
-// ADR 0009 grants the single normative contracts reference one. Both documents
-// still receive every other hygiene check.
-const LINE_LIMIT_EXCEPTIONS: &[&str] = &["contracts/output.schema.json", "docs/contracts.md"];
+// ADR 0009 grants the single normative contracts reference one. Architecture
+// section 16 grants the one Rust-owned ordered MCP inventory the same narrow
+// exception. All three files still receive every other hygiene check.
+const LINE_LIMIT_EXCEPTIONS: &[&str] = &[
+    "contracts/output.schema.json",
+    "docs/contracts.md",
+    "generated/mcp-tools.json",
+];
 // These are exact paths relative to the repository root, not directory basenames.
 const EXCLUDED_ROOT_DIRECTORIES: &[&str] = &[
     ".codebase-memory",
@@ -492,6 +497,20 @@ mod tests {
         fs::write(repository.path().join("ok.md"), "small\n").unwrap();
 
         assert_eq!(check_repository(repository.path()).unwrap(), 1);
+    }
+
+    #[test]
+    fn generated_mcp_inventory_line_exception_is_exact_path_only() {
+        let repository = TempDirectory::new();
+        let generated = repository.path().join("generated");
+        fs::create_dir(&generated).unwrap();
+        let over_line_limit = "{}\n".repeat(1_001);
+        fs::write(generated.join("mcp-tools.json"), &over_line_limit).unwrap();
+
+        assert_eq!(check_repository(repository.path()).unwrap(), 1);
+
+        fs::write(generated.join("mcp-tools-copy.json"), over_line_limit).unwrap();
+        assert!(check_repository(repository.path()).is_err());
     }
 
     #[test]

@@ -608,24 +608,20 @@ fn emit_error_text_with(envelope: &CommandEnvelope, sinks: &mut RenderSinks<'_>)
         sanitize_for_stderr(error.message())
     )
     .is_ok();
-    if ok {
-        if let Some(recovery) = error.recovery() {
+    if ok && let Some(recovery) = error.recovery() {
+        ok = writeln!(
+            SinkWriter(sinks.stderr),
+            "help: {}",
+            sanitize_for_stderr(recovery.message())
+        )
+        .is_ok();
+        if ok && let Some(command) = recovery.command() {
             ok = writeln!(
                 SinkWriter(sinks.stderr),
-                "help: {}",
-                sanitize_for_stderr(recovery.message())
+                "  try: {}",
+                sanitize_for_stderr(command)
             )
             .is_ok();
-            if ok {
-                if let Some(command) = recovery.command() {
-                    ok = writeln!(
-                        SinkWriter(sinks.stderr),
-                        "  try: {}",
-                        sanitize_for_stderr(command)
-                    )
-                    .is_ok();
-                }
-            }
         }
     }
     ok && sinks.stderr.flush_bytes().is_ok()
