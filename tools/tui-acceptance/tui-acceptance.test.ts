@@ -136,7 +136,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
           { timeoutMs: START_TIMEOUT_MS },
         )
         await session.keyboard.press("ArrowRight")
-        await session.screen.waitForText("No active analyses in this session.", {
+        await session.screen.waitForText("No unfinished analyses.", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.press("ArrowRight")
@@ -248,7 +248,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         )
 
         await session.keyboard.type("l")
-        await session.screen.waitForText("No active analyses in this session.", {
+        await session.screen.waitForText("No unfinished analyses.", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.type("h")
@@ -510,7 +510,9 @@ async function runPollingExitJourney(exit: "ctrl-c" | "quit"): Promise<void> {
     await session.keyboard.press("ArrowRight")
     await session.screen.waitUntil(
       ({ text: visible }) =>
-        visible.includes("1 in-session operation(s)") && visible.includes("Active: 1"),
+        visible.includes("1 unfinished analysis(es)") &&
+        visible.includes("running - this session") &&
+        visible.includes("Active: 1"),
       { timeoutMs: START_TIMEOUT_MS },
     )
     await expectSettledScreen(session, "active-analysis-polling")
