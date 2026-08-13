@@ -218,52 +218,9 @@ pub(crate) fn persist_bulk_collection(
         }
     };
 
-    // Build every child's stored row with its provisional membership link,
-    // then reconcile the collection, the children, and all observation rows
-    // in ONE atomic store-owned transaction. The store resolves the real
-    // stored collection identity by `upstream_bulk_id` inside the
-    // transaction and rebinds every membership/observation key onto it, so
-    // a concurrent second process refreshing the same job serializes on the
-    // write lock and the `upstream_bulk_id` unique constraint and can never
-    // duplicate the stored row. A child whose own projection fails is
-    // skipped from the batch (its row simply is not persisted this read);
-    // its truthful ephemeral rendering below is unaffected.
-    let provisional_id = collection.id();
-    let mut prepared: Vec<(
-        crate::history::StoredAnalysis,
-        Vec<crate::history::StoredCheck>,
-        Vec<crate::history::StoredUpstreamTask>,
-    )> = Vec::with_capacity(children.len());
-    for (index, (child, caller_id)) in children.iter().enumerate() {
-        let bulk_index = i64::try_from(index).unwrap_or(i64::MAX);
-        let mut record = match crate::history::save::stored_analysis(child, SaveState::SavedHistory)
-        {
-            Ok(record) => record,
-            Err(error) => {
-                automatic_warning_once(&error, warning.latch());
-                continue;
-            }
-        };
-        record.bulk = Some((provisional_id, bulk_index));
-        record.caller_id = caller_id.clone();
-        let observations = crate::history::save::stored_observations(child)
-            .into_iter()
-            .map(|task| crate::history::StoredUpstreamTask {
-                analysis_id: record.id,
-                ..task
-            })
-            .collect();
-        let checks = match crate::history::save::stored_checks(child) {
-            Ok(checks) => checks,
-            Err(error) => {
-                automatic_warning_once(&error, warning.latch());
-                continue;
-            }
-        };
-        prepared.push((record, checks, observations));
-    }
-    let row = crate::history::save::stored_bulk_collection(collection);
-    if let Err(error) = store.reconcile_bulk_collection_complete(&row, &prepared) {
+    // The history module projects every child before one atomic reconcile,
+    // so adapters cannot drift membership or leave a parent-only snapshot.
+    if let Err(error) = crate::history::save_bulk_snapshot(&mut store, collection, &children) {
         automatic_warning_once(&error, warning.latch());
     }
 

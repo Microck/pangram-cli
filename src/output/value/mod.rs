@@ -16,8 +16,10 @@ use super::{
 };
 
 mod bulk;
+mod mcp;
 
 pub use bulk::*;
+pub use mcp::*;
 
 /// A successful command which mutates local state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -537,8 +539,8 @@ command_data! {
     ConfigSet(MutationAcknowledgement) => ConfigSet,
     ConfigPath(ConfigPathStatus) => ConfigPath,
     Doctor(DoctorStatus) => Doctor,
-    McpInstall(MutationAcknowledgement) => McpInstall,
-    McpUninstall(MutationAcknowledgement) => McpUninstall,
+    McpInstall(McpMutationReport) => McpInstall,
+    McpUninstall(McpMutationReport) => McpUninstall,
     McpStatus(McpStatus) => McpStatus,
     UpdateCheck(UpdateStatus) => UpdateCheck,
     UpdateInstall(UpdateStatus) => UpdateInstall,

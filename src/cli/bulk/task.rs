@@ -251,10 +251,9 @@ fn emit_task_jsonl_progress(progress: &crate::analysis::AnalysisProgress) {
         observed,
     )
     .with_upstream_stage(progress.last_stage.as_str())
+        && let Ok(line) = serde_json::to_string(&event)
     {
-        if let Ok(line) = serde_json::to_string(&event) {
-            eprintln!("{line}");
-        }
+        eprintln!("{line}");
     }
 }
 

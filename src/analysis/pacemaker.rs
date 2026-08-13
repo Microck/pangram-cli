@@ -1,4 +1,4 @@
-//! One process-wide time-based issue gate for Pangram requests.
+//! Time-based issue gating for Pangram requests.
 //!
 //! A single shared pacemaker enforces the documented hard maximum of 5
 //! requests per second on request **issue** timing: every request is issued
@@ -10,9 +10,9 @@
 //!
 //! The configured `network.max_requests_per_second` (built-in default 5.0,
 //! validated `0 < rate <= 5`) may only lower the effective pacing; it can
-//! never raise the rate above the hard ceiling. The schedule is shared by
-//! every caller through one [`Pacemaker`] state, so submit and poll paths
-//! share the same envelope.
+//! never raise the rate above the hard ceiling. Clients constructed with the
+//! same schedule share reservations, so submit and poll paths within one
+//! analyzer session share the same envelope.
 //!
 //! The clock and every wait are injectable so protocol tests run the same
 //! gate against paused runtime time.
@@ -23,13 +23,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::config::{Clock, Duration, Instant};
 
-/// The shared pacing state behind one client's request gate.
-struct Inner {
-    /// The next instant at which a request may issue. Behind `Mutex`, the
-    /// read-modify-write reservation is atomic per caller.
-    next_issue: Instant,
-    /// Minimum interval between consecutive issue events (`1/rate`).
-    interval: Duration,
+/// One session-shared request-issue schedule. Fresh clients may carry a
+/// newly configured interval while reserving against this same state.
+#[derive(Clone, Default)]
+pub(crate) struct PacingSchedule {
+    last_reserved: Arc<Mutex<Option<Instant>>>,
 }
 
 /// The outcome of one gated acquisition.
@@ -49,7 +47,8 @@ pub enum Gate {
 /// request issued through this gate observes the same cumulative cadence.
 #[derive(Clone)]
 pub struct Pacemaker<C> {
-    inner: Arc<Mutex<Inner>>,
+    schedule: PacingSchedule,
+    interval: Duration,
     clock: C,
 }
 
@@ -64,6 +63,17 @@ impl<C: Clock> Pacemaker<C> {
     /// 5-requests-per-second ceiling. The first request may issue immediately.
     #[must_use]
     pub fn new(max_requests_per_second: f64, clock: C) -> Self {
+        Self::with_schedule(max_requests_per_second, clock, PacingSchedule::default())
+    }
+
+    /// Builds one configured gate over an existing shared issue
+    /// schedule. The interval belongs to this freshly configured client; only
+    /// the reservation timeline is shared.
+    pub(crate) fn with_schedule(
+        max_requests_per_second: f64,
+        clock: C,
+        schedule: PacingSchedule,
+    ) -> Self {
         let rate = if max_requests_per_second.is_finite() && max_requests_per_second > 0.0 {
             max_requests_per_second.min(crate::config::MAX_REQUESTS_PER_SECOND)
         } else {
@@ -72,10 +82,8 @@ impl<C: Clock> Pacemaker<C> {
         };
         let interval = Duration::from_secs_f64(1.0 / rate);
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                next_issue: clock.now(),
-                interval,
-            })),
+            schedule,
+            interval,
             clock,
         }
     }
@@ -93,21 +101,20 @@ impl<C: Clock> Pacemaker<C> {
         // An already-lapsed wait deadline must gate request issue even on the
         // immediate path: a caller whose budget ran out issues no request at
         // all, and the shared schedule is not advanced for a stop it never
-        // performs. (CodeRabbit stability finding; the sleep path already
-        // honors the deadline, but the released-immediately branch did not.)
+        // performs. The sleep path already honors the deadline, but the
+        // released-immediately branch needs this explicit check.
         if deadline.is_some_and(|deadline| now >= deadline) {
             return Gate::DeadlinePassed;
         }
         let (wait_until, immediate) = {
-            let mut inner = self.inner.lock().expect("pacemaker poisoned");
-            let scheduled = inner.next_issue;
-            if scheduled <= now {
-                inner.next_issue = now + inner.interval;
-                (now, true)
-            } else {
-                inner.next_issue = scheduled + inner.interval;
-                (scheduled, false)
-            }
+            let mut last_reserved = self
+                .schedule
+                .last_reserved
+                .lock()
+                .expect("pacemaker poisoned");
+            let scheduled = last_reserved.map_or(now, |last| (last + self.interval).max(now));
+            *last_reserved = Some(scheduled);
+            (scheduled, scheduled <= now)
         };
         if immediate {
             // First call (or a lull) releases without sleeping. We still
@@ -217,6 +224,30 @@ mod tests {
         // And a lowered rate is never faster than the hard 5-per-second
         // ceiling's 200 ms interval would allow.
         assert!(elapsed >= Duration::from_millis(200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fresh_client_interval_uses_the_process_schedule() {
+        let clock = SystemClock;
+        let schedule = PacingSchedule::default();
+        let first_client = Pacemaker::with_schedule(FIVE_PER_SECOND, clock, schedule.clone());
+        let refreshed_client = Pacemaker::with_schedule(1.0, clock, schedule);
+        let cancel = CancellationToken::new();
+        let t0 = clock.now();
+
+        assert_eq!(
+            first_client.hurdle(&cancel, NO_DEADLINE).await,
+            Gate::Released
+        );
+        assert_eq!(
+            refreshed_client.hurdle(&cancel, NO_DEADLINE).await,
+            Gate::Released
+        );
+        assert_eq!(
+            clock.now().checked_duration_since(t0),
+            Some(Duration::from_secs(1)),
+            "the refreshed interval must extend the shared issue schedule"
+        );
     }
 
     #[tokio::test(start_paused = true)]

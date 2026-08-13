@@ -76,22 +76,49 @@ pub(crate) enum AnalyzerSource {
     Injected(Box<Analyzer>),
 }
 
+/// Session-lifetime state shared by analyzers which refresh configuration and
+/// credentials independently. It owns only request-issue pacing state, never
+/// an analyzer, credential, endpoint, or configuration snapshot.
+#[derive(Clone, Default)]
+pub(crate) struct AnalyzerSession {
+    pacing: pacemaker::PacingSchedule,
+}
+
 impl AnalyzerSource {
     #[allow(clippy::result_large_err)]
     pub(crate) fn resolve(&self, service: &ConfigService) -> Result<Analyzer, CanonicalError> {
         match self {
-            Self::Production => {
-                let resolution = service
-                    .credentials()
-                    .resolve(service.overrides())
-                    .map_err(credential_error)?;
-                let Some(api_key) = resolution.key_for_client() else {
-                    return Err(crate::output::missing_api_key_error());
-                };
-                build_analyzer(service, api_key)
-            }
+            Self::Production => build_analyzer(service, resolved_api_key(service)?),
             #[cfg(feature = "dev-tools")]
             Self::Injected(analyzer) => Ok(analyzer.as_ref().clone()),
+        }
+    }
+
+    /// Resolves fresh configuration and credentials while preserving the
+    /// caller's session-shared request-issue schedule.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn resolve_in_session(
+        &self,
+        service: &ConfigService,
+        session: &AnalyzerSession,
+    ) -> Result<Analyzer, CanonicalError> {
+        match self {
+            Self::Production => {
+                let api_key = resolved_api_key(service)?;
+                build_analyzer_in_session(
+                    api_key,
+                    configured_rate(service)?,
+                    session.pacing.clone(),
+                )
+            }
+            #[cfg(feature = "dev-tools")]
+            Self::Injected(analyzer) => {
+                let rate = configured_rate(service)?.unwrap_or(MAX_REQUESTS_PER_SECOND);
+                Ok(analyzer
+                    .as_ref()
+                    .clone()
+                    .with_pacing_schedule(rate, session.pacing.clone()))
+            }
         }
     }
 
@@ -99,6 +126,26 @@ impl AnalyzerSource {
     pub(crate) fn injected(analyzer: Analyzer) -> Self {
         Self::Injected(Box::new(analyzer))
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn resolved_api_key(service: &ConfigService) -> Result<SecretString, CanonicalError> {
+    let resolution = service
+        .credentials()
+        .resolve(service.overrides())
+        .map_err(credential_error)?;
+    resolution
+        .key_for_client()
+        .ok_or_else(crate::output::missing_api_key_error)
+}
+
+#[allow(clippy::result_large_err)]
+fn configured_rate(service: &ConfigService) -> Result<Option<f64>, CanonicalError> {
+    let config = service.effective().map_err(config_error)?;
+    Ok(config
+        .network
+        .as_ref()
+        .and_then(|network| network.max_requests_per_second))
 }
 
 /// Maps configuration failures into the canonical categories shared by every
@@ -140,15 +187,24 @@ pub(crate) fn build_analyzer(
     service: &ConfigService,
     api_key: SecretString,
 ) -> Result<Analyzer, CanonicalError> {
-    let config = service.effective().map_err(config_error)?;
-    let rate = config
-        .network
-        .as_ref()
-        .and_then(|network| network.max_requests_per_second);
+    let rate = configured_rate(service)?;
     let client = map_client(UpstreamClient::production(
         api_key,
         AnalysisConfig::production(rate),
     ))?;
+    Ok(Analyzer::from_client(client))
+}
+
+#[allow(clippy::result_large_err)]
+fn build_analyzer_in_session(
+    api_key: SecretString,
+    rate: Option<f64>,
+    schedule: pacemaker::PacingSchedule,
+) -> Result<Analyzer, CanonicalError> {
+    let config = AnalysisConfig::production(rate);
+    let rate = config.max_requests_per_second();
+    let client = map_client(UpstreamClient::production(api_key, config))?
+        .with_pacing_schedule(rate, schedule);
     Ok(Analyzer::from_client(client))
 }
 

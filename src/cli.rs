@@ -5,6 +5,7 @@ pub(crate) mod detect;
 pub mod grammar;
 mod history;
 mod local_setup;
+mod mcp;
 mod runtime;
 
 pub(crate) use crate::config::redact_io;
@@ -404,6 +405,9 @@ pub fn runtime_command() -> Command {
         .subcommand(bulk)
         .subcommand(task)
         .subcommand(history::command())
+        .subcommand(mcp::command())
+        .subcommand(mcp::agent_command())
+        .subcommand(mcp::skills_command())
 }
 
 #[cfg(test)]
@@ -446,7 +450,7 @@ mod tests {
         for unknown in ["--frobnicate", "-z", "--not-a-real-flag"] {
             try_parse(&[unknown]).unwrap_err();
         }
-        for literal in ["mcp", "update", "agent", "plagiarism"] {
+        for literal in ["update", "plagiarism"] {
             let parsed = try_parse(&[literal]).unwrap();
             assert_eq!(parsed.get_one::<String>("TEXT").unwrap(), literal);
             assert!(parsed.subcommand().is_none());
@@ -522,5 +526,78 @@ mod tests {
                 "help missing {fragment}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn mcp_capability_flags_are_closed_and_repeat_file_roots() {
+        let parsed = try_parse(&[
+            "mcp",
+            "--history",
+            "--allow-history-mutations",
+            "--allow-config-mutations",
+            "--allow-public-links",
+            "--allow-file-root",
+            "/tmp/one",
+            "--allow-file-root",
+            "/tmp/two",
+        ])
+        .unwrap();
+        let (_, mcp) = parsed.subcommand().unwrap();
+        assert!(mcp.get_flag("history"));
+        assert!(mcp.get_flag("allow-history-mutations"));
+        assert_eq!(
+            mcp.get_many::<String>("allow-file-root")
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["/tmp/one", "/tmp/two"]
+        );
+
+        // This relation is startup configuration, not a usage error. The
+        // server validates it before reading stdin and returns exit 1.
+        try_parse(&["mcp", "--allow-history-mutations"]).unwrap();
+        try_parse(&["mcp", "--allow-file-root"]).unwrap_err();
+        try_parse(&["mcp", "--endpoint", "https://example.com"]).unwrap_err();
+    }
+
+    #[test]
+    fn mcp_installers_require_an_explicit_target_selection() {
+        for action in ["install", "uninstall"] {
+            try_parse(&["mcp", action]).unwrap_err();
+            try_parse(&["mcp", action, "--target", "codex"]).unwrap();
+            try_parse(&[
+                "mcp",
+                action,
+                "--target",
+                "codex",
+                "--target",
+                "claude-code",
+                "--server-name",
+                "custom-pangram",
+                "--dry-run",
+            ])
+            .unwrap();
+            try_parse(&["mcp", action, "--all"]).unwrap();
+            try_parse(&["mcp", action, "--all", "--target", "codex"]).unwrap_err();
+            try_parse(&["mcp", action, "--target", "unknown-client"]).unwrap_err();
+        }
+    }
+
+    #[test]
+    fn local_agent_and_skill_commands_have_a_closed_surface() {
+        try_parse(&["agent"]).unwrap();
+        try_parse(&["agent", "extra"]).unwrap_err();
+        try_parse(&["skills", "list"]).unwrap();
+        try_parse(&["skills", "get", "pangram"]).unwrap();
+        try_parse(&["skills", "get", "pangram", "--full"]).unwrap();
+        try_parse(&["skills", "get", "unknown"]).unwrap_err();
+        try_parse(&["skills", "path"]).unwrap();
+        try_parse(&["skills", "path", "pangram"]).unwrap();
+        try_parse(&["skills", "path", "unknown"]).unwrap_err();
+    }
+
+    #[test]
+    fn library_parser_never_starts_or_validates_the_stdio_server() {
+        try_run_from(["pangram", "mcp", "--allow-history-mutations"]).unwrap();
     }
 }

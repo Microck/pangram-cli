@@ -330,14 +330,13 @@ The Pangram SDK v1.0.0 tag documents the exact text and job-wide bulk request
 selector (`model` set to `pangram-4`) even though the rendered public REST
 reference still describes the Pangram 3-era request. Production text
 submission sends that explicit selector and never relies on default routing;
-do not infer the selector from dashboard traffic. A future bulk submission
+do not infer the selector from dashboard traffic. Bulk submission
 uses the same job-wide selector and never places a selector on individual
 items. Each valid item contributes one unit per started 100-word block, with a
 minimum of one; the job estimate is their sum. The upstream request limit is
 1,000 billable units with no separate item-count limit. Do not reuse the
-Pangram 3-era 1,000-word unit. Bulk remains unimplemented until Phase 3, and
-both paths must be represented in exact loopback request fixtures before their
-adapters use them. Live conformance remains a public-support gate.
+Pangram 3-era 1,000-word unit. Both paths are represented in exact loopback
+request fixtures. Live conformance remains a public-support gate.
 
 ### 8.2 Reqwest configuration
 
@@ -709,19 +708,21 @@ surface that could pass while the visible terminal is broken.
 
 The stdio adapter implements MCP `2026-07-28` only. `server/discover` reports
 the server identity, protocol version, and immutable capabilities. Each request
-carries protocol version, client identity, and client capabilities in `_meta`.
-The adapter does not implement the removed initialization handshake or a legacy
-protocol fallback.
+carries protocol version and client capabilities in `_meta`; client identity is
+optional. The adapter does not implement the removed initialization handshake,
+a legacy protocol fallback, or the experimental Tasks extension.
 
 RMCP owns wire-level protocol types. Pangram-owned types begin at tool
 arguments, canonical command envelopes, and startup capability configuration.
-Every ordinary result has `resultType: "complete"`. Tool and resource list
-results are deterministic, private, and non-cacheable with `ttlMs: 0`.
+Every ordinary result has `resultType: "complete"`. Tool-list, resource-list,
+and resource-read results are deterministic, private, and non-cacheable with
+`ttlMs: 0`.
 
 ### 14.2 In-process execution
 
-The RMCP server constructs and calls the same `Analyzer`,
-`HistoryStore`, `ConfigStore`, and `UpdateChecker` used by other adapters.
+The RMCP server constructs and calls the same `Analyzer`, `HistoryStore`, and
+`ConfigStore` used by other adapters. A later-phase tool adds its shared
+dependency only when that tool enters the generated inventory.
 
 It MUST NOT spawn `pangram` as a subprocess and MUST NOT expose a generic CLI
 tool.
@@ -742,13 +743,20 @@ capabilities automatically.
 `--allow-history-mutations` requires `--history`. Each
 `--allow-file-root PATH` must name an absolute, existing directory that can be
 pre-opened safely. Invalid capability combinations or file roots fail before
-the server begins reading JSON-RPC messages. Installers never configure file
-roots.
+the server reads stdin. Startup failure writes no stdout, writes one sanitized
+stderr diagnostic, and exits 1. Installers never configure file roots or
+optional capability flags.
+
+`save: true` is a history mutation and requires both `--history` and
+`--allow-history-mutations`. Local analysis and bulk IDs resolve only from the
+enabled history store. The adapter does not maintain a transient or hidden
+ledger for local IDs.
 
 ### 14.4 File roots
 
 Approved roots are fixed startup configuration, not the deprecated MCP Roots
-feature. With no approved roots, the adapter omits `detect_files`.
+feature. Phase 6 does not contain a file-detection tool. Inline bulk items work
+without an approved root, but bulk `jsonl_path` requires one.
 
 The adapter pre-opens approved root directories and delegates root-relative,
 handle-based file opening to one concrete filesystem module. That module uses
@@ -760,21 +768,70 @@ MUST NOT authorize a canonicalized path string and reopen that path later.
 ### 14.5 Long-running Pangram work
 
 The adapter exposes ordinary typed `get_task` and `wait_task` tools over the
-same underlying analysis handles used by the CLI and TUI. It does not implement
-the experimental `io.modelcontextprotocol/tasks` extension.
+same analysis operations used by the CLI and TUI. It does not implement the
+experimental `io.modelcontextprotocol/tasks` extension.
 
-Local analysis IDs and Pangram task IDs remain separate fields. JSON-RPC
-cancellation stops local observation only.
+Local analysis IDs and Pangram task IDs remain separate fields. An upstream ID
+works without history; a local ID requires history. JSON-RPC cancellation
+stops local observation only, sends no response for the cancelled request, and
+does not send or claim an upstream cancellation. An optional cancellation
+diagnostic is sanitized stderr only and identifies local and upstream IDs when
+known.
 
 ### 14.6 Errors
 
 Schema-invalid calls use protocol validation errors. Domain-valid operations
 that fail return `isError: true` with one canonical failure envelope in
 `structuredContent` and `resultType: "complete"`. Success returns one canonical
-success envelope with `resultType: "complete"`. Generated per-tool schemas fix
-the command and `data` root.
+success envelope with `resultType: "complete"`. Each output schema in the one
+generated tool inventory fixes the command and `data` root.
 
 All logs go to stderr to preserve JSON-RPC framing.
+
+### 14.7 Generated and test-only boundaries
+
+The generator owns `generated/mcp-tools.json`, one ordered immutable inventory
+containing closed tool input schemas and command-specialized output schemas,
+and `generated/agent-reference.md`. It does not create separate schema files
+per tool. The shipping binary embeds those artifacts, the Pangram skill, the
+canonical output schema, and the generated error reference at build time.
+The agent command and compact skill command share the generated agent-reference
+bytes. Full skill output reads the embedded skill bytes. Skill inventory and
+locator projections are fixed newline-terminated byte constants owned by the
+generator; adapters do not reconstruct any of these outputs independently.
+
+The compiled product exposes stdio only. Pinned official conformance
+`@modelcontextprotocol/conformance` 0.2.0-alpha.11 cannot drive stdio while
+upstream issue 258 is open. Its frozen `2026-07-28` server profile also requires
+a full diagnostic inventory and optional capabilities that Pangram does not
+advertise. Individual compatible scenarios could exercise a shared handler
+over HTTP, but a test-only implementation of the full profile would not prove
+shipping-handler or stdio conformance. Compiled `pangram mcp` subprocess tests
+prove the selected stdio protocol and capability surface.
+Re-evaluate official conformance when it supports stdio and capability-aware
+scenario selection. HTTP and every conformance-only `test_*` tool or resource
+remain absent from normal builds and release artifacts.
+
+Client install and uninstall use parsed, atomic edits for explicitly selected
+targets. They own only the exact server-name entry, preserve unrelated fields
+and bytes where the format permits, reject malformed or conflicting entries,
+and remove only an exact matching owned entry. Each client target stays
+disabled until its current configuration path, schema, and exact owned-entry
+match rule are pinned from authoritative client evidence.
+
+The installer resolves and validates every selected target before its first
+write. Any unavailable or ambiguous location, malformed configuration,
+ownership conflict, or unsafe plan fails the command with zero writes. A
+successful dry run and normal operation share one closed
+`McpMutationReport`; normal operation returns it after all per-target atomic
+writes complete. If an unexpected write failure occurs after an earlier target
+commits, the canonical failure preserves that completed change and identifies
+the successfully changed targets without claiming later writes occurred.
+
+`windsurf` means current Devin Local only, never legacy Cascade. `roo-code`
+requires exactly one discoverable supported custom or host-managed storage
+path and refuses zero or multiple matches. Client-specific path and schema
+rules remain in [mcp-contract.md](mcp-contract.md).
 
 ## 15. Updater
 
@@ -826,7 +883,7 @@ The Rust domain and CLI definitions own:
 - JSON Schemas
 - command reference
 - error and exit-code reference
-- MCP tool schemas
+- ordered MCP tool descriptors and schemas
 - TUI shortcut reference
 - update manifest, signature, state, and receipt schemas
 - embedded skill inputs
@@ -844,38 +901,16 @@ cross-file resolver requirements. The Rust source types and generator remain
 subject to normal module-size limits. ADR 0008 covers the same exception during
 the specification-seed bootstrap.
 
-## 17. Dependency baseline
+`generated/mcp-tools.json` is also allowed to exceed 1,000 generated lines. It
+is one Rust-owned ordered inventory of closed tool descriptors plus their input
+and command-specialized output schemas. Splitting it would create ordering and
+cross-file resolution concerns for clients and weaken the one-artifact drift
+check. The exception is exact-path only; its Rust owners remain subject to the
+normal source limits.
 
-Phase 0 revalidates and pins exact versions only for the roles used by the
-network-free scaffold: Clap, Serde and JSON, Schemars, Jiff, thiserror, UUIDv7,
-SHA-256, JSON Schema validation, property tests, and temporary directories.
-Each later phase revalidates and pins its newly introduced roles before first
-use. Future roles such as Tokio, Reqwest, RMCP, Ratatui, SQLite, and Ed25519 do
-not become dependencies before their owning phase.
-
-RMCP must support MCP `2026-07-28` and the official conformance suite before it
-enters Phase 6. Its dependency-compatible Rust version becomes the package
-`rust-version` in that phase. The 2026-07-28-capable RMCP 3 prerelease requires
-Rust 1.88, but a prerelease is evidence, not an approved dependency pin.
-
-Phase 2 applies the same dependency-driven `rust-version` rule to the locked v1
-TOON projection. `toon-format 0.5.0` requires Rust 1.87: its decode parser uses
-`unsigned_is_multiple_of` (stabilized in Rust 1.87.0) and fails to compile on
-Rust 1.85 with `E0658`. Because TOON is part of the locked projection contract
-and the lowest selected direct-dependency-compatible toolchain becomes the
-package `rust-version`, Phase 2 raises `rust-version` from 1.85 to 1.87 (not to
-the RMCP 1.88 prerelease floor, which is not yet a selected dependency).
-
-Later tests add real Axum loopback servers, snapshots, PTYs, and the pinned
-Terminal Control harness when the corresponding behavior exists. Exact
-research snapshots live in [evidence-ledger.md](evidence-ledger.md), not in
-this normative architecture.
-
-The workspace pins current stable Rust for development and records the lowest
-dependency-compatible Rust 2024 toolchain as `rust-version`. Each phase MUST
-prove both the current stable toolchain and the pinned `rust-version`
-toolchain before its manifest is accepted. Direct dependency upgrades are
-intentional changes.
+The normative [dependency baseline](architecture-dependency-baseline.md)
+retains architecture section 17 separately so dependency evidence does not
+obscure the module design.
 
 ## 18. Documentation workspace baseline
 

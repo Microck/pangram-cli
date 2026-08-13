@@ -2,7 +2,7 @@
 
 Status: accepted
 Date: 2026-07-23
-Amended: 2026-07-31
+Amended: 2026-07-31, 2026-08-13
 
 ## Context
 
@@ -43,7 +43,7 @@ bulk on 2026-07-29. The official Mintlify API reference also documents the
 Pangram 4 bulk billing rule and request limit: one unit per started 100-word
 block per valid item, a minimum of one per item, and at most 1,000 units per
 request. Text and bulk are no longer blocked on public request documentation.
-Bulk still requires Phase 3 implementation and live conformance.
+Bulk is implemented; public support still requires live conformance.
 
 File analysis and plagiarism remain release-gated until live conformance
 resolves their documented response conflicts.

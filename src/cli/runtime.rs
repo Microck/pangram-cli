@@ -212,6 +212,43 @@ where
             invocation.streams,
             invocation.analyzer_source,
         )),
+        Some(("mcp", sub)) if sub.subcommand().is_none() => {
+            execute_mcp_server(sub, &matches, invocation)
+        }
+        Some(("mcp", sub)) => {
+            if invocation.is_process_facing() {
+                RunOutcome {
+                    exit_code: super::mcp::execute(sub, global),
+                    clap_error: None,
+                }
+            } else {
+                RunOutcome {
+                    exit_code: 0,
+                    clap_error: None,
+                }
+            }
+        }
+        Some(("agent", _)) => {
+            finish_raw_bytes(crate::mcp::embedded::AGENT_REFERENCE.bytes, invocation)
+        }
+        Some(("skills", sub)) => {
+            let bytes = match sub.subcommand() {
+                Some(("get", arguments)) if arguments.get_flag("full") => {
+                    crate::mcp::embedded::PANGRAM_SKILL.bytes
+                }
+                Some(("get", _)) => crate::mcp::embedded::AGENT_REFERENCE.bytes,
+                Some(("list", _)) => crate::mcp::embedded::SKILL_LIST,
+                Some(("path", arguments))
+                    if arguments.value_source("SKILL")
+                        == Some(clap::parser::ValueSource::DefaultValue) =>
+                {
+                    crate::mcp::embedded::SKILL_ROOT_PATH
+                }
+                Some(("path", _)) => crate::mcp::embedded::PANGRAM_SKILL_PATH,
+                _ => return help_outcome(invocation),
+            };
+            finish_raw_bytes(bytes, invocation)
+        }
         // A bare literal-text reach (`pangram some text`) resolves to implicit
         // detection; the literal `-` reads stdin. A no-text reach can only
         // come from the non-rendering parsing hook because process-facing bare
@@ -245,6 +282,78 @@ where
                 local_setup::dispatch(&matches, config_flag, data_dir_flag, invocation.streams);
             finish(outcome)
         }
+    }
+}
+
+/// Runs the blocking stdio server only for the real process entrypoint.
+/// Library callers use `try_run_from` as a no-I/O parser and therefore must
+/// never take ownership of stdin or emit protocol bytes.
+fn execute_mcp_server(
+    arguments: &ArgMatches,
+    root_matches: &ArgMatches,
+    invocation: &InvocationContext<'_>,
+) -> RunOutcome {
+    if !invocation.is_process_facing() {
+        return RunOutcome {
+            exit_code: 0,
+            clap_error: None,
+        };
+    }
+
+    let options = super::mcp::serve_options(arguments);
+    let mut flags = crate::config::ConfigOverrides::default();
+    if let Some(config) = root_matches.get_one::<String>("config") {
+        flags = flags.with_config_file(config.clone());
+    }
+    if let Some(data_dir) = root_matches.get_one::<String>("data-dir") {
+        flags = flags.with_data_dir(data_dir.clone());
+    }
+    let overrides = crate::config::ConfigOverrides::merge(
+        flags,
+        crate::config::ConfigOverrides::from_environment(),
+    );
+    let service = match crate::config::ConfigService::new(&overrides) {
+        Ok(service) => service,
+        Err(error) => {
+            let error = crate::analysis::config_error(error);
+            return finish_mcp_startup_error(error.message());
+        }
+    };
+    match crate::mcp::serve_stdio(options, invocation.analyzer_source.clone(), service) {
+        Ok(()) => RunOutcome {
+            exit_code: 0,
+            clap_error: None,
+        },
+        Err(error) => finish_mcp_startup_error(&error.to_string()),
+    }
+}
+
+fn finish_mcp_startup_error(message: &str) -> RunOutcome {
+    RunOutcome {
+        exit_code: super::mcp::render_stderr_line(message, 1),
+        clap_error: None,
+    }
+}
+
+/// Writes one immutable embedded document without decoding or normalizing it.
+fn finish_raw_bytes(bytes: &[u8], invocation: &InvocationContext<'_>) -> RunOutcome {
+    if !invocation.is_process_facing() {
+        return RunOutcome {
+            exit_code: 0,
+            clap_error: None,
+        };
+    }
+
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    let exit_code = if stdout.write_all(bytes).and_then(|_| stdout.flush()).is_ok() {
+        0
+    } else {
+        1
+    };
+    RunOutcome {
+        exit_code,
+        clap_error: None,
     }
 }
 

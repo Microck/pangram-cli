@@ -10,7 +10,8 @@ use crate::domain::{
 };
 use crate::output::{
     AuthStatus, BulkDryRun, CanonicalError, ConfigGetStatus, ConfigListStatus, ConfigPathStatus,
-    DoctorStatus, EnvelopeMeta, McpStatus, MutationAcknowledgement, UpdateStatus,
+    DoctorStatus, EnvelopeMeta, McpMutationReport, McpStatus, MutationAcknowledgement,
+    UpdateStatus,
 };
 
 /// A Schemars-only registry which causes every output type to share one `$defs`.
@@ -24,6 +25,7 @@ pub(super) enum OutputRegistry {
     AnalysisPage(AnalysisPage<CanonicalError>),
     AnalysisSummaryPage(AnalysisSummaryPage),
     Mutation(MutationAcknowledgement),
+    McpMutation(McpMutationReport),
     Auth(AuthStatus),
     ConfigList(ConfigListStatus),
     ConfigGet(ConfigGetStatus),

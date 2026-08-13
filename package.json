@@ -6,10 +6,12 @@
     "node": ">=20"
   },
   "scripts": {
+    "test:mcp-conformance": "vitest run tools/mcp-conformance/applicability.test.ts --no-file-parallelism",
     "test:tui": "vitest run tools/tui-acceptance/tui-acceptance.test.ts --no-file-parallelism"
   },
   "devDependencies": {
     "@kitlangton/terminal-control": "0.6.0",
+    "@modelcontextprotocol/conformance": "0.2.0-alpha.11",
     "vitest": "3.2.7"
   }
 }

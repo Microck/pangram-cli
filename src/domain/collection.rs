@@ -343,10 +343,10 @@ impl<E> BulkItem<E> {
         {
             return Err(DomainError::InvalidState("bulk item last_stage"));
         }
-        if let Some(stage) = last_stage.as_deref() {
-            if !valid_sanitized_stage(stage) {
-                return Err(DomainError::InvalidState("bulk item last_stage"));
-            }
+        if let Some(stage) = last_stage.as_deref()
+            && !valid_sanitized_stage(stage)
+        {
+            return Err(DomainError::InvalidState("bulk item last_stage"));
         }
         Ok(Self {
             index,

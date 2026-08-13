@@ -20,6 +20,8 @@ const EXPECTED_ARTIFACTS: &[&str] = &[
     "generated/cli-help.txt",
     "generated/cli-reference.json",
     "generated/error-reference.json",
+    "generated/mcp-tools.json",
+    "generated/agent-reference.md",
 ];
 
 fn repository_root() -> PathBuf {
@@ -139,6 +141,170 @@ fn output_schema_value() -> Value {
         .find(|artifact| artifact.path == "contracts/output.schema.json")
         .expect("the output schema is a generated artifact");
     serde_json::from_slice(&bytes).unwrap()
+}
+
+fn generated_json(path: &str) -> Value {
+    let GeneratedArtifact { bytes, .. } = generated_artifacts()
+        .unwrap()
+        .into_iter()
+        .find(|artifact| artifact.path == path)
+        .unwrap_or_else(|| panic!("{path} is a generated artifact"));
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[test]
+fn mcp_tool_inventory_is_ordered_closed_and_phase_scoped() {
+    let inventory = generated_json("generated/mcp-tools.json");
+    let tools = inventory["tools"]
+        .as_array()
+        .expect("mcp-tools.json has a tools array");
+    let names: Vec<_> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        names,
+        [
+            "detect_text",
+            "get_task",
+            "wait_task",
+            "submit_bulk",
+            "get_bulk",
+            "wait_bulk",
+            "get_bulk_results",
+            "history_list",
+            "history_search",
+            "history_get",
+            "history_rerun",
+            "history_delete",
+            "history_clear",
+            "update_config",
+        ]
+    );
+    assert!(names.iter().all(|name| !matches!(
+        *name,
+        "detect_files" | "check_plagiarism" | "analyze_text" | "check_update"
+    )));
+    assert!(names.iter().all(|name| !name.starts_with("test_")));
+
+    for tool in tools {
+        assert_eq!(tool["inputSchema"]["additionalProperties"], json!(false));
+        jsonschema::options()
+            .with_draft(Draft::Draft202012)
+            .build(&tool["inputSchema"])
+            .unwrap_or_else(|error| panic!("{} input schema: {error}", tool["name"]));
+        jsonschema::options()
+            .with_draft(Draft::Draft202012)
+            .build(&tool["outputSchema"])
+            .unwrap_or_else(|error| panic!("{} output schema: {error}", tool["name"]));
+    }
+}
+
+#[test]
+fn shipping_mcp_dependency_excludes_http_transport() {
+    let manifest = fs::read_to_string(repository_root().join("Cargo.toml")).unwrap();
+    let manifest: toml::Value = toml::from_str(&manifest).unwrap();
+    let rmcp = manifest["dependencies"]["rmcp"]
+        .as_table()
+        .expect("rmcp uses an explicit dependency table");
+    let features = rmcp["features"]
+        .as_array()
+        .expect("rmcp features are explicit")
+        .iter()
+        .map(|feature| feature.as_str().expect("feature name"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(rmcp["default-features"].as_bool(), Some(false));
+    assert_eq!(features, ["server", "transport-io"]);
+    assert!(features.iter().all(|feature| !feature.contains("http")));
+}
+
+#[test]
+fn mcp_identifier_and_bulk_sources_are_exactly_one() {
+    let inventory = generated_json("generated/mcp-tools.json");
+    let tools = inventory["tools"].as_array().unwrap();
+    let validator = |name: &str| {
+        let schema = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"))["inputSchema"]
+            .clone();
+        jsonschema::options()
+            .with_draft(Draft::Draft202012)
+            .build(&schema)
+            .unwrap()
+    };
+
+    let task = validator("get_task");
+    assert!(task.is_valid(&json!({"analysis_id": "anl_01983c20-0180-7a80-a001-000000000001"})));
+    assert!(task.is_valid(&json!({"upstream_task_id": "task-123"})));
+    assert!(!task.is_valid(&json!({})));
+    assert!(!task.is_valid(&json!({
+        "analysis_id": "anl_01983c20-0180-7a80-a001-000000000001",
+        "upstream_task_id": "task-123"
+    })));
+    assert!(!task.is_valid(&json!({"upstream_task_id": "task-123", "unknown": true})));
+
+    let bulk = validator("submit_bulk");
+    let item = json!({"text": "Synthetic text."});
+    assert!(bulk.is_valid(&json!({"items": [item], "max_billable_units": 1})));
+    assert!(
+        bulk.is_valid(&json!({"jsonl_path": "/approved/input.jsonl", "max_billable_units": 1}))
+    );
+    assert!(!bulk.is_valid(&json!({"max_billable_units": 1})));
+    assert!(!bulk.is_valid(&json!({
+        "items": [{"text": "Synthetic text."}],
+        "jsonl_path": "/approved/input.jsonl",
+        "max_billable_units": 1
+    })));
+    assert!(!bulk.is_valid(&json!({
+        "items": [{"text": "Synthetic text.", "unknown": true}],
+        "max_billable_units": 1
+    })));
+}
+
+#[test]
+fn mcp_output_schemas_specialize_command_and_data_root() {
+    let inventory = generated_json("generated/mcp-tools.json");
+    let tools = inventory["tools"].as_array().unwrap();
+    let expected = [
+        ("detect_text", "detect"),
+        ("get_task", "task_status"),
+        ("wait_task", "task_wait"),
+        ("submit_bulk", "bulk_submit"),
+        ("get_bulk", "bulk_status"),
+        ("wait_bulk", "bulk_wait"),
+        ("get_bulk_results", "bulk_results"),
+        ("history_list", "history_list"),
+        ("history_search", "history_search"),
+        ("history_get", "history_show"),
+        ("history_rerun", "history_rerun"),
+        ("history_delete", "history_delete"),
+        ("history_clear", "history_clear"),
+        ("update_config", "config_set"),
+    ];
+
+    for (tool_name, command) in expected {
+        let output = &tools
+            .iter()
+            .find(|tool| tool["name"] == tool_name)
+            .unwrap_or_else(|| panic!("missing {tool_name}"))["outputSchema"];
+        assert_eq!(
+            output["$defs"]["successEnvelope"]["properties"]["command"],
+            json!({"const": command})
+        );
+        assert_eq!(
+            output["$defs"]["errorEnvelope"]["properties"]["command"],
+            json!({"const": command})
+        );
+        let data = &output["$defs"]["successEnvelope"]["properties"]["data"];
+        assert_ne!(
+            data,
+            &json!({"oneOf": [{"type": "object"}, {"type": "array"}]})
+        );
+        assert!(data.get("$ref").is_some() || data.get("oneOf").is_some());
+    }
 }
 
 fn check_status_name(status: CheckStatus) -> &'static str {

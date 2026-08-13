@@ -128,16 +128,16 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
             sanitize_single_line(version)
         )));
     }
-    if let Some(task_ids) = &provenance.upstream_task_ids {
-        if !task_ids.as_slice().is_empty() {
-            let ids = task_ids
-                .as_slice()
-                .iter()
-                .map(|id| sanitize_single_line(id.as_str()))
-                .collect::<Vec<_>>()
-                .join(", ");
-            lines.push(Line::raw(format!("Upstream task IDs: {ids}")));
-        }
+    if let Some(task_ids) = &provenance.upstream_task_ids
+        && !task_ids.as_slice().is_empty()
+    {
+        let ids = task_ids
+            .as_slice()
+            .iter()
+            .map(|id| sanitize_single_line(id.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(Line::raw(format!("Upstream task IDs: {ids}")));
     }
     if let Some(bulk_id) = &provenance.upstream_bulk_id {
         lines.push(Line::raw(format!(

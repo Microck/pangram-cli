@@ -165,10 +165,10 @@ fn emit_progress(progress: detect::ProgressMode, event: &crate::analysis::Analys
                 crate::domain::UtcTimestamp::now(),
             )
             .with_upstream_stage(event.last_stage.as_str());
-            if let Ok(value) = value {
-                if let Ok(line) = serde_json::to_string(&value) {
-                    eprintln!("{line}");
-                }
+            if let Ok(value) = value
+                && let Ok(line) = serde_json::to_string(&value)
+            {
+                eprintln!("{line}");
             }
         }
         detect::ProgressMode::Human => {

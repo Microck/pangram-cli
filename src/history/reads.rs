@@ -255,12 +255,10 @@ pub(super) fn canonical_analysis_from_rows(
     let mut input: serde_json::Value = serde_json::from_str(&record.input_json)
         .map_err(|_| corrupt_stored_value("read stored input"))?;
     super::read_validation::validate_stored_input(record, &input)?;
-    if !include_input {
-        if let Some(object) = input.as_object_mut() {
-            object.remove("text");
-            object.remove("path");
-            object.remove("extracted_text");
-        }
+    if !include_input && let Some(object) = input.as_object_mut() {
+        object.remove("text");
+        object.remove("path");
+        object.remove("extracted_text");
     }
 
     if observations.is_empty() || observations.len() > 2 {

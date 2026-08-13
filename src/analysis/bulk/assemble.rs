@@ -38,6 +38,24 @@ pub(super) fn assemble_collection<C: Clock>(
     .expect("a validated status snapshot always satisfies collection invariants")
 }
 
+/// The canonical collection certified by one validated HTTP 202 acceptance.
+/// The running handle already owns the normalized acceptance counters and
+/// local plan, so adapters supply only the observation time. An acceptance
+/// that immediately rejects every item is terminal at this same instant.
+pub(super) fn assemble_accepted_collection<C: Clock>(
+    running: &RunningBulk<C>,
+    accepted_at: UtcTimestamp,
+) -> crate::domain::BulkCollection {
+    let (status, counters) = running.last_state();
+    let snapshot = super::StatusSnapshot {
+        status,
+        counters,
+        created_at: accepted_at,
+        completed_at: counters.is_terminal().then_some(accepted_at),
+    };
+    assemble_collection(running, &snapshot, accepted_at)
+}
+
 /// The initial counters for a freshly accepted job: total from the plan,
 /// immediate failures and not-yet-finished accepted work.
 pub(super) fn initial_counters(
@@ -559,4 +577,99 @@ pub(super) fn next_offset(items: &[BulkItem<CanonicalError>], total: u64) -> Opt
     let max = items.iter().map(|item| item.index).max()?;
     let next = max + 1;
     if next >= total { None } else { Some(next) }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use secrecy::SecretString;
+
+    use crate::analysis::{AnalysisConfig, Duration, PollPolicy, RetryPolicy, UpstreamEndpoints};
+    use crate::domain::{
+        AnalysisStatus, BulkCounters, BulkId, BulkSubmissionItem, BulkSubmissionPlan,
+        NonEmptyString, UpstreamBulkId, UtcTimestamp,
+    };
+
+    use super::super::{BulkAnalyzer, RunningBulk};
+
+    fn running_with_snapshot(status: AnalysisStatus, counters: BulkCounters) -> RunningBulk {
+        let config = AnalysisConfig::for_test(
+            RetryPolicy::OFF,
+            PollPolicy::new(Duration::from_millis(1), Duration::from_millis(1)),
+            Duration::from_secs(1),
+            5.0,
+        );
+        let endpoints = UpstreamEndpoints::loopback("http://127.0.0.1:1").unwrap();
+        let client = crate::analysis::UpstreamClient::for_loopback(
+            SecretString::from("synthetic-test-key".to_owned()),
+            config,
+            endpoints,
+        )
+        .unwrap();
+        let plan = BulkSubmissionPlan::new(
+            (0..3)
+                .map(|index| {
+                    BulkSubmissionItem::new(
+                        Some(NonEmptyString::new(format!("row-{index}")).unwrap()),
+                        format!("synthetic bulk words number {index}"),
+                        5,
+                    )
+                    .unwrap()
+                })
+                .collect(),
+            3,
+        )
+        .unwrap();
+        let mut running = BulkAnalyzer::from_client(client).resume(
+            BulkId::new(),
+            UpstreamBulkId::from_str("bulk-accepted-snapshot").unwrap(),
+            plan,
+        );
+        running.last_status = status;
+        running.last = counters;
+        running
+    }
+
+    #[test]
+    fn accepted_collection_preserves_mixed_and_all_failed_202_snapshots() {
+        let accepted_at = UtcTimestamp::from_str("2026-08-12T20:00:00Z").unwrap();
+        let mixed = running_with_snapshot(
+            AnalysisStatus::Queued,
+            BulkCounters::new(3, 2, 0, 1).unwrap(),
+        )
+        .accepted_collection(accepted_at);
+
+        assert_eq!(mixed.status(), AnalysisStatus::Queued);
+        assert_eq!(*mixed.counters(), BulkCounters::new(3, 2, 0, 1).unwrap());
+        assert_eq!(mixed.estimated_billable_units(), Some(3));
+        assert_eq!(mixed.completed_at(), None);
+
+        let failed = running_with_snapshot(
+            AnalysisStatus::Failed,
+            BulkCounters::new(3, 0, 0, 3).unwrap(),
+        )
+        .accepted_collection(accepted_at);
+
+        assert_eq!(failed.status(), AnalysisStatus::Failed);
+        assert_eq!(*failed.counters(), BulkCounters::new(3, 0, 0, 3).unwrap());
+        assert_eq!(failed.completed_at(), Some(accepted_at));
+    }
+
+    #[test]
+    fn observed_resume_keeps_the_requested_local_bulk_identity() {
+        let requested_id = BulkId::new();
+        let running = running_with_snapshot(
+            AnalysisStatus::Queued,
+            BulkCounters::new(3, 3, 0, 0).unwrap(),
+        );
+        let resumed = BulkAnalyzer::from_client(running.client.clone()).resume_observed_as(
+            requested_id,
+            UpstreamBulkId::from_str("bulk-saved-local-id").unwrap(),
+        );
+
+        assert_eq!(resumed.bulk_id(), requested_id);
+        assert_eq!(resumed.upstream_bulk_id().as_str(), "bulk-saved-local-id");
+        assert!(resumed.plan().is_none());
+    }
 }

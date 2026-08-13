@@ -48,6 +48,7 @@ pub const SYNTHETIC_TEXT: &str =
 pub struct RecordedRequest {
     pub method: String,
     pub path: String,
+    pub received_at: std::time::Instant,
     /// The raw query string without the leading `?` (empty when absent).
     pub query: String,
     headers: Vec<(String, String)>,
@@ -350,6 +351,7 @@ fn record(state: &Arc<Mutex<FixtureState>>, split: SplitRequest) {
         .push(RecordedRequest {
             method: split.method,
             path: split.path,
+            received_at: std::time::Instant::now(),
             query: split.query,
             headers: split.headers,
             body: split.body,

@@ -62,7 +62,7 @@ use super::normalize::bulk::{self, NormalizedBulkStatus};
 use super::upstream::{PollError, SubmitOutcome, UpstreamClient};
 use super::{StopObserving, WaitOptions};
 
-use assemble::{assemble_collection, initial_counters};
+use assemble::{assemble_accepted_collection, assemble_collection, initial_counters};
 
 /// One validated bulk-analysis request. The plan carries the constructor-
 /// enforced ceiling preflight; the local bulk ID is generated here so it
@@ -280,15 +280,14 @@ impl<C: Clock> RunningBulk<C> {
         (self.last_status, self.last)
     }
 
-    /// The validated acceptance snapshot: the truthful status and counters
-    /// derived from the HTTP 202 response at submission time (accepted and
-    /// immediately failed counts, and the derived collection status). A
-    /// `bulk submit` without `--wait` projects this validated snapshot
-    /// rather than fabricating all-queued-zero counters over an acceptance
-    /// that may already report immediate failures (contracts.md 12).
+    /// Projects the canonical collection certified by the validated HTTP 202
+    /// acceptance. The retained plan and normalized counters make this
+    /// infallible: mixed immediate failures remain non-terminal while
+    /// accepted work is outstanding, and an all-failed acceptance completes
+    /// at `accepted_at`.
     #[must_use]
-    pub const fn accepted_snapshot(&self) -> (AnalysisStatus, crate::domain::BulkCounters) {
-        (self.last_status, self.last)
+    pub fn accepted_collection(&self, accepted_at: UtcTimestamp) -> BulkCollection {
+        assemble_accepted_collection(self, accepted_at)
     }
 
     /// The honest plan children of the validated HTTP 202 acceptance
@@ -408,13 +407,13 @@ impl<C: Clock> RunningBulk<C> {
                     identity: self.identity(),
                 });
             }
-            if let Some(deadline) = deadline {
-                if clock.now() >= deadline {
-                    return Ok(Err(BulkAnalysisError::new(
-                        self.bulk_id,
-                        self.wait_timeout_error(),
-                    )));
-                }
+            if let Some(deadline) = deadline
+                && clock.now() >= deadline
+            {
+                return Ok(Err(BulkAnalysisError::new(
+                    self.bulk_id,
+                    self.wait_timeout_error(),
+                )));
             }
 
             match self.fetch_status(&cancel, deadline).await {
@@ -621,11 +620,23 @@ impl<C: Clock> BulkAnalyzer<C> {
     /// observation rehydrates the real counters.
     #[must_use]
     pub fn resume_observed(&self, upstream_bulk_id: UpstreamBulkId) -> RunningBulk<C> {
+        self.resume_observed_as(BulkId::new(), upstream_bulk_id)
+    }
+
+    /// Rehydrates a remote-only observation under a caller-resolved local
+    /// identity. History-backed adapters use this after resolving a saved
+    /// `bulk_` ID; no plan or hidden transient ledger is introduced.
+    #[must_use]
+    pub fn resume_observed_as(
+        &self,
+        bulk_id: BulkId,
+        upstream_bulk_id: UpstreamBulkId,
+    ) -> RunningBulk<C> {
         let counters = crate::domain::BulkCounters::new(1, 0, 0, 0)
             .expect("a total-only counter set is valid");
         RunningBulk {
             client: self.client.clone(),
-            bulk_id: BulkId::new(),
+            bulk_id,
             upstream_bulk_id,
             plan: None,
             acceptance: None,

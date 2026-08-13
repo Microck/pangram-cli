@@ -102,10 +102,10 @@ async fn read_bounded(
     mut response: reqwest::Response,
     cancel: &CancellationToken,
 ) -> Result<Vec<u8>, AnalysisError> {
-    if let Some(length) = response.content_length() {
-        if length > MAX_BODY_BYTES {
-            return Err(AnalysisError::response_too_large());
-        }
+    if let Some(length) = response.content_length()
+        && length > MAX_BODY_BYTES
+    {
+        return Err(AnalysisError::response_too_large());
     }
 
     let mut body = Vec::new();

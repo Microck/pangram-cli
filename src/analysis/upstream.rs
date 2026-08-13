@@ -23,7 +23,7 @@ use crate::output::{CanonicalError, ErrorCode, OutputValidationError};
 
 use super::config::{AnalysisConfig, Clock, Duration, Instant};
 use super::http::{self, HttpClient, Response, SendOutcome};
-use super::pacemaker::{Gate as PaceGate, Pacemaker};
+use super::pacemaker::{Gate as PaceGate, Pacemaker, PacingSchedule};
 use super::task::TaskError;
 
 mod bulk;
@@ -327,6 +327,19 @@ impl<C: Clock> UpstreamClient<C> {
         Self::with_endpoints(api_key, config, endpoints)
     }
 
+    pub(crate) fn with_pacing_schedule(
+        mut self,
+        max_requests_per_second: f64,
+        schedule: PacingSchedule,
+    ) -> Self {
+        self.config = self
+            .config
+            .with_max_requests_per_second(max_requests_per_second);
+        self.pacemaker =
+            Pacemaker::with_schedule(max_requests_per_second, self.config.clock(), schedule);
+        self
+    }
+
     #[must_use]
     pub const fn config(&self) -> &AnalysisConfig<C> {
         &self.config
@@ -463,10 +476,9 @@ impl<C: Clock> UpstreamClient<C> {
                     // arrived, that budget (not the per-request timeout)
                     // governs the surface: report the canonical wait timeout.
                     if let (Some(deadline), AnalysisError::TransportTimeout(_)) = (deadline, &error)
+                        && clock.now() >= deadline
                     {
-                        if clock.now() >= deadline {
-                            return Err(PollError::DeadlineExceeded);
-                        }
+                        return Err(PollError::DeadlineExceeded);
                     }
                     if !retryable || attempt >= policy.max_attempts {
                         return Err(PollError::Failed(Box::new(transport_poll_error(&error))));

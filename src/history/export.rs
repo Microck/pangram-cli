@@ -320,27 +320,22 @@ fn redact(value: &mut serde_json::Value) {
                 continue;
             };
             result.remove("dashboard_link");
-            if redact_segments {
-                if let Some(segments) = result
+            if redact_segments
+                && let Some(segments) = result
                     .get_mut("segments")
                     .and_then(serde_json::Value::as_array_mut)
-                {
-                    for segment in segments {
-                        if let Some(segment) = segment.as_object_mut() {
-                            segment.insert(
-                                "text".to_owned(),
-                                serde_json::Value::String(String::new()),
-                            );
-                        }
+            {
+                for segment in segments {
+                    if let Some(segment) = segment.as_object_mut() {
+                        segment.insert("text".to_owned(), serde_json::Value::String(String::new()));
                     }
                 }
-            } else if redact_matches {
-                if let Some(matches) = result
+            } else if redact_matches
+                && let Some(matches) = result
                     .get_mut("matches")
                     .and_then(serde_json::Value::as_array_mut)
-                {
-                    matches.retain_mut(redact_plagiarism_match);
-                }
+            {
+                matches.retain_mut(redact_plagiarism_match);
             }
         }
     }

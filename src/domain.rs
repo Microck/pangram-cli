@@ -25,9 +25,9 @@ pub use collection::*;
 pub use history::*;
 pub use model::*;
 
-const ANALYSIS_ID_PATTERN: &str =
+pub(crate) const ANALYSIS_ID_PATTERN: &str =
     r"^anl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
-const BULK_ID_PATTERN: &str =
+pub(crate) const BULK_ID_PATTERN: &str =
     r"^bulk_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 const SHA256_PATTERN: &str = r"^[0-9a-f]{64}$";
 

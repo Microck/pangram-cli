@@ -437,35 +437,42 @@ const AUTH_LOGOUT_ARGUMENTS: &[ArgumentSpec] = &[
 
 #[rustfmt::skip]
 const MCP_ARGUMENTS: &[ArgumentSpec] = &[
-    flag("--history", Phase::McpAndAgents),
-    flag("--allow-history-mutations", Phase::McpAndAgents).requiring(&["--history"]),
-    flag("--allow-config-mutations", Phase::McpAndAgents),
-    flag("--allow-public-links", Phase::McpAndAgents),
-    option("--allow-file-root", "PATH", &[], false, true, Phase::McpAndAgents),
+    flag("--history", Phase::McpAndAgents).available(),
+    flag("--allow-history-mutations", Phase::McpAndAgents).requiring(&["--history"]).available(),
+    flag("--allow-config-mutations", Phase::McpAndAgents).available(),
+    flag("--allow-public-links", Phase::McpAndAgents).available(),
+    option("--allow-file-root", "PATH", &[], false, true, Phase::McpAndAgents).available(),
 ];
+
+const MCP_TARGET_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
+    name: "target_selection",
+    required: true,
+    exclusive: true,
+    implicit_members: &[],
+}];
 
 #[rustfmt::skip]
 const MCP_MUTATION_ARGUMENTS: &[ArgumentSpec] = &[
-    option("--target", "CLIENT", MCP_CLIENTS, false, true, Phase::McpAndAgents),
-    flag("--all", Phase::McpAndAgents),
-    option("--server-name", "NAME", &[], false, false, Phase::McpAndAgents),
-    flag("--dry-run", Phase::McpAndAgents),
+    option("--target", "CLIENT", MCP_CLIENTS, false, true, Phase::McpAndAgents).in_group("target_selection").available(),
+    flag("--all", Phase::McpAndAgents).in_group("target_selection").available(),
+    option("--server-name", "NAME", &[], false, false, Phase::McpAndAgents).available(),
+    flag("--dry-run", Phase::McpAndAgents).available(),
 ];
 
 #[rustfmt::skip]
 const MCP_STATUS_ARGUMENTS: &[ArgumentSpec] = &[
-    option("--format", "FORMAT", &["json", "pretty"], false, false, Phase::McpAndAgents),
+    option("--format", "FORMAT", &["json", "pretty"], false, false, Phase::McpAndAgents).available(),
 ];
 
 #[rustfmt::skip]
 const SKILLS_GET_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("SKILL", &["pangram"], true, false, Phase::McpAndAgents),
-    flag("--full", Phase::McpAndAgents),
+    positional("SKILL", &["pangram"], true, false, Phase::McpAndAgents).available(),
+    flag("--full", Phase::McpAndAgents).available(),
 ];
 
 #[rustfmt::skip]
 const SKILLS_PATH_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("SKILL", &["pangram"], false, false, Phase::McpAndAgents),
+    positional("SKILL", &["pangram"], false, false, Phase::McpAndAgents).available(),
 ];
 
 #[rustfmt::skip]
@@ -537,15 +544,15 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         available_command(&["auth", "set"], CommandKind::Command, AUTH_SET_ARGUMENTS, API_KEY_GROUP, Phase::LocalSetup),
         available_command(&["auth", "status"], CommandKind::Command, &[], &[], Phase::LocalSetup),
         available_command(&["auth", "logout"], CommandKind::Command, AUTH_LOGOUT_ARGUMENTS, &[], Phase::LocalSetup),
-        planned_command(&["mcp"], CommandKind::Command, MCP_ARGUMENTS, &[], Phase::McpAndAgents),
-        planned_command(&["mcp", "install"], CommandKind::Command, MCP_MUTATION_ARGUMENTS, &[], Phase::McpAndAgents),
-        planned_command(&["mcp", "uninstall"], CommandKind::Command, MCP_MUTATION_ARGUMENTS, &[], Phase::McpAndAgents),
-        planned_command(&["mcp", "status"], CommandKind::Command, MCP_STATUS_ARGUMENTS, &[], Phase::McpAndAgents),
-        planned_command(&["agent"], CommandKind::Command, &[], &[], Phase::McpAndAgents),
-        planned_command(&["skills"], CommandKind::Namespace, &[], &[], Phase::McpAndAgents),
-        planned_command(&["skills", "list"], CommandKind::Command, &[], &[], Phase::McpAndAgents),
-        planned_command(&["skills", "get"], CommandKind::Command, SKILLS_GET_ARGUMENTS, &[], Phase::McpAndAgents),
-        planned_command(&["skills", "path"], CommandKind::Command, SKILLS_PATH_ARGUMENTS, &[], Phase::McpAndAgents),
+        available_command(&["mcp"], CommandKind::Command, MCP_ARGUMENTS, &[], Phase::McpAndAgents),
+        available_command(&["mcp", "install"], CommandKind::Command, MCP_MUTATION_ARGUMENTS, MCP_TARGET_GROUP, Phase::McpAndAgents),
+        available_command(&["mcp", "uninstall"], CommandKind::Command, MCP_MUTATION_ARGUMENTS, MCP_TARGET_GROUP, Phase::McpAndAgents),
+        available_command(&["mcp", "status"], CommandKind::Command, MCP_STATUS_ARGUMENTS, &[], Phase::McpAndAgents),
+        available_command(&["agent"], CommandKind::Command, &[], &[], Phase::McpAndAgents),
+        available_command(&["skills"], CommandKind::Namespace, &[], &[], Phase::McpAndAgents),
+        available_command(&["skills", "list"], CommandKind::Command, &[], &[], Phase::McpAndAgents),
+        available_command(&["skills", "get"], CommandKind::Command, SKILLS_GET_ARGUMENTS, &[], Phase::McpAndAgents),
+        available_command(&["skills", "path"], CommandKind::Command, SKILLS_PATH_ARGUMENTS, &[], Phase::McpAndAgents),
         available_command(&["config"], CommandKind::Namespace, &[], &[], Phase::LocalSetup),
         available_command(&["config", "list"], CommandKind::Command, &[], &[], Phase::LocalSetup),
         available_command(&["config", "get"], CommandKind::Command, CONFIG_GET_ARGUMENTS, &[], Phase::LocalSetup),

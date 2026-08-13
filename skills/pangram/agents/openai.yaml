@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pangram"
+  short_description: "Use Pangram analysis tools safely"
+  default_prompt: "Use $pangram to analyze text with an explicit billing ceiling and privacy-safe defaults."

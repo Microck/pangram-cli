@@ -261,13 +261,13 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
                     identity: self.identity(),
                 });
             }
-            if let Some(deadline) = deadline {
-                if clock.now() >= deadline {
-                    return Ok(Err(TaskError::new(
-                        self.request.id(),
-                        wait_timeout_error(&self.identity()),
-                    )));
-                }
+            if let Some(deadline) = deadline
+                && clock.now() >= deadline
+            {
+                return Ok(Err(TaskError::new(
+                    self.request.id(),
+                    wait_timeout_error(&self.identity()),
+                )));
             }
 
             match self
@@ -384,6 +384,18 @@ impl<C: super::config::Clock> Analyzer<C> {
     #[must_use]
     pub fn from_client(client: UpstreamClient<C>) -> Self {
         Self { client }
+    }
+
+    pub(crate) fn with_pacing_schedule(
+        self,
+        max_requests_per_second: f64,
+        schedule: super::pacemaker::PacingSchedule,
+    ) -> Self {
+        Self {
+            client: self
+                .client
+                .with_pacing_schedule(max_requests_per_second, schedule),
+        }
     }
 
     /// The internal bulk owner sharing this analyzer's client. `pub(crate)`
@@ -536,6 +548,19 @@ impl<C: super::config::Clock> Analyzer<C> {
         self.bulk().resume_observed(upstream_bulk_id)
     }
 
+    /// Resumes a remotely authored bulk job after local history resolved its
+    /// stored upstream identity. The requested local ID remains the
+    /// collection identity while the handle stays planless and derives no
+    /// hidden authorship facts.
+    #[must_use]
+    pub fn observe_bulk_as(
+        &self,
+        bulk_id: BulkId,
+        upstream_bulk_id: UpstreamBulkId,
+    ) -> RunningBulk<C> {
+        self.bulk().resume_observed_as(bulk_id, upstream_bulk_id)
+    }
+
     /// Fetches the documented results window for the whole job and projects
     /// the observed children for the history save seam (contracts.md 14.2).
     /// Safe-GET paging, retry, pacing, and the exact-coverage drift guards
@@ -649,17 +674,17 @@ impl<C: super::config::Clock> Analyzer<C> {
             if cancel.is_cancelled() || stop.token().is_cancelled() {
                 return Err(TaskError::new(local_id, cancelled_error()));
             }
-            if let Some(deadline) = deadline {
-                if clock.now() >= deadline {
-                    return Err(TaskError::new(
-                        local_id,
-                        wait_timeout_error(&OperationIdentity {
-                            analysis_id: local_id,
-                            task_id: Some(task_id.clone()),
-                            last_stage: observed_stage.clone(),
-                        }),
-                    ));
-                }
+            if let Some(deadline) = deadline
+                && clock.now() >= deadline
+            {
+                return Err(TaskError::new(
+                    local_id,
+                    wait_timeout_error(&OperationIdentity {
+                        analysis_id: local_id,
+                        task_id: Some(task_id.clone()),
+                        last_stage: observed_stage.clone(),
+                    }),
+                ));
             }
 
             match self.client.poll_task(task_id, cancel, deadline).await {
