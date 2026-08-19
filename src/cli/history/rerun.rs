@@ -108,11 +108,15 @@ pub(super) fn execute(
                             emit_progress(progress, event);
                         }
                     },
-                    stop,
+                    stop.clone(),
                 )
                 .await
             {
                 Ok(Ok(analysis)) => RerunFlow::Completed(analysis),
+                Ok(Err(error)) if stop.token().is_cancelled() => RerunFlow::Interrupted(
+                    error.into_error(),
+                    "interrupted; reconcile using the canonical error identity".to_owned(),
+                ),
                 Ok(Err(error)) => RerunFlow::Failed(error.into_error()),
                 Err(interrupted) => RerunFlow::Interrupted(
                     stopped_observation_error(),

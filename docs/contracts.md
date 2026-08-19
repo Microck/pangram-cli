@@ -1398,6 +1398,10 @@ plagiarism-only, or combined text record can be rerun; any other check shape or
 input remains unresolvable. A rerun never implies manual save. The current
 automatic-history setting still determines whether a successful rerun is saved
 automatically.
+Local cancellation of a rerun exits 130. If cancelling a combined rerun makes
+an issued billable request ambiguous, the response keeps the canonical
+`submission_outcome_unknown` reconciliation error instead of replacing it
+with a generic interruption error.
 
 Delete exists only in the selected record's contextual action menu. Enter on
 Delete opens a confirmation whose default is Cancel, a second Enter therefore

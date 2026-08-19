@@ -16,6 +16,18 @@ use fixture::{
     plagiarism_success,
 };
 
+#[cfg(unix)]
+fn interrupt(child: &mut std::process::Child) {
+    let pid = i32::try_from(child.id()).expect("child PID fits i32");
+    // SAFETY: `pid` is a live child process and SIGINT is a valid signal.
+    assert_eq!(unsafe { kill(pid, 2) }, 0);
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
 struct Isolated {
     _root: TempDir,
     env: Vec<(String, String)>,
@@ -107,6 +119,54 @@ async fn combined_analysis_keeps_ai_success_and_exits_partial_on_plagiarism_fail
         value["data"]["checks"][1]["error"]["code"],
         "payment_required"
     );
+    fixture.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn combined_history_rerun_interruption_keeps_ambiguity_and_exits_130() {
+    use std::process::Stdio;
+
+    let fixture = ProtocolFixture::start().await;
+    let text = "Synthetic retained combined input for an interrupted rerun";
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(pangram4_success(text)));
+    fixture.on_plagiarism(Step::Json(plagiarism_success()));
+    fixture.on_submit(Step::Hang);
+    fixture.on_plagiarism(Step::Hang);
+    let isolated = Isolated::new();
+
+    let saved = isolated
+        .command(fixture.base_url())
+        .args(["analyze", "--save", text, "--max-billable-units", "6"])
+        .output()
+        .expect("save original combined analysis");
+    assert_eq!(saved.status.code(), Some(0));
+    let original = envelope(&saved)["data"]["id"]
+        .as_str()
+        .expect("saved analysis ID")
+        .to_owned();
+
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args(["history", "rerun", &original, "--progress", "never"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn combined history rerun");
+    fixture.wait_for_posts(4).await;
+    interrupt(&mut child);
+    let output = child
+        .wait_with_output()
+        .expect("wait for interrupted rerun");
+
+    assert_eq!(output.status.code(), Some(130));
+    let value = envelope(&output);
+    assert_eq!(value["command"], "history_rerun");
+    assert_eq!(value["error"]["code"], "submission_outcome_unknown");
+    assert!(value["error"]["details"]["request_sha256"].is_string());
+    assert_eq!(fixture.post_count(), 4, "neither billable POST is replayed");
     fixture.shutdown().await;
 }
 
