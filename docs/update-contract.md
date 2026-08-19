@@ -173,6 +173,11 @@ candidate mode accepts local manifest, signature, archive, and destination
 paths; it is not part of the public Clap grammar and never accepts an alternate
 key or network endpoint.
 
+The installer fetches the manifest, detached signature, and archive from the
+same immutable `releases/download/vVERSION` location. The mutable `latest`
+locations above belong only to an installed updater checking for a newer
+release. A versioned installer never combines them with its pinned candidate.
+
 The release workflow renders installers only after signing the manifest. It
 runs each native candidate against those exact signed files before any release
 or registry publication. Installer templates and rendered scripts contain no

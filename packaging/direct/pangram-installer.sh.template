@@ -43,9 +43,10 @@ trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 manifest="$temporary/pangram-update-manifest.json"
 signature="$temporary/pangram-update-manifest.json.sig"
 archive="$temporary/$archive_name"
-manifest_url=https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json
-signature_url=https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json.sig
-archive_url="https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/$archive_name"
+release_url=https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}
+manifest_url="$release_url/pangram-update-manifest.json"
+signature_url="$release_url/pangram-update-manifest.json.sig"
+archive_url="$release_url/$archive_name"
 
 curl --fail --location --silent --show-error "$manifest_url" --output "$manifest"
 curl --fail --location --silent --show-error "$signature_url" --output "$signature"

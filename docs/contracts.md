@@ -2135,6 +2135,13 @@ decline or interruption performs no mutation and exits 130, CI or any
 redirected stream fails with `input_required` and exit 2, and `pangram update
 --yes` is the sole noninteractive install form.
 
+Every versioned direct installer fetches its manifest, detached signature, and
+native archive from the same immutable `vVERSION` GitHub Release. It never
+mixes `latest` metadata with a version-pinned candidate. The npm Linux platform
+packages declare `glibc` as their required libc because both Linux release
+targets are GNU builds; npm must skip them on musl hosts rather than install an
+incompatible executable.
+
 ## 15. Local setup contract
 
 The configuration, credential, and diagnostics contract is normative in

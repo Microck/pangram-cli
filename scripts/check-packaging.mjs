@@ -5,7 +5,7 @@ const main = JSON.parse(await readFile("npm/pangram-cli/package.json", "utf8"));
 const wrapper = await readFile("npm/pangram-cli/bin/pangram.js", "utf8");
 const expectedDependencies = {};
 
-for (const { directory, os, cpu } of releasePlatforms) {
+for (const { directory, os, cpu, libc } of releasePlatforms) {
   const manifest = JSON.parse(await readFile(`npm/${directory}/package.json`, "utf8"));
   if (manifest.version !== main.version) {
     throw new Error(`${manifest.name} version does not match the main package`);
@@ -15,6 +15,9 @@ for (const { directory, os, cpu } of releasePlatforms) {
   }
   if (JSON.stringify(manifest.cpu) !== JSON.stringify([cpu])) {
     throw new Error(`${manifest.name} has the wrong CPU selector`);
+  }
+  if (manifest.libc !== libc) {
+    throw new Error(`${manifest.name} has the wrong libc selector`);
   }
   expectedDependencies[manifest.name] = main.version;
 }
@@ -51,7 +54,9 @@ for (const template of [
     !contents.includes("{{VERSION}}") ||
     !contents.includes("__pangram-direct-install") ||
     !contents.includes("pangram-update-manifest.json.sig") ||
-    !contents.includes("Unofficial Pangram")
+    !contents.includes("Unofficial Pangram") ||
+    !contents.includes("releases/download/v") ||
+    contents.includes("releases/latest/download")
   ) {
     throw new Error(`${template} is missing its release identity or verification handoff`);
   }

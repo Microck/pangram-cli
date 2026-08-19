@@ -6,6 +6,7 @@
   "repository": "https://github.com/Microck/pangram-cli",
   "os": ["linux"],
   "cpu": ["x64"],
+  "libc": "glibc",
   "files": ["bin", "NOTICE.md"],
   "publishConfig": { "access": "public" }
 }

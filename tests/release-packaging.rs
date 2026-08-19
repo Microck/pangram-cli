@@ -177,6 +177,15 @@ fn manifest_builder_signs_a_stable_zero_major_five_target_set() {
     }
     assert!(posix_installer.contains("releases/download/v0.1.0"));
     assert!(powershell_installer.contains("releases/download/v$version"));
+    assert!(!posix_installer.contains("releases/latest/download"));
+    assert!(!powershell_installer.contains("releases/latest/download"));
+    for asset in [
+        "pangram-update-manifest.json",
+        "pangram-update-manifest.json.sig",
+    ] {
+        assert!(posix_installer.contains(&format!("$release_url/{asset}")));
+        assert!(powershell_installer.contains(&format!("$releaseUrl/{asset}")));
+    }
     assert!(posix_installer.contains("x86_64-unknown-linux-gnu"));
     assert!(powershell_installer.contains("x86_64-pc-windows-msvc"));
     assert_eq!(

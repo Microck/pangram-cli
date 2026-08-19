@@ -20,9 +20,10 @@ try {
   $manifest = Join-Path $temporary "pangram-update-manifest.json"
   $signature = Join-Path $temporary "pangram-update-manifest.json.sig"
   $archive = Join-Path $temporary $archiveName
-  $manifestUrl = "https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json"
-  $signatureUrl = "https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json.sig"
-  $archiveUrl = "https://github.com/Microck/pangram-cli/releases/download/v$version/$archiveName"
+  $releaseUrl = "https://github.com/Microck/pangram-cli/releases/download/v$version"
+  $manifestUrl = "$releaseUrl/pangram-update-manifest.json"
+  $signatureUrl = "$releaseUrl/pangram-update-manifest.json.sig"
+  $archiveUrl = "$releaseUrl/$archiveName"
 
   Invoke-WebRequest -UseBasicParsing -Uri $manifestUrl -OutFile $manifest
   Invoke-WebRequest -UseBasicParsing -Uri $signatureUrl -OutFile $signature
