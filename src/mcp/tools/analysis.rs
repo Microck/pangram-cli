@@ -239,7 +239,7 @@ pub(super) async fn phase7_text(
     let result = match operation {
         TextAnalysisMode::Detection => unreachable!("detect_text owns AI-only MCP analysis"),
         TextAnalysisMode::Plagiarism => analyzer
-            .plagiarism(request, context.cancellation())
+            .plagiarism(request, WaitOptions::UNBOUNDED, context.cancellation())
             .await
             .map_err(|error| error.into_error()),
         TextAnalysisMode::Combined => {

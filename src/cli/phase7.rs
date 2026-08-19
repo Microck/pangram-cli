@@ -309,7 +309,14 @@ async fn execute_one(
                 .map(|analysis| (analysis, retained)),
                 TextAnalysisMode::Plagiarism => {
                     let request = text_request(plan, input, false);
-                    match analyzer.plagiarism(request.clone(), stop.token()).await {
+                    let wait = plan
+                        .arguments
+                        .timeout
+                        .map_or(WaitOptions::UNBOUNDED, WaitOptions::with_timeout);
+                    match analyzer
+                        .plagiarism(request.clone(), wait, stop.token())
+                        .await
+                    {
                         Ok(analysis) => Ok((analysis, retained)),
                         Err(error) if stop.token().is_cancelled() => Err(Flow::Interrupted(
                             error.into_error(),

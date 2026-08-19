@@ -157,7 +157,11 @@ async fn analyzer_projects_a_terminal_plagiarism_analysis() {
     fixture.on_plagiarism(Step::Json(plagiarism_success()));
 
     let analysis = Analyzer::from_client(fixture.client())
-        .plagiarism(request(SYNTHETIC_TEXT), &CancellationToken::new())
+        .plagiarism(
+            request(SYNTHETIC_TEXT),
+            WaitOptions::UNBOUNDED,
+            &CancellationToken::new(),
+        )
         .await
         .expect("plagiarism analysis succeeds");
 
@@ -168,6 +172,103 @@ async fn analyzer_projects_a_terminal_plagiarism_analysis() {
         Check::Plagiarism(CheckState::Succeeded { .. })
     ));
     assert_eq!(fixture.post_count(), 1);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn plagiarism_timeout_bounds_a_post_issue_synchronous_wait() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_plagiarism(Step::Hang);
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
+        RetryPolicy::OFF,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_secs(10),
+    ));
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        analyzer.plagiarism(
+            request(SYNTHETIC_TEXT),
+            WaitOptions::with_timeout(Duration::from_millis(500)),
+            &CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("the local deadline must win over the transport timeout")
+    .expect_err("the local deadline stops the stalled response wait");
+
+    assert_eq!(error.error().code(), ErrorCode::SubmissionOutcomeUnknown);
+    assert_eq!(fixture.post_count(), 1);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn plagiarism_timeout_before_issue_sends_no_second_request() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_plagiarism(Step::Json(plagiarism_success()));
+    let client = fixture.client_with_policy(
+        RetryPolicy::OFF,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_secs(2),
+    );
+    client
+        .submit_plagiarism(SYNTHETIC_TEXT, &CancellationToken::new())
+        .await
+        .expect("the first request reserves the immediate pacing slot");
+    let analyzer = Analyzer::from_client(client);
+
+    let error = analyzer
+        .plagiarism(
+            request(SYNTHETIC_TEXT),
+            WaitOptions::with_timeout(Duration::from_millis(50)),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("the deadline passes before the next pacing slot opens");
+
+    assert_eq!(error.error().code(), ErrorCode::WaitTimeout);
+    assert_eq!(
+        fixture.post_count(),
+        1,
+        "a pre-issue timeout must not send another billable request"
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn combined_analysis_shares_one_deadline_with_stalled_plagiarism() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({ "task_id": TASK_ID })));
+    fixture.on_poll(Step::Json(pangram4_success(SYNTHETIC_TEXT)));
+    fixture.on_plagiarism(Step::Hang);
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
+        RetryPolicy::OFF,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_secs(10),
+    ));
+
+    let analysis = tokio::time::timeout(
+        Duration::from_secs(5),
+        analyzer.analyze_combined(
+            request(SYNTHETIC_TEXT),
+            WaitOptions::with_timeout(Duration::from_millis(500)),
+            |_| {},
+            StopObserving::new(),
+        ),
+    )
+    .await
+    .expect("the shared local deadline must win over the transport timeout")
+    .expect("a deadline is not a user interruption")
+    .expect("combined deadline failures remain canonical checks");
+
+    assert!(
+        analysis.checks().iter().any(|check| matches!(
+            check,
+            Check::Plagiarism(CheckState::Failed { error, .. })
+                if error.code() == ErrorCode::SubmissionOutcomeUnknown
+        )),
+        "the issued stalled plagiarism request remains ambiguous"
+    );
     fixture.shutdown().await;
 }
 

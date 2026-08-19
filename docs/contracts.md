@@ -1766,7 +1766,14 @@ Rules:
   an error, the parent analysis is `partial` and retains both the successful
   result and the failed check. Only local cancellation interrupts the combined
   result instead of assembling it.
-- timeout stops waiting, not upstream work
+- timeout stops waiting, not upstream work. One supplied deadline starts when
+  the analysis operation begins and bounds the complete local wait, including
+  a synchronous plagiarism response and both concurrent members of combined
+  analysis. Combined members share that one deadline; neither member resets
+  the budget. If the deadline passes before a billable request is issued, the
+  operation reports `wait_timeout`. If it passes after issue without a
+  response, the outcome is ambiguous and reports
+  `submission_outcome_unknown` under section 12.1.
 - `--max-billable-units` rejects a locally estimated text request above the
   ceiling before submission; MCP billable tools require the same field. Each
   AI-detected text contributes its own started-100-word estimate. A
@@ -1792,9 +1799,10 @@ Wait and completion:
   must not be negative, and a count of `0` (or any value that truncates to
   zero) is rejected as a usage error because it would not bound any wait. The
   scaled value must fit the supported duration range.
-- when `--timeout` is not supplied, `detect` waits for the analysis to reach a
-  terminal state without a local wait deadline; there is no hidden wait
-  ceiling. A caller bounds an observation only by passing `--timeout`.
+- when `--timeout` is not supplied, an analysis command waits for every
+  selected check to reach a terminal state without a local wait deadline;
+  there is no hidden wait ceiling. A caller bounds the complete local wait
+  only by passing `--timeout`.
 
 Pangram 4 is the only production text model. The CLI has no model-selection
 flag. The analysis module MUST send Pangram's documented Pangram 4 selector,

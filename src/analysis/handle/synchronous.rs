@@ -102,16 +102,50 @@ impl<C: super::super::config::Clock> Analyzer<C> {
     pub async fn plagiarism(
         &self,
         request: AnalysisRequest,
+        options: WaitOptions,
+        cancel: &CancellationToken,
+    ) -> Result<Analysis<CanonicalError>, TaskError> {
+        let clock = self.client.config().clock();
+        let deadline = options.timeout.map(|timeout| clock.now() + timeout);
+        self.plagiarism_until(request, deadline, cancel).await
+    }
+
+    /// Runs plagiarism against the absolute deadline owned by the complete
+    /// analysis operation. Cancelling after issue preserves the ambiguous
+    /// billable outcome instead of misreporting a harmless local timeout.
+    async fn plagiarism_until(
+        &self,
+        request: AnalysisRequest,
+        deadline: Option<super::super::config::Instant>,
         cancel: &CancellationToken,
     ) -> Result<Analysis<CanonicalError>, TaskError> {
         let submitted_at = UtcTimestamp::now();
-        let result = match self.client.submit_plagiarism(request.text(), cancel).await {
+        let operation_cancel = cancel.child_token();
+        let (outcome, deadline_passed) = super::await_submission(
+            self.client.config().clock(),
+            deadline,
+            cancel,
+            &operation_cancel,
+            self.client
+                .submit_plagiarism(request.text(), &operation_cancel),
+        )
+        .await;
+        let result = match outcome {
             Ok(result) => result,
             Err(SubmitOutcome::Failed(error)) => {
                 return Err(TaskError::new(request.id(), *error));
             }
             Err(SubmitOutcome::Cancelled) => {
-                return Err(TaskError::new(request.id(), cancelled_error()));
+                let error = if deadline_passed {
+                    super::wait_timeout_error(&OperationIdentity {
+                        analysis_id: request.id(),
+                        task_id: None,
+                        last_stage: None,
+                    })
+                } else {
+                    cancelled_error()
+                };
+                return Err(TaskError::new(request.id(), error));
             }
             Err(SubmitOutcome::Ambiguous(_)) => {
                 return Err(TaskError::new(
@@ -166,15 +200,20 @@ impl<C: super::super::config::Clock> Analyzer<C> {
         stop: StopObserving,
     ) -> Result<Result<Analysis<CanonicalError>, TaskError>, InterruptedAnalysis> {
         let started_at = UtcTimestamp::now();
+        let clock = self.client.config().clock();
+        let deadline = options.timeout.map(|timeout| clock.now() + timeout);
         let detection = async {
-            match self.start_full(request.clone(), stop.token()).await {
+            match self
+                .start_full_until(request.clone(), stop.token(), deadline)
+                .await
+            {
                 Ok(Accepted::Terminal(analysis)) => Ok(Ok(*analysis)),
                 Ok(Accepted::Task(accepted)) => {
                     let running = self.running(accepted);
                     on_observation(CombinedAnalysisObservation::Accepted(&running));
                     running
-                        .observe(
-                            options,
+                        .observe_until(
+                            deadline,
                             |progress| {
                                 on_observation(CombinedAnalysisObservation::Progress(progress));
                             },
@@ -185,7 +224,7 @@ impl<C: super::super::config::Clock> Analyzer<C> {
                 Err(failure) => Ok(Err(failure.task_error)),
             }
         };
-        let plagiarism = self.plagiarism(request.clone(), stop.token());
+        let plagiarism = self.plagiarism_until(request.clone(), deadline, stop.token());
         let (detection, plagiarism) = tokio::join!(detection, plagiarism);
         let detection = match detection {
             Ok(result) => result,

@@ -73,7 +73,14 @@ pub(super) fn execute(
             }
             crate::analysis::TextAnalysisMode::Plagiarism => {
                 let retained = analysis_request.clone();
-                match analyzer.plagiarism(analysis_request, stop.token()).await {
+                match analyzer
+                    .plagiarism(
+                        analysis_request,
+                        crate::analysis::WaitOptions::UNBOUNDED,
+                        stop.token(),
+                    )
+                    .await
+                {
                     Ok(analysis) => RerunFlow::Completed(analysis),
                     Err(error) if stop.token().is_cancelled() => RerunFlow::Interrupted(
                         error.into_error(),

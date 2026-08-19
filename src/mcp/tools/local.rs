@@ -362,7 +362,11 @@ async fn run_rerun_analysis(
             }
         }
         crate::analysis::TextAnalysisMode::Plagiarism => tokio::select! {
-            result = analyzer.plagiarism(request, context.cancellation()) => {
+            result = analyzer.plagiarism(
+                request,
+                WaitOptions::UNBOUNDED,
+                context.cancellation(),
+            ) => {
                 result.map(Some).map_err(crate::analysis::TaskError::into_error)
             }
             () = context.cancellation().cancelled() => Ok(None),

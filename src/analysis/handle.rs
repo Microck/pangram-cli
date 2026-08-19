@@ -256,14 +256,27 @@ impl<C: super::config::Clock> RunningAnalysis<C> {
     /// Progress is reported through `on_progress` after each non-terminal
     /// observation. Cancel-safe: dropping the future leaves no orphans.
     pub async fn observe(
-        mut self,
+        self,
         options: WaitOptions,
+        on_progress: impl FnMut(&AnalysisProgress),
+        stop: StopObserving,
+    ) -> Result<Result<Analysis<CanonicalError>, TaskError>, InterruptedAnalysis> {
+        let clock = self.client.config().clock();
+        let deadline = options.timeout.map(|timeout| clock.now() + timeout);
+        self.observe_until(deadline, on_progress, stop).await
+    }
+
+    /// Observes against one operation-wide absolute deadline. Combined
+    /// analysis uses this so its concurrent members cannot each restart the
+    /// caller's timeout after their individual submissions finish.
+    pub(crate) async fn observe_until(
+        mut self,
+        deadline: Option<super::config::Instant>,
         mut on_progress: impl FnMut(&AnalysisProgress),
         stop: StopObserving,
     ) -> Result<Result<Analysis<CanonicalError>, TaskError>, InterruptedAnalysis> {
         let cancel = stop.token().child_token();
         let clock = self.client.config().clock();
-        let deadline = options.timeout.map(|timeout| clock.now() + timeout);
 
         loop {
             if cancel.is_cancelled() {
@@ -510,8 +523,29 @@ impl<C: super::config::Clock> Analyzer<C> {
         request: AnalysisRequest,
         cancel: &CancellationToken,
     ) -> Result<Accepted, super::upstream::SubmissionFailure> {
+        self.start_full_until(request, cancel, None).await
+    }
+
+    /// Submits against an optional operation-wide deadline. A deadline that
+    /// fires before issue is a wait timeout; after issue the existing
+    /// submission-ambiguity contract remains authoritative.
+    pub(crate) async fn start_full_until(
+        &self,
+        request: AnalysisRequest,
+        cancel: &CancellationToken,
+        deadline: Option<super::config::Instant>,
+    ) -> Result<Accepted, super::upstream::SubmissionFailure> {
         let body = request.submit_body();
-        match self.client.submit_text(&body, cancel).await {
+        let operation_cancel = cancel.child_token();
+        let (outcome, deadline_passed) = await_submission(
+            self.client.config().clock(),
+            deadline,
+            cancel,
+            &operation_cancel,
+            self.client.submit_text(&body, &operation_cancel),
+        )
+        .await;
+        match outcome {
             Ok(accepted) => Ok(Accepted::Task(AcceptedInput {
                 task_id: accepted.task_id,
                 request,
@@ -521,7 +555,18 @@ impl<C: super::config::Clock> Analyzer<C> {
                 request: Some(request),
             }),
             Err(SubmitOutcome::Cancelled) => Err(super::upstream::SubmissionFailure {
-                task_error: TaskError::new(request.id(), cancelled_error()),
+                task_error: TaskError::new(
+                    request.id(),
+                    if deadline_passed {
+                        wait_timeout_error(&OperationIdentity {
+                            analysis_id: request.id(),
+                            task_id: None,
+                            last_stage: None,
+                        })
+                    } else {
+                        cancelled_error()
+                    },
+                ),
                 request: Some(request),
             }),
             Err(SubmitOutcome::Ambiguous(error)) => Err(super::upstream::SubmissionFailure {
@@ -663,6 +708,34 @@ fn wait_timeout_error(identity: &OperationIdentity) -> CanonicalError {
     )
     .and_then(|error| error.with_details(details))
     .expect("static template")
+}
+
+/// Waits for one billable submission while retaining the transport's issued
+/// state when a caller deadline or cancellation fires. The submission future
+/// must observe `operation_cancel` and return its classified outcome before
+/// this helper returns, so callers never lose post-issue ambiguity by merely
+/// dropping an in-flight future.
+async fn await_submission<C: super::config::Clock, T>(
+    clock: C,
+    deadline: Option<super::config::Instant>,
+    cancel: &CancellationToken,
+    operation_cancel: &CancellationToken,
+    submission: impl Future<Output = T>,
+) -> (T, bool) {
+    tokio::pin!(submission);
+    let Some(deadline) = deadline else {
+        return (submission.await, false);
+    };
+    let wait = clock.sleep_until(deadline, cancel);
+    tokio::pin!(wait);
+    tokio::select! {
+        biased;
+        elapsed = &mut wait => {
+            operation_cancel.cancel();
+            (submission.await, elapsed)
+        }
+        outcome = &mut submission => (outcome, false),
+    }
 }
 
 fn submission_unknown_error(

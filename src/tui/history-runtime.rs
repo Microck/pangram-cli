@@ -370,7 +370,10 @@ async fn run_phase_seven_text_analysis(
     let event_stop = stop.clone();
     let completed = match mode {
         TextAnalysisMode::Detection => unreachable!("detection uses the task observation path"),
-        TextAnalysisMode::Plagiarism => match analyzer.plagiarism(request, stop.token()).await {
+        TextAnalysisMode::Plagiarism => match analyzer
+            .plagiarism(request, WaitOptions::UNBOUNDED, stop.token())
+            .await
+        {
             Ok(analysis) => analysis,
             Err(error) => {
                 send_failure(&events, analysis_id, error.into_error());
