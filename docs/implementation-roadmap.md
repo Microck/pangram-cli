@@ -290,7 +290,7 @@ shared modules.
 - `contracts/tui-state.schema.json`
 - `tools/generate-intro-frames.rs`
 - `tools/tui-acceptance/`
-- generated full and compact intro frame tables
+- generated 72x16 intro frame table and playback sequence
 
 ### Work
 
@@ -303,9 +303,9 @@ shared modules.
 5. Surface progress, partial results, public-link consent, and save state.
 6. Implement `once`, `always`, and `off` intro frequency with a separate,
    atomic one-time state marker.
-7. After `intro-art-contract.md` has a verified source hash and rights
-   reference, generate the locked 56-frame, 20 fps full and compact fox
-   sequences from approved vector geometry.
+7. Verify the approved GIF against `intro-art-contract.md`, then generate the
+   locked 14-frame 72x16 cycle, eight dissolve frames, and 56-entry 20 fps
+   playback sequence.
 8. Implement monotonic frame selection, color and ASCII fallbacks, skip-key
    consumption, and full, reduced, and off motion behavior.
 9. Add the pinned Terminal Control Vitest harness and drive the compiled binary
@@ -324,8 +324,8 @@ shared modules.
 - PTY startup, resize, interruption, panic restoration, and intro skipping
 - Terminal Control settled-screen, keyboard, resize, and failure-artifact
   acceptance on GNU/Linux and macOS
-- deterministic phase-boundary and fallback frame fixtures
-- one-time state completion, skip, reduced, suppression, and failed-write cases
+- deterministic cycle, dissolve, and fallback frame fixtures
+- one-time state completion, skip, suppression, and failed-write cases
 - full, reduced, and off motion
 - narrow-terminal fallback
 
@@ -335,11 +335,12 @@ shared modules.
 - printable keys edit fields under both keymaps
 - the accepted intro runs once by default on a 2.8-second nominal timeline
 - delayed rendering skips stale frames and adds no missed-frame delay
-- the accepted intro has no loop
+- the accepted intro stops after four source-cycle repetitions
 - reduced and off motion paths are first-class
 - the agent-owned baseline and autonomous TUI acceptance matrix pass before the
   final product quality review
-- no public artifact contains unapproved Pangram or Droid material
+- public artifacts carry the separate approved-artwork notice and no
+  unapproved third-party material
 - the source hash, rights reference, generator hash, and objective acceptance
   record are complete
 

@@ -9,6 +9,7 @@ mod bulk_analysis;
 mod bulk_analysis_matrix;
 mod bulk_protocol;
 mod contract_matrix;
+mod file_and_plagiarism;
 mod observation;
 mod submission;
 
@@ -18,15 +19,16 @@ mod fixture;
 mod support {
     pub(crate) use super::fixture::{
         BulkProbeClient, BulkProbeOutcome, BulkRequestView, ProtocolFixture, SYNTHETIC_KEY,
-        SYNTHETIC_TEXT, Step, TASK_ID, pangram4_failure, pangram4_success,
+        SYNTHETIC_TEXT, Step, TASK_ID, file_success, pangram4_failure, pangram4_success,
+        plagiarism_success,
     };
     pub(crate) use microck_pangram_cli::analysis::{
-        AnalysisRequest, Analyzer, BulkAnalysisRequest, Duration, PollPolicy, RetryPolicy,
-        StopObserving, WaitOptions,
+        AnalysisRequest, Analyzer, BulkAnalysisRequest, Duration, FileAnalysisRequest, FileFormat,
+        FileUpload, PollPolicy, RetryPolicy, StopObserving, WaitOptions,
     };
     pub(crate) use microck_pangram_cli::domain::{
-        AnalysisStatus, BulkSubmissionItem, BulkSubmissionPlan, NonEmptyString, TextOrigin,
-        UpstreamTaskId,
+        AnalysisInput, AnalysisStatus, BulkSubmissionItem, BulkSubmissionPlan, Check, CheckState,
+        NonEmptyString, TextOrigin, UpstreamTaskId,
     };
     pub(crate) use microck_pangram_cli::output::ErrorCode;
 

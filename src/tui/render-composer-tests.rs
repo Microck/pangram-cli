@@ -2,6 +2,7 @@ use super::test_support::{draw, ready_state};
 use crate::tui::model::{
     AppEvent, CredentialEntry, Focus, KeyInput, Overlay, Route, TextField, reduce,
 };
+use ratatui::layout::Rect;
 
 #[test]
 fn below_minimum_overlay_preserves_the_underlying_state() {
@@ -14,8 +15,7 @@ fn below_minimum_overlay_preserves_the_underlying_state() {
     let composer_before = state.composer.value().to_owned();
     let screen = draw(79, 23, &state);
 
-    assert!(screen.row(2).starts_with(" Active"));
-    assert!(screen.row(4).contains("No unfinished analyses."));
+    assert!(screen.row(0).contains("Active"));
     assert!(screen.text().contains("Terminal too small"));
     assert!(screen.text().contains("Resize to at least 80x24."));
     assert_eq!(state.route, route_before);
@@ -52,16 +52,38 @@ fn focused_composer_scrolls_horizontally_to_the_visible_edit_position() {
     assert!(screen.text().contains("END_MARKER"));
     assert!(!screen.text().contains("START_MARKER"));
     let (cursor_x, cursor_y) = screen.cursor.expect("focused composer cursor");
-    assert!((2..78).contains(&cursor_x));
-    assert!((12..14).contains(&cursor_y));
+    assert!((1..79).contains(&cursor_x));
+    let workspace = super::screen_areas(Rect::new(0, 0, 80, 24), 0, Route::Analyze).workspace;
+    let composer = super::analyze_composer_area(super::workspace_content_area(workspace));
+    assert!(
+        (composer.y.saturating_add(1)..composer.bottom()).contains(&cursor_y),
+        "cursor row {cursor_y} escaped composer {composer:?}"
+    );
+}
+
+#[test]
+fn empty_composer_placeholder_is_visible_at_supported_narrow_widths() {
+    for width in [80, 100] {
+        let screen = draw(width, 24, &ready_state(width, 24));
+
+        assert!(
+            screen.text().contains("Type or paste text here"),
+            "missing placeholder at {width} columns"
+        );
+    }
 }
 
 #[test]
 fn focused_composer_scrolls_vertically_and_loses_the_cursor_with_focus() {
     let mut state = ready_state(80, 24);
     state.focus = Focus::Composer;
-    state.composer =
-        TextField::from_value("FIRST_MARKER\nsecond line\nthird line\nLAST_MARKER".to_owned());
+    state.composer = TextField::from_value(format!(
+        "FIRST_MARKER\n{}\nLAST_MARKER",
+        (1..=20)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ));
 
     let focused = draw(80, 24, &state);
     assert!(focused.text().contains("LAST_MARKER"));

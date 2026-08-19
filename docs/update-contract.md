@@ -15,6 +15,14 @@ https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-m
 
 Alternate locations exist only in test constructors.
 
+`0.x` binaries expose the three `pangram update` forms so scripts can depend on
+the final command grammar, but they perform no release network request, prompt,
+state read, or mutation. This remains true for an authorized public `0.x`
+release. `pangram update --check`,
+bare `pangram update`, and `pangram update --yes` all return the canonical
+`update_unavailable` failure before any other updater work. This major-version
+guard remains the outermost updater policy until `1.0.0`.
+
 ## Local state and receipt
 
 Update-check state is data, not user configuration:
@@ -153,6 +161,24 @@ The POSIX and PowerShell installers:
 5. install atomically
 6. run `pangram --version`
 7. atomically write the direct-install receipt only after the smoke test passes
+
+Each versioned installer script embeds the selected archive URL, byte size,
+and SHA-256 value generated from the signed manifest. The script verifies that
+identity before it executes the archive candidate. The candidate then verifies
+the downloaded manifest's detached Ed25519 signature with the production key
+ring, selects its exact compile target, validates the complete archive contract,
+and proves its own executable bytes equal the executable extracted from that
+archive. Destination mutation begins only after both layers succeed. The hidden
+candidate mode accepts local manifest, signature, archive, and destination
+paths; it is not part of the public Clap grammar and never accepts an alternate
+key or network endpoint.
+
+The release workflow renders installers only after signing the manifest. It
+runs each native candidate against those exact signed files before any release
+or registry publication. Installer templates and rendered scripts contain no
+runtime endpoint override. Tests may call the same local candidate mode with
+fixture keys through Rust test constructors, but production binaries trust only
+the embedded production key ring.
 
 The POSIX default is `$HOME/.local/bin/pangram`. The PowerShell default is
 `%LOCALAPPDATA%\Programs\Pangram\bin\pangram.exe`. Installers do not edit shell

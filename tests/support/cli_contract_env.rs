@@ -50,45 +50,19 @@ pub(crate) fn pangram() -> Command {
     command
 }
 
-pub(crate) const HELP: &str = "\
-Unofficial Pangram terminal client
+pub(crate) const HELP: &str = include_str!("../../generated/cli-help.txt");
 
-Usage: pangram [OPTIONS] [TEXT] [COMMAND]
-
-Commands:
-  auth     Manage the locally stored Pangram API key
-  config   Inspect and edit the local Pangram configuration
-  doctor   Run local diagnostics without network access or credential validation
-  detect   Detect AI-generated text through Pangram 4
-  bulk     Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
-  task     Inspect or wait for a Pangram 4 text task
-  history  Inspect and manage optional local analysis history
-  mcp      Run and configure the Pangram MCP server
-  agent    Print compact Pangram MCP guidance as Markdown
-  skills   Inspect Pangram's embedded agent skill
-  help     Print this message or the help of the given subcommand(s)
-
-Arguments:
-  [TEXT]  Bare text analyzes it through AI detection; the literal `-` reads stdin
-
-Options:
-      --config <PATH>          Explicit configuration file path for this invocation
-      --data-dir <PATH>        Explicit history and state directory for this invocation
-      --error-format <FORMAT>  Surface failures as a JSON envelope or a text message [possible values: json, text]
-      --no-color               Disable terminal color in pretty output
-  -h, --help                   Print help
-  -V, --version                Print version
-";
-
-pub(crate) const PLANNED_TOP_LEVEL_COMMANDS: &[&str] =
-    &["analyze", "completions", "plagiarism", "update"];
+pub(crate) const PLANNED_TOP_LEVEL_COMMANDS: &[&str] = &[];
 
 pub(crate) const RUNTIME_DEPENDENCIES: &[&str] = &[
+    "base64",
     "cap-fs-ext",
     "cap-std",
     "clap",
+    "clap_complete",
     "crossterm",
     "directories",
+    "ed25519-dalek",
     "fs4",
     "jiff",
     "ratatui",
@@ -98,10 +72,12 @@ pub(crate) const RUNTIME_DEPENDENCIES: &[&str] = &[
     "rusqlite",
     "schemars",
     "secrecy",
+    "semver",
     "serde",
     "serde_json",
     "sha2",
     "signal-hook",
+    "tar",
     "thiserror",
     "toon-format",
     "tokio",
@@ -110,7 +86,9 @@ pub(crate) const RUNTIME_DEPENDENCIES: &[&str] = &[
     "url",
     "uuid",
     "windows-sys",
+    "xz2",
     "zeroize",
+    "zip",
 ];
 
 pub(crate) const FORBIDDEN_NETWORK_APIS: &[&str] = &[

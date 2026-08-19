@@ -4,12 +4,15 @@ use crate::mcp_stdio::{McpProcess, result};
 
 const BASE_TOOLS: &[&str] = &[
     "detect_text",
+    "check_plagiarism",
+    "analyze_text",
     "get_task",
     "wait_task",
     "submit_bulk",
     "get_bulk",
     "wait_bulk",
     "get_bulk_results",
+    "check_update",
 ];
 
 #[test]
@@ -30,6 +33,33 @@ fn default_inventory_is_ordered_closed_and_contains_no_future_or_fixture_tools()
         assert!(tool["annotations"].is_object());
         assert!(!tool["name"].as_str().unwrap().starts_with("test_"));
     }
+    assert_eq!(server.shutdown(), "");
+}
+
+#[test]
+fn private_check_update_is_typed_and_performs_no_state_or_network_work() {
+    let data = tempfile::tempdir().unwrap();
+    let sentinel = data.path().join("must-not-change");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+    let mut server =
+        McpProcess::spawn_with_env(&[], &[("PANGRAM_DATA_DIR", data.path().as_os_str())]);
+    result(&server.discover());
+
+    let response = server.request(
+        "tools/call",
+        json!({"name": "check_update", "arguments": {}}),
+        true,
+    );
+    let call = result(&response);
+    assert_eq!(call["resultType"], "complete");
+    assert_eq!(call["isError"], true);
+    assert_eq!(call["structuredContent"]["command"], "update_check");
+    assert_eq!(
+        call["structuredContent"]["error"]["code"],
+        "update_unavailable"
+    );
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
     assert_eq!(server.shutdown(), "");
 }
 

@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pangram CLI signed update manifest v1",
+  "description": "The signed update manifest after exact-byte signature verification.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -14,8 +15,7 @@
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
     "published_at": {
-      "type": "string",
-      "format": "date-time",
+      "$ref": "#/$defs/UtcTimestamp",
       "pattern": "Z$"
     },
     "notes_url": {
@@ -46,7 +46,14 @@
     "artifacts"
   ],
   "$defs": {
+    "UtcTimestamp": {
+      "description": "An absolute UTC timestamp in the canonical `Z` form.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
     "UpdateArtifact": {
+      "description": "One target-bound archive in a verified manifest.",
       "type": "object",
       "properties": {
         "target": {
@@ -71,8 +78,7 @@
           "minimum": 1
         },
         "sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
+          "$ref": "#/$defs/Sha256Hash"
         }
       },
       "additionalProperties": false,
@@ -86,6 +92,7 @@
       ]
     },
     "Target": {
+      "description": "Release target identifiers accepted by the signed manifest.",
       "type": "string",
       "enum": [
         "x86_64-unknown-linux-gnu",
@@ -96,11 +103,17 @@
       ]
     },
     "ArchiveFormat": {
+      "description": "Archive encodings emitted by the release workflow.",
       "type": "string",
       "enum": [
         "tar.xz",
         "zip"
       ]
+    },
+    "Sha256Hash": {
+      "description": "A lowercase SHA-256 digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     }
   },
   "$id": "https://pangram.micr.dev/schemas/update-manifest-v1.json",

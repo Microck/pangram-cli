@@ -12,8 +12,17 @@ mod history_reducer;
 mod history_render;
 #[path = "history-runtime.rs"]
 mod history_runtime;
+mod input;
 mod intro;
+#[path = "intro-playback.rs"]
+mod intro_playback;
+#[path = "intro-render.rs"]
+mod intro_render;
+#[cfg(test)]
+#[path = "intro-render-tests.rs"]
+mod intro_render_tests;
 mod model;
+mod mouse;
 mod render;
 #[path = "result-lines.rs"]
 mod result_lines;
@@ -31,14 +40,21 @@ use std::io::{self, IsTerminal as _};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event;
+#[cfg(test)]
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use crate::analysis::StopObserving;
 use crate::config::{ConfigError, ConfigOverrides, ConfigService, OnboardingState};
 
+#[cfg(test)]
+use input::key_input;
+use input::terminal_event;
+#[cfg(test)]
+use model::KeyInput;
 use model::{
-    AppEvent, AppState, Effect, IntroFrequency, KeyInput, MotionLevel, SettingsDraft, StartupState,
-    TerminalSize,
+    AppEvent, AppState, ColorMode, Effect, IntroFrequency, MotionLevel, SettingsDraft,
+    StartupState, TerminalSize,
 };
 use settings_runtime::{SettingWrite, SettingsWorker};
 use terminal::{ProcessSignal, TerminalSession};
@@ -117,6 +133,7 @@ impl<'a> EffectExecutor<'a> {
             match effect {
                 Effect::SubmitText {
                     text,
+                    mode,
                     public_link,
                     save,
                     automatic_save,
@@ -126,6 +143,7 @@ impl<'a> EffectExecutor<'a> {
                         self.service.clone(),
                         history_runtime::FreshAnalysisOptions {
                             text,
+                            mode,
                             public_link,
                             manual_save: save,
                             automatic_save,
@@ -221,7 +239,7 @@ fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, Tui
     let (columns, rows) = crossterm::terminal::size()?;
     let terminal_size = TerminalSize { columns, rows };
     let intro_state = intro::load_state(service.paths().data_dir());
-    let _intro_plan = intro::plan_intro(
+    let intro_plan = intro::plan_intro(
         startup.settings.intro,
         startup.settings.motion,
         intro_state.seen(),
@@ -234,9 +252,7 @@ fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, Tui
             terminal_size,
         ),
     );
-    // Approved source geometry and logo rights are not available. The
-    // resolved plan therefore remains deliberately unconsumed: no placeholder
-    // frame renders and a once-only launch is not marked seen.
+    let intro_frequency = startup.settings.intro;
     let mut state = AppState::new(terminal_size, startup);
     if let Some(diagnostic) = intro_state.diagnostic() {
         state.notice = Some(diagnostic.message().to_owned());
@@ -249,6 +265,36 @@ fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, Tui
     let mut session = TerminalSession::enter()?;
     #[cfg(feature = "dev-tools")]
     inject_terminal_failure_for_test()?;
+    let (intro_resolution, deferred_input) =
+        match intro_playback::play(&mut session, intro_plan, &state)? {
+            intro_playback::PlaybackExit::Continue {
+                resolution,
+                deferred,
+            } => (resolution, deferred),
+            intro_playback::PlaybackExit::Process(exit_code) => {
+                session.restore()?;
+                drop(settings_worker);
+                drop(session);
+                return Ok(exit_code);
+            }
+        };
+    let intro_marker = intro_resolution
+        .filter(|resolution| intro::should_mark_seen(intro_frequency, intro_plan, *resolution))
+        .and_then(|_| {
+            let data_dir = service.paths().data_dir().to_owned();
+            let events = worker_tx.clone();
+            std::thread::Builder::new()
+                .name("pangram-tui-intro-state".to_owned())
+                .spawn(move || {
+                    if let Err(diagnostic) = intro::mark_seen(&data_dir) {
+                        let _ = events.send(AppEvent::Notice(diagnostic.message().to_owned()));
+                    }
+                })
+                .map_err(|_| {
+                    state.notice = Some(intro::IntroDiagnostic::Write.message().to_owned());
+                })
+                .ok()
+        });
     let mut effects = EffectExecutor::new(&service, &worker_tx, &settings_worker, &analyzer_source);
 
     // The first useful frame is independent of disk-backed history. Loading
@@ -260,37 +306,58 @@ fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, Tui
         worker_tx.clone(),
     );
 
-    let loop_exit = 'main: loop {
-        let mut redraw = false;
-        while let Ok(event) = worker_rx.try_recv() {
-            if let Some(loop_exit) = effects.apply_event(&mut state, event) {
-                break 'main loop_exit;
-            }
-            redraw = true;
-        }
-
-        if let Some(signal) = session.signals().take() {
-            break LoopExit::Process(match signal {
-                ProcessSignal::Interrupt => 130,
-                ProcessSignal::Terminate => 1,
-            });
-        }
-
-        if redraw {
-            session.draw(|frame| render::render(frame, &state))?;
-        }
-        if event::poll(EVENT_POLL)?
-            && let Some(event) = terminal_event(event::read()?)
+    let redraw_after_deferred_input = !deferred_input.is_empty();
+    let mut deferred_exit = None;
+    for input in deferred_input {
+        if let Some(event) = terminal_event(input, &state)
+            && let Some(loop_exit) = effects.apply_event(&mut state, event)
         {
-            if let Some(loop_exit) = effects.apply_event(&mut state, event) {
-                break loop_exit;
+            deferred_exit = Some(loop_exit);
+            break;
+        }
+    }
+    if deferred_exit.is_none() && redraw_after_deferred_input {
+        session.draw(|frame| render::render(frame, &state))?;
+    }
+
+    let loop_exit = if let Some(loop_exit) = deferred_exit {
+        loop_exit
+    } else {
+        'main: loop {
+            let mut redraw = false;
+            while let Ok(event) = worker_rx.try_recv() {
+                if let Some(loop_exit) = effects.apply_event(&mut state, event) {
+                    break 'main loop_exit;
+                }
+                redraw = true;
             }
-            session.draw(|frame| render::render(frame, &state))?;
+
+            if let Some(signal) = session.signals().take() {
+                break LoopExit::Process(match signal {
+                    ProcessSignal::Interrupt => 130,
+                    ProcessSignal::Terminate => 1,
+                });
+            }
+
+            if redraw {
+                session.draw(|frame| render::render(frame, &state))?;
+            }
+            if event::poll(EVENT_POLL)?
+                && let Some(event) = terminal_event(event::read()?, &state)
+            {
+                if let Some(loop_exit) = effects.apply_event(&mut state, event) {
+                    break loop_exit;
+                }
+                session.draw(|frame| render::render(frame, &state))?;
+            }
         }
     };
 
     effects.stop_active_analysis();
     session.restore()?;
+    if let Some(worker) = intro_marker {
+        let _ = worker.join();
+    }
     drop(effects);
     drop(settings_worker);
     // Raw export is a primary stdout surface. Drop the terminal owner before
@@ -390,7 +457,34 @@ fn startup_state(service: &ConfigService) -> Result<StartupState, ConfigError> {
         crate::config::Keymap::Regular => model::Keymap::Regular,
         crate::config::Keymap::Vim => model::Keymap::Vim,
     };
-    Ok(StartupState { settings, keymap })
+    Ok(StartupState {
+        settings,
+        keymap,
+        color_mode: resolve_color_mode(
+            std::env::var_os("NO_COLOR").as_deref(),
+            std::env::var("TERM").ok().as_deref(),
+            std::env::var("COLORTERM").ok().as_deref(),
+        ),
+    })
+}
+
+fn resolve_color_mode(
+    no_color: Option<&std::ffi::OsStr>,
+    term: Option<&str>,
+    colorterm: Option<&str>,
+) -> ColorMode {
+    if no_color.is_some_and(|value| !value.is_empty())
+        || term.is_some_and(|value| value.eq_ignore_ascii_case("dumb"))
+    {
+        return ColorMode::None;
+    }
+    if colorterm.is_some_and(|value| {
+        value.eq_ignore_ascii_case("truecolor") || value.eq_ignore_ascii_case("24bit")
+    }) {
+        ColorMode::TrueColor
+    } else {
+        ColorMode::Ansi
+    }
 }
 
 enum TuiError {
@@ -419,52 +513,26 @@ impl From<io::Error> for TuiError {
     }
 }
 
-fn terminal_event(event: Event) -> Option<AppEvent> {
-    match event {
-        Event::Resize(columns, rows) => Some(AppEvent::Resize(TerminalSize { columns, rows })),
-        Event::Paste(text) => Some(AppEvent::Paste(text)),
-        Event::Key(key) if key.kind != KeyEventKind::Release => key_input(key).map(AppEvent::Key),
-        _ => None,
-    }
-}
-
-fn key_input(key: KeyEvent) -> Option<KeyInput> {
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return match key.code {
-            KeyCode::Char('c' | 'C') => Some(KeyInput::CtrlC),
-            KeyCode::Char('u' | 'U') => Some(KeyInput::CtrlU),
-            KeyCode::Char('d' | 'D') => Some(KeyInput::CtrlD),
-            _ => None,
-        };
-    }
-    if key.modifiers.intersects(
-        KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META,
-    ) {
-        return None;
-    }
-    match key.code {
-        KeyCode::Char(character) => Some(KeyInput::Character(character)),
-        KeyCode::Up => Some(KeyInput::Up),
-        KeyCode::Down => Some(KeyInput::Down),
-        KeyCode::Left => Some(KeyInput::Left),
-        KeyCode::Right => Some(KeyInput::Right),
-        KeyCode::Tab => Some(KeyInput::Tab),
-        KeyCode::BackTab => Some(KeyInput::BackTab),
-        KeyCode::Enter => Some(KeyInput::Enter),
-        KeyCode::Esc => Some(KeyInput::Escape),
-        KeyCode::Home => Some(KeyInput::Home),
-        KeyCode::End => Some(KeyInput::End),
-        KeyCode::PageUp => Some(KeyInput::PageUp),
-        KeyCode::PageDown => Some(KeyInput::PageDown),
-        KeyCode::Backspace => Some(KeyInput::Backspace),
-        KeyCode::Delete => Some(KeyInput::Delete),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    fn pointer_state(columns: u16) -> AppState {
+        let mut state = AppState::default();
+        state.terminal = TerminalSize { columns, rows: 40 };
+        state.overlay = None;
+        state
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
 
     fn failed_event(analysis_id: crate::domain::AnalysisId) -> AppEvent {
         AppEvent::AnalysisFailed(model::AnalysisFailure {
@@ -498,10 +566,223 @@ mod tests {
     #[test]
     fn bracketed_paste_stays_one_atomic_event() {
         let payload = "one\ttwo\n?j";
-        let Some(AppEvent::Paste(actual)) = terminal_event(Event::Paste(payload.to_owned())) else {
+        let state = pointer_state(120);
+        let Some(AppEvent::Paste(actual)) =
+            terminal_event(Event::Paste(payload.to_owned()), &state)
+        else {
             panic!("bracketed paste must remain atomic")
         };
         assert_eq!(actual, payload);
+    }
+
+    #[test]
+    fn mouse_targets_emit_typed_intent_for_visible_controls() {
+        let mut state = pointer_state(120);
+
+        assert!(matches!(
+            terminal_event(mouse(MouseEventKind::Down(MouseButton::Left), 2, 7), &state,),
+            Some(AppEvent::Pointer(model::PointerIntent::Route(
+                model::Route::History
+            )))
+        ));
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 45, 24),
+                &state,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Activate(
+                model::Focus::CheckPlagiarism
+            )))
+        ));
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 20, 32),
+                &state,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Focus(
+                model::Focus::Composer
+            )))
+        ));
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 17, 39),
+                &state,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Key(
+                model::KeyInput::Tab
+            )))
+        ));
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 2, 39),
+                &state,
+            )
+            .is_none(),
+            "wide footer space beneath the route rail must not be clickable"
+        );
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 14, 39),
+                &state,
+            )
+            .is_none(),
+            "footer separators must not behave like controls"
+        );
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 110, 39),
+                &state,
+            )
+            .is_none(),
+            "blank footer space must not activate the focused command"
+        );
+
+        state.route = model::Route::History;
+        assert!(matches!(
+            terminal_event(mouse(MouseEventKind::ScrollDown, 40, 10), &state),
+            Some(AppEvent::Pointer(model::PointerIntent::Scroll {
+                focus: model::Focus::HistoryList,
+                direction: model::PointerDirection::Next,
+            }))
+        ));
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Right), 2, 7),
+                &state,
+            )
+            .is_none()
+        );
+
+        let mut narrow = pointer_state(111);
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 2, 39),
+                &narrow,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Key(
+                model::KeyInput::Tab
+            )))
+        ));
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 4, 37),
+                &narrow,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Activate(
+                model::Focus::PublicLink
+            )))
+        ));
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 105, 37),
+                &narrow,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Activate(
+                model::Focus::Submit
+            )))
+        ));
+        narrow.text_mode = crate::analysis::TextAnalysisMode::Plagiarism;
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 4, 37),
+                &narrow,
+            )
+            .is_none(),
+            "an unavailable public-link control must not be clickable"
+        );
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 22, 37),
+                &narrow,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Activate(
+                model::Focus::ManualSave
+            )))
+        ));
+
+        let mut submitting = pointer_state(120);
+        submitting.analysis.submitting = true;
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 40, 10),
+                &submitting,
+            )
+            .is_none(),
+            "progress-only workspace has no result viewport"
+        );
+        assert!(
+            terminal_event(mouse(MouseEventKind::ScrollDown, 40, 10), &submitting).is_none(),
+            "progress-only workspace must not scroll a nonexistent result"
+        );
+
+        state.overlay = Some(model::Overlay::HistoryExport {
+            field: model::HistoryExportField::Action,
+        });
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 34, 16),
+                &state,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::HistoryExportField(
+                model::HistoryExportField::Format
+            )))
+        ));
+    }
+
+    #[test]
+    fn overlay_mouse_targets_follow_the_rendered_action_labels() {
+        let mut state = pointer_state(120);
+        state.overlay = Some(model::Overlay::Credential(model::CredentialEntry::default()));
+
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 36, 20),
+                &state,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Key(
+                model::KeyInput::Enter
+            )))
+        ));
+        assert!(matches!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 49, 20),
+                &state,
+            ),
+            Some(AppEvent::Pointer(model::PointerIntent::Key(
+                model::KeyInput::Escape
+            )))
+        ));
+        assert!(
+            terminal_event(
+                mouse(MouseEventKind::Down(MouseButton::Left), 46, 20),
+                &state,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn terminal_color_capability_honors_explicit_disable_and_truecolor() {
+        assert_eq!(
+            resolve_color_mode(
+                Some(std::ffi::OsStr::new("1")),
+                Some("xterm-256color"),
+                Some("truecolor")
+            ),
+            ColorMode::None
+        );
+        assert_eq!(
+            resolve_color_mode(None, Some("dumb"), Some("truecolor")),
+            ColorMode::None
+        );
+        assert_eq!(
+            resolve_color_mode(None, Some("xterm-256color"), Some("truecolor")),
+            ColorMode::TrueColor
+        );
+        assert_eq!(
+            resolve_color_mode(None, Some("xterm-256color"), None),
+            ColorMode::Ansi
+        );
     }
 
     #[test]

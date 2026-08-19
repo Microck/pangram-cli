@@ -1,0 +1,9 @@
+# Configure MCP clients
+
+```bash
+pangram mcp install --target cursor --dry-run
+pangram mcp status --format pretty
+```
+
+The installer edits only an exact owned entry and preflights all selected
+targets before the first write. It does not add optional capability gates.

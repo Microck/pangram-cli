@@ -6,6 +6,7 @@ pub mod grammar;
 mod history;
 mod local_setup;
 mod mcp;
+mod phase7;
 mod runtime;
 
 pub(crate) use crate::config::redact_io;
@@ -28,6 +29,97 @@ const API_KEY_HELP: &str = "\
 SECURITY WARNING: argv may be visible in process listings and shell history.
 Prefer `pangram auth`, `pangram auth set --api-key-stdin`, or the
 PANGRAM_API_KEY environment variable.";
+
+/// Builds the shared analysis-command grammar, adding only flags that apply
+/// to the selected operation. Keeping this in one owner prevents detect,
+/// plagiarism, and combined analysis from drifting as Phase 7 lands.
+fn analysis_command(
+    name: &'static str,
+    about: &'static str,
+    file_help: &'static str,
+    detach: bool,
+    public_link: bool,
+) -> Command {
+    let mut command = Command::new(name)
+        .about(about)
+        .arg(
+            Arg::new("TEXT")
+                .value_name("TEXT")
+                .num_args(1)
+                .help("Literal text to analyze; the literal `-` reads stdin"),
+        )
+        .arg(
+            Arg::new("file")
+                .long("file")
+                .value_name("PATH")
+                .num_args(1)
+                .action(ArgAction::Append)
+                .help(file_help),
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .value_parser(["json", "jsonl", "toon", "markdown", "pretty"])
+                .help("Render the canonical envelope in the selected projection"),
+        )
+        .arg(
+            Arg::new("include-input")
+                .long("include-input")
+                .action(ArgAction::SetTrue)
+                .help("Include submitted content in the canonical input record"),
+        )
+        .arg(
+            Arg::new("save")
+                .long("save")
+                .action(ArgAction::SetTrue)
+                .help("Persist this analysis in local history, even while automatic history is disabled"),
+        )
+        .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .value_name("DURATION")
+                .num_args(1)
+                .help("Bound the wait (seconds, or a value with an s, ms, m, or h suffix)"),
+        )
+        .arg(
+            Arg::new("progress")
+                .long("progress")
+                .value_name("MODE")
+                .value_parser(["auto", "never", "jsonl"])
+                .help("Progress reporting on stderr: auto, never, or canonical jsonl"),
+        )
+        .arg(
+            Arg::new("max-billable-units")
+                .long("max-billable-units")
+                .value_name("N")
+                .num_args(1)
+                .help("Reject the request when the estimated cost exceeds this ceiling"),
+        )
+        .group(
+            ArgGroup::new("source_category")
+                .args(["TEXT", "file"])
+                .multiple(false),
+        );
+    if detach {
+        command = command.arg(
+            Arg::new("detach")
+                .long("detach")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("save")
+                .help("Report the accepted task without waiting for the result"),
+        );
+    }
+    if public_link {
+        command = command.arg(
+            Arg::new("public-link")
+                .long("public-link")
+                .action(ArgAction::SetTrue)
+                .help("Ask Pangram to create a public dashboard link for this analysis"),
+        );
+    }
+    command
+}
 
 /// Builds the current runtime surface. Grammar entries graduate from the
 /// planned table only when their compiled behavior and contract tests land
@@ -124,80 +216,52 @@ pub fn runtime_command() -> Command {
                 .help("Render the canonical JSON envelope or a readable check list"),
         );
 
-    let detect = Command::new("detect")
-        .about("Detect AI-generated text through Pangram 4")
+    let update = Command::new("update")
+        .about("Check for or install an eligible direct update")
         .arg(
-            Arg::new("TEXT")
-                .value_name("TEXT")
-                .num_args(1)
-                .help("Literal text to analyze; the literal `-` reads stdin"),
-        )
-        .arg(
-            Arg::new("file")
-                .long("file")
-                .value_name("PATH")
-                .num_args(1)
-                .action(ArgAction::Append)
-                .help("Read a UTF-8 text file; may be repeated"),
-        )
-        .arg(
-            Arg::new("detach")
-                .long("detach")
+            Arg::new("check")
+                .long("check")
                 .action(ArgAction::SetTrue)
-                .conflicts_with("save")
-                .help("Report the accepted task without waiting for the result"),
+                .conflicts_with("yes")
+                .help("Check for an update without prompting or installing"),
         )
         .arg(
-            Arg::new("format")
-                .long("format")
-                .value_name("FORMAT")
-                .value_parser(["json", "jsonl", "toon", "markdown", "pretty"])
-                .help("Render the canonical envelope in the selected projection"),
-        )
-        .arg(
-            Arg::new("include-input")
-                .long("include-input")
+            Arg::new("yes")
+                .long("yes")
                 .action(ArgAction::SetTrue)
-                .help("Include the submitted text in the canonical input record"),
-        )
-        .arg(
-            Arg::new("save")
-                .long("save")
-                .action(ArgAction::SetTrue)
-                .help("Persist this analysis in local history, even while automatic history is disabled"),
-        )
-        .arg(
-            Arg::new("public-link")
-                .long("public-link")
-                .action(ArgAction::SetTrue)
-                .help("Ask Pangram to create a public dashboard link for this analysis"),
-        )
-        .arg(
-            Arg::new("timeout")
-                .long("timeout")
-                .value_name("DURATION")
-                .num_args(1)
-                .help("Bound the wait (seconds, or a value with an s, ms, m, or h suffix)"),
-        )
-        .arg(
-            Arg::new("progress")
-                .long("progress")
-                .value_name("MODE")
-                .value_parser(["auto", "never", "jsonl"])
-                .help("Progress reporting on stderr: auto, never, or canonical jsonl"),
-        )
-        .arg(
-            Arg::new("max-billable-units")
-                .long("max-billable-units")
-                .value_name("N")
-                .num_args(1)
-                .help("Reject the request when the estimated cost exceeds this ceiling"),
-        )
-        .group(
-            ArgGroup::new("source_category")
-                .args(["TEXT", "file"])
-                .multiple(false),
+                .help("Install an eligible direct update without prompting"),
         );
+
+    let completions = Command::new("completions")
+        .about("Generate a shell completion script")
+        .arg(
+            Arg::new("SHELL")
+                .required(true)
+                .value_parser(["bash", "zsh", "fish", "powershell", "elvish"])
+                .help("Shell whose completion script should be generated"),
+        );
+
+    let detect = analysis_command(
+        "detect",
+        "Detect AI-generated text through Pangram 4",
+        "Read a UTF-8 text, PDF, DOCX, or RTF file; may be repeated",
+        true,
+        true,
+    );
+    let plagiarism = analysis_command(
+        "plagiarism",
+        "Check text for plagiarism against online sources",
+        "Read a UTF-8 text file; binary documents are not supported",
+        false,
+        false,
+    );
+    let analyze = analysis_command(
+        "analyze",
+        "Run AI detection and plagiarism checks on the same text",
+        "Read a UTF-8 text file; binary documents are not supported",
+        false,
+        true,
+    );
 
     let bulk_submit = Command::new("submit")
         .about("Submit an asynchronous Pangram 4 bulk AI-detection job")
@@ -402,12 +466,16 @@ pub fn runtime_command() -> Command {
         .subcommand(config)
         .subcommand(doctor)
         .subcommand(detect)
+        .subcommand(plagiarism)
+        .subcommand(analyze)
         .subcommand(bulk)
         .subcommand(task)
         .subcommand(history::command())
         .subcommand(mcp::command())
         .subcommand(mcp::agent_command())
         .subcommand(mcp::skills_command())
+        .subcommand(completions)
+        .subcommand(update)
 }
 
 #[cfg(test)]
@@ -450,7 +518,7 @@ mod tests {
         for unknown in ["--frobnicate", "-z", "--not-a-real-flag"] {
             try_parse(&[unknown]).unwrap_err();
         }
-        for literal in ["update", "plagiarism"] {
+        for literal in ["humanize", "not-a-command"] {
             let parsed = try_parse(&[literal]).unwrap();
             assert_eq!(parsed.get_one::<String>("TEXT").unwrap(), literal);
             assert!(parsed.subcommand().is_none());
@@ -526,6 +594,19 @@ mod tests {
                 "help missing {fragment}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn phase_seven_analysis_commands_expose_only_their_applicable_flags() {
+        for command in ["plagiarism", "analyze"] {
+            try_parse(&[command, "some text"]).unwrap();
+            try_parse(&[command, "--file", "sample.txt"]).unwrap();
+            try_parse(&[command, "some text", "--save", "--include-input"]).unwrap();
+            try_parse(&[command, "some text", "--detach"]).unwrap_err();
+        }
+        try_parse(&["plagiarism", "some text", "--public-link"]).unwrap_err();
+        try_parse(&["analyze", "some text", "--public-link"]).unwrap();
+        try_parse(&["analyze", "some text", "--file", "sample.txt"]).unwrap_err();
     }
 
     #[test]

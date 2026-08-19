@@ -298,7 +298,7 @@ impl CredentialService {
 
 /// Write with permissions established on the open handle before the rename,
 /// so no window exists where a world-readable temp holds the key.
-fn atomic_secret_write(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
+pub(crate) fn atomic_secret_write(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
     let parent = path
         .parent()
         .ok_or_else(|| ConfigError::Io(format!("{} has no parent directory", path.display())))?;
@@ -357,6 +357,12 @@ fn atomic_secret_write(path: &Path, contents: &[u8]) -> Result<(), ConfigError> 
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// Reuses the exact owner-only credential permission contract for other
+/// security-sensitive local files such as update state and install receipts.
+pub(crate) fn enforce_protected_permissions(path: &Path) -> Result<(), ConfigError> {
+    platform::enforce_permissions_on_read(path)
 }
 
 /// The trailing suffix for display, at most 8 characters. Constant-shape

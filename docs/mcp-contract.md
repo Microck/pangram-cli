@@ -34,26 +34,35 @@ already implemented:
 | Tool | Required input | Optional input |
 | --- | --- | --- |
 | `detect_text` | `text`, `max_billable_units` | `save`, `public_link`, `include_input` |
+| `check_plagiarism` | `text`, `max_billable_units` | `save`, `include_input` |
+| `analyze_text` | `text`, `max_billable_units` | `save`, `public_link`, `include_input` |
 | `get_task` | exactly one of `analysis_id`, `upstream_task_id` | none |
 | `wait_task` | exactly one of `analysis_id`, `upstream_task_id` | `timeout_ms` |
 | `submit_bulk` | exactly one of `items`, `jsonl_path`; `max_billable_units` | `save` |
 | `get_bulk` | exactly one of `bulk_id`, `upstream_bulk_id` | none |
 | `wait_bulk` | exactly one of `bulk_id`, `upstream_bulk_id` | `timeout_ms` |
 | `get_bulk_results` | exactly one of `bulk_id`, `upstream_bulk_id`; `offset`, `limit` | none |
+| `check_update` | none | none |
 
 The gated history and configuration tools in this contract join that inventory
 only when their startup gate is enabled.
 
-Phase 6 does not advertise `detect_files`, `check_plagiarism`, or
-`analyze_text`. Phase 7 owns those operations after live conformance resolves
-their upstream contracts. Phase 6 does not advertise `check_update`; Phase 8
-owns update checks. The server has no alias, compatibility shim, hidden tool,
-or rejection-only placeholder for a later-phase operation.
+Phase 7 advertises inline-text `check_plagiarism` and `analyze_text` after live
+conformance resolved their upstream contracts. It does not advertise
+`detect_files`: MCP billable tools require a pre-submission ceiling, and
+Pangram publishes no estimator for binary documents before server extraction.
+Phase 8 advertises the nonbillable `check_update` tool. `0.x` builds
+perform no update-network access and return the canonical typed
+`update_unavailable` failure. Public builds run only an explicit check and do
+not install. The server has no alias, compatibility shim, hidden tool, or
+rejection-only placeholder for a later-phase operation.
 
 Every billable text submission requires positive `max_billable_units`. The
 server estimates locally and rejects the call before submission when the
 estimate is above the ceiling. Pangram 4 text estimates use one unit per
 started 100-word block, with a minimum of one.
+`check_plagiarism` uses the published fixed 5-unit plagiarism estimate.
+`analyze_text` sums those 5 units with the AI-detection text estimate.
 
 ## Task tools
 
@@ -108,7 +117,8 @@ Mutation tools, exposed only with both `--history` and
 - `history_delete`
 - `history_clear`
 
-`save: true` on `detect_text` or `submit_bulk` is also a history mutation. It
+`save: true` on `detect_text`, `check_plagiarism`, `analyze_text`, or
+`submit_bulk` is also a history mutation. It
 requires both `--history` and `--allow-history-mutations`. Omitting `save`, or
 using `save: false`, performs no history write.
 
@@ -132,6 +142,7 @@ Any tool request with `public_link: true` fails with
 | --- | --- | --- | --- | --- |
 | Billable analysis submission | false | false | false | true |
 | Upstream status/wait/results | true | false | true | true |
+| Explicit update check | true | false | true | true |
 | Local history reads | true | false | true | false |
 | Local rerun | false | false | false | true |
 | Local delete/clear | false | true | false | false |
@@ -147,8 +158,11 @@ Each Phase 6 tool maps to one canonical command:
 | Tool | Canonical command |
 | --- | --- |
 | `detect_text` | `detect` |
+| `check_plagiarism` | `plagiarism` |
+| `analyze_text` | `analyze` |
 | `get_task`, `wait_task` | `task_status`, `task_wait` |
 | `submit_bulk`, `get_bulk`, `wait_bulk`, `get_bulk_results` | `bulk_submit`, `bulk_status`, `bulk_wait`, `bulk_results` |
+| `check_update` | `update_check` |
 | `history_list`, `history_search`, `history_rerun`, `history_delete`, `history_clear` | matching `history_*` command |
 | `history_get` | `history_show` |
 | `update_config` | `config_set` |

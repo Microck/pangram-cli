@@ -12,7 +12,7 @@ use crate::mcp_stdio::{McpProcess, result};
 use history_env::Env;
 
 #[cfg(feature = "dev-tools")]
-use crate::fixture::{ProtocolFixture, Step, TASK_ID, pangram4_success};
+use crate::fixture::{ProtocolFixture, Step, TASK_ID, pangram4_success, plagiarism_success};
 
 fn server(env: &Env, mutations: bool) -> McpProcess {
     let arguments = if mutations {
@@ -179,5 +179,61 @@ async fn rerun_submits_once_with_fresh_lineage_and_saves_the_terminal_result() {
         panic!("a text rerun must persist text input");
     };
     assert_eq!(input.text.as_deref(), Some(text));
+    fixture.shutdown().await;
+}
+
+#[cfg(feature = "dev-tools")]
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_repeats_the_saved_combined_check_set_and_its_full_ceiling() {
+    let env = Env::new();
+    let text = "one retained synthetic combined billing block";
+    let fixture = ProtocolFixture::start().await;
+    for task_id in ["task-combined-original", "task-combined-rerun"] {
+        fixture.on_submit(Step::Json(json!({"task_id": task_id})));
+        fixture.on_poll(Step::Json(pangram4_success(text)));
+        fixture.on_plagiarism(Step::Json(plagiarism_success()));
+    }
+    let mut mcp = McpProcess::spawn_loopback_with_env(
+        fixture.base_url(),
+        &["--history", "--allow-history-mutations"],
+        &[("PANGRAM_DATA_DIR", env.data_dir().as_os_str())],
+    );
+    result(&mcp.discover());
+
+    let original = call(
+        &mut mcp,
+        "analyze_text",
+        json!({"text": text, "max_billable_units": 6, "save": true}),
+    );
+    assert_ne!(original["isError"], true, "{original}");
+    let original_id = structured(&original)["data"]["id"].as_str().unwrap();
+
+    let too_low = call(
+        &mut mcp,
+        "history_rerun",
+        json!({"analysis_id": original_id, "max_billable_units": 5}),
+    );
+    assert_eq!(too_low["isError"], true);
+    assert_eq!(structured(&too_low)["error"]["code"], "unsupported_input");
+    assert_eq!(fixture.post_count(), 2, "a rejected rerun sends nothing");
+
+    let rerun = call(
+        &mut mcp,
+        "history_rerun",
+        json!({"analysis_id": original_id, "max_billable_units": 6}),
+    );
+    assert_ne!(rerun["isError"], true, "{rerun}");
+    assert_eq!(structured(&rerun)["data"]["rerun_of"], original_id);
+    assert_eq!(
+        structured(&rerun)["data"]["checks"][0]["kind"],
+        "ai_detection"
+    );
+    assert_eq!(
+        structured(&rerun)["data"]["checks"][1]["kind"],
+        "plagiarism"
+    );
+    assert_eq!(fixture.post_count(), 4, "each combined run sends two POSTs");
+    assert_eq!(fixture.get_count(), 2);
+    assert_eq!(mcp.shutdown(), "");
     fixture.shutdown().await;
 }

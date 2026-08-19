@@ -1,0 +1,38 @@
+class Pangram < Formula
+  desc "Unofficial Pangram terminal client"
+  homepage "https://pangram.micr.dev"
+  version "{{VERSION}}"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/pangram-v{{VERSION}}-aarch64-apple-darwin.tar.xz"
+      sha256 "{{SHA256_AARCH64_APPLE_DARWIN}}"
+    else
+      url "https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/pangram-v{{VERSION}}-x86_64-apple-darwin.tar.xz"
+      sha256 "{{SHA256_X86_64_APPLE_DARWIN}}"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/pangram-v{{VERSION}}-aarch64-unknown-linux-gnu.tar.xz"
+      sha256 "{{SHA256_AARCH64_UNKNOWN_LINUX_GNU}}"
+    else
+      url "https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/pangram-v{{VERSION}}-x86_64-unknown-linux-gnu.tar.xz"
+      sha256 "{{SHA256_X86_64_UNKNOWN_LINUX_GNU}}"
+    end
+  end
+
+  def install
+    bin.install "pangram"
+    bash_completion.install "completions/pangram.bash" => "pangram"
+    zsh_completion.install "completions/_pangram"
+    fish_completion.install "completions/pangram.fish"
+    man1.install "man/pangram.1"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/pangram --version")
+  end
+end

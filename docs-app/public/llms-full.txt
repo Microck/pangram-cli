@@ -1,0 +1,606 @@
+# Changelog
+
+Source: https://pangram.micr.dev/docs/changelog
+
+No public release has been published. Pending user-visible changes live in
+Tegami fragments in the repository until release authority and all gates pass.
+
+# Billing and billable-unit estimates
+
+Source: https://pangram.micr.dev/docs/explanation/billing
+
+Pangram 4 text estimation uses one unit per started 100-word block, with a
+minimum of one. Text plagiarism uses a fixed five-unit estimate. Combined text
+analysis sums both. Bulk sums item estimates and enforces Pangram's 1,000-unit
+request limit. Estimates are preflight controls, not account balance checks.
+
+# AI detection and plagiarism
+
+Source: https://pangram.micr.dev/docs/explanation/detection-and-plagiarism
+
+AI detection classifies writing evidence. Plagiarism compares text with online
+sources and can return source matches. They use distinct Pangram operations.
+Combined text analysis starts both, then preserves their separate results in
+one canonical analysis. A successful check does not imply that the other check
+succeeded.
+
+# How to interpret AI-detection evidence
+
+Source: https://pangram.micr.dev/docs/explanation/evidence
+
+Pangram returns overall and segment-level evidence. Fractions describe the
+reported composition; they are not a certainty score. Confidence belongs to
+the returned evidence, not to a universal claim about authorship. Keep the
+result with other evidence and avoid inventing thresholds the API does not
+publish. Pangram CLI preserves Pangram's labels and ordering.
+
+# Why one core serves CLI, TUI, and MCP
+
+Source: https://pangram.micr.dev/docs/explanation/one-core
+
+CLI, TUI, and MCP are adapters. They call the same Rust analysis module, which
+owns submission, polling, retries, normalized status, and upstream contract
+validation. Output projection starts from the same typed result. This keeps a
+protocol fix from becoming three separate behavior changes.
+
+# Pangram web parity and API limitations
+
+Source: https://pangram.micr.dev/docs/explanation/parity
+
+The CLI supports documented Pangram 4 text and file detection, text
+plagiarism, combined text checks, bulk work, and task reads. It substitutes a
+local SQLite history for dashboard history. Binary plagiarism, binary combined
+analysis, account administration, Playback, Feed Scanner, extensions, and LMS
+administration are unavailable through the documented integration contract.
+
+# Privacy and retention boundaries
+
+Source: https://pangram.micr.dev/docs/explanation/privacy
+
+Analysis content is submitted to Pangram. A public dashboard link is opt-in.
+Normal output redacts input unless requested. Local history is a separate,
+off-by-default plaintext store. Bulk results have a documented 48-hour
+upstream retention window. Pangram CLI adds no analytics or telemetry.
+
+# How signed releases and updates work
+
+Source: https://pangram.micr.dev/docs/explanation/signed-updates
+
+The updater verifies an Ed25519 signature over the exact downloaded manifest
+bytes before it parses JSON. The signed manifest binds target, version,
+archive size, executable size, and SHA-256. Only an exact direct-install
+receipt grants mutation authority. Manager-owned binaries receive manager
+instructions and are never adopted by the self-updater.
+
+# Analyze PDF, DOCX, and RTF files
+
+Source: https://pangram.micr.dev/docs/how-to/analyze-files
+
+```bash
+pangram detect --file sample.pdf --file sample.docx --max-billable-units 2
+```
+
+UTF-8 text, PDF, DOCX, and RTF are supported for AI detection. File requests
+are billable. MCP does not expose binary files because it cannot estimate the
+server-extracted word count before submission.
+
+# Configure an API key
+
+Source: https://pangram.micr.dev/docs/how-to/authenticate
+
+```bash
+printf '%s\n' "$PANGRAM_API_KEY" | pangram auth set --api-key-stdin
+pangram auth status
+```
+
+`PANGRAM_API_KEY` overrides stored credentials. The CLI never prints the full
+key. Authentication setup is not billable.
+
+# Submit and retrieve bulk work
+
+Source: https://pangram.micr.dev/docs/how-to/bulk
+
+```bash
+pangram bulk submit items.jsonl --max-billable-units 20 --dry-run
+pangram bulk submit items.jsonl --max-billable-units 20 --wait
+pangram bulk results BULK_ID --offset 0 --limit 100
+```
+
+Submission is billable. Status and result retrieval are not. Upstream bulk
+results have a documented 48-hour retention window.
+
+# Check plagiarism from the terminal
+
+Source: https://pangram.micr.dev/docs/how-to/check-plagiarism
+
+```bash
+pangram plagiarism 'Synthetic text to compare.' --max-billable-units 5
+```
+
+Text plagiarism has a five-unit local estimate and is billable. Binary file
+plagiarism is rejected before submission because Pangram has no documented
+binary plagiarism contract.
+
+# Run a combined analysis
+
+Source: https://pangram.micr.dev/docs/how-to/combined-analysis
+
+```bash
+pangram analyze 'Synthetic text for both checks.' --max-billable-units 6
+```
+
+Both billable checks start together. The result preserves canonical check
+order and keeps either successful half if the other check fails.
+
+# Detect AI-written text
+
+Source: https://pangram.micr.dev/docs/how-to/detect-text
+
+```bash
+pangram detect 'Synthetic text to inspect.' --max-billable-units 1
+printf '%s\n' 'Synthetic text to inspect.' | pangram - --max-billable-units 1
+```
+
+Detection is billable. Input is redacted from normal output and is not saved
+locally unless history is enabled or `--save` is present.
+
+# Export and rerun results
+
+Source: https://pangram.micr.dev/docs/how-to/export-rerun
+
+```bash
+pangram history export --format jsonl --redact-content
+pangram history rerun ANALYSIS_ID
+```
+
+Export is local and not billable. Rerun creates a fresh billable submission
+with new identity and preserves durable lineage to the saved analysis.
+
+# Install Pangram CLI
+
+Source: https://pangram.micr.dev/docs/how-to/install
+
+These commands become live when the first public release is published. Until
+then, clone the repository and build the locked Rust package for development.
+
+## macOS or Linux
+
+Download the versioned installer, inspect it, and run it:
+
+```bash
+curl --fail --location --silent --show-error \
+  https://github.com/Microck/pangram-cli/releases/latest/download/pangram-installer.sh \
+  --output pangram-installer.sh
+less pangram-installer.sh
+sh pangram-installer.sh
+```
+
+The default executable path is `$HOME/.local/bin/pangram`.
+
+## Windows
+
+Download the versioned installer, inspect it, and run it in PowerShell:
+
+```powershell
+Invoke-WebRequest `
+  https://github.com/Microck/pangram-cli/releases/latest/download/pangram-installer.ps1 `
+  -OutFile pangram-installer.ps1
+Get-Content .\pangram-installer.ps1
+.\pangram-installer.ps1
+```
+
+The default executable path is
+`%LOCALAPPDATA%\Programs\Pangram\bin\pangram.exe`.
+
+The installers verify the release archive before installation, then the
+downloaded Pangram binary verifies the signed manifest and complete archive.
+They do not edit PATH. Follow the exact PATH instruction they print when the
+install directory is not already available.
+
+# Enable and search local history
+
+Source: https://pangram.micr.dev/docs/how-to/local-history
+
+```bash
+pangram config set history.enabled true
+pangram history search 'synthetic phrase'
+```
+
+History is off by default. Enabling it stores analysis content in an
+owner-protected local SQLite database. Search is local and not billable.
+
+# Configure MCP clients
+
+Source: https://pangram.micr.dev/docs/how-to/mcp-clients
+
+```bash
+pangram mcp install --target cursor --dry-run
+pangram mcp status --format pretty
+```
+
+The installer edits only an exact owned entry and preflights all selected
+targets before the first write. It does not add optional capability gates.
+
+# Gate MCP capabilities and file access
+
+Source: https://pangram.micr.dev/docs/how-to/mcp-gates
+
+```bash
+pangram mcp --history --allow-file-root /absolute/safe/root
+```
+
+History reads, history mutations, configuration mutations, public links, and
+file roots use separate startup gates. Approved roots are opened before the
+server reads stdin and reject symlink or reparse-point traversal.
+
+# Use JSON, JSONL, TOON, and Markdown
+
+Source: https://pangram.micr.dev/docs/how-to/output-formats
+
+```bash
+pangram detect 'Synthetic text.' --format json
+pangram detect 'Synthetic text.' --format toon
+```
+
+Projection starts from the same typed result. JSON is the automation default.
+Pretty output is for terminals and sanitizes control sequences.
+
+# Generate shell completions
+
+Source: https://pangram.micr.dev/docs/how-to/shell-completions
+
+```bash
+pangram completions bash > pangram.bash
+```
+
+Supported values are `bash`, `zsh`, `fish`, `powershell`, and `elvish`.
+The script is the only stdout content.
+
+# Uninstall Pangram MCP entries
+
+Source: https://pangram.micr.dev/docs/how-to/uninstall-mcp
+
+```bash
+pangram mcp uninstall --target cursor --dry-run
+pangram mcp uninstall --target cursor
+```
+
+An entry with the same name but different command or arguments is left alone
+and reported as an ownership conflict.
+
+# Check and install updates
+
+Source: https://pangram.micr.dev/docs/how-to/updates
+
+Private `0.x` builds expose `pangram update --check`, `pangram update`, and
+`pangram update --yes`, but all three return `update_unavailable` before any
+network or state access. Public direct installs will verify an Ed25519-signed
+manifest, archive size, SHA-256, layout, receipt ownership, and target version.
+Package-manager installs remain owned by their manager.
+
+# Pangram CLI documentation
+
+Source: https://pangram.micr.dev/docs/index
+
+Pangram CLI runs Pangram AI detection and plagiarism checks from a terminal.
+It is an unofficial MIT-licensed client.
+
+## Start here
+
+- [Use the TUI](./tutorials/first-tui-analysis)
+- [Build a JSON pipeline](./tutorials/first-json-pipeline)
+- [Connect an MCP client](./tutorials/first-mcp-client)
+
+Content sent for analysis goes to Pangram. Local history is off by default.
+Every billable MCP submission requires a caller-supplied cost ceiling.
+
+# Authentication reference
+
+Source: https://pangram.micr.dev/docs/reference/authentication
+
+Precedence is `PANGRAM_API_KEY`, then the protected stored credential. Use
+`pangram auth set`, `pangram auth status`, and `pangram auth logout` to manage
+the stored value. Persistent credentials require owner-only permissions or a
+protected owner-only Windows ACL. The CLI fails closed when it cannot prove
+those permissions.
+
+# Command index
+
+Source: https://pangram.micr.dev/docs/reference/commands
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+| Command | Kind | Availability | Arguments |
+| --- | --- | --- | --- |
+| `pangram` | entrypoint | available | TEXT TEXT |
+| `pangram detect` | command | available | TEXT TEXT, --file PATH, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram plagiarism` | command | available | TEXT TEXT, --file PATH, --format FORMAT, --include-input, --save, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram analyze` | command | available | TEXT TEXT, --file PATH, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram bulk` | namespace | available | none |
+| `pangram bulk submit` | command | available | JSONL_PATH JSONL_PATH, --max-billable-units N, --dry-run, --wait, --format FORMAT, --progress MODE |
+| `pangram bulk status` | command | available | ID ID |
+| `pangram bulk wait` | command | available | ID ID, --timeout DURATION, --progress MODE |
+| `pangram bulk results` | command | available | ID ID, --offset N, --limit N, --format FORMAT |
+| `pangram task` | namespace | available | none |
+| `pangram task status` | command | available | ID ID |
+| `pangram task wait` | command | available | ID ID, --timeout DURATION, --progress MODE |
+| `pangram history` | namespace | available | none |
+| `pangram history list` | command | available | --status STATUS, --check CHECK, --limit N |
+| `pangram history show` | command | available | ID ID, --include-input, --format FORMAT |
+| `pangram history search` | command | available | QUERY QUERY, --status STATUS, --check CHECK, --limit N |
+| `pangram history delete` | command | available | ID ID, --yes |
+| `pangram history clear` | command | available | --yes |
+| `pangram history export` | command | available | --format FORMAT, --redact-content |
+| `pangram history rerun` | command | available | ID ID, --format FORMAT, --progress MODE |
+| `pangram auth` | command | available | none |
+| `pangram auth set` | command | available | --api-key VALUE, --api-key-stdin |
+| `pangram auth status` | command | available | none |
+| `pangram auth logout` | command | available | --yes |
+| `pangram mcp` | command | available | --history, --allow-history-mutations, --allow-config-mutations, --allow-public-links, --allow-file-root PATH |
+| `pangram mcp install` | command | available | --target CLIENT, --all, --server-name NAME, --dry-run |
+| `pangram mcp uninstall` | command | available | --target CLIENT, --all, --server-name NAME, --dry-run |
+| `pangram mcp status` | command | available | --format FORMAT |
+| `pangram agent` | command | available | none |
+| `pangram skills` | namespace | available | none |
+| `pangram skills list` | command | available | none |
+| `pangram skills get` | command | available | SKILL SKILL, --full |
+| `pangram skills path` | command | available | SKILL SKILL |
+| `pangram config` | namespace | available | none |
+| `pangram config list` | command | available | none |
+| `pangram config get` | command | available | KEY KEY |
+| `pangram config set` | command | available | KEY KEY, VALUE VALUE |
+| `pangram config path` | command | available | none |
+| `pangram doctor` | command | available | --format FORMAT |
+| `pangram completions` | command | available | SHELL SHELL |
+| `pangram update` | command | available | --check, --yes |
+
+# Configuration reference
+
+Source: https://pangram.micr.dev/docs/reference/configuration
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `config_version` | object | yes |
+| `history` | object | no |
+| `tui` | object | no |
+| `updates` | object | no |
+| `network` | object | no |
+
+[Open the complete JSON Schema](/schemas/config.schema.json).
+
+# Environment variables
+
+Source: https://pangram.micr.dev/docs/reference/environment
+
+| Variable | Effect |
+| --- | --- |
+| `PANGRAM_API_KEY` | Overrides the stored API key. |
+| `PANGRAM_CONFIG` | Selects a configuration file for this invocation. |
+| `PANGRAM_DATA_DIR` | Selects the local data directory. |
+| `NO_COLOR` | Disables color. |
+| `CI` | Disables interactive and automatic-update behavior. |
+
+Environment credentials never enter general configuration output.
+
+# Error catalog
+
+Source: https://pangram.micr.dev/docs/reference/errors
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+| Code | Category | Retry by default | Contextual retry |
+| --- | --- | --- | --- |
+| `input_required` | usage | no | no |
+| `input_conflict` | usage | no | no |
+| `unsupported_input` | usage | no | no |
+| `unsupported_combination` | usage | no | no |
+| `bulk_limit_exceeded` | usage | no | no |
+| `missing_api_key` | authentication | no | no |
+| `invalid_api_key` | authentication | no | no |
+| `permission_denied` | permission | no | no |
+| `payment_required` | payment | no | no |
+| `rate_limited` | rate_limit | yes | no |
+| `network_unavailable` | network | yes | no |
+| `network_timeout` | network | no | yes |
+| `wait_timeout` | network | yes | no |
+| `submission_outcome_unknown` | network | no | no |
+| `upstream_error` | upstream | no | yes |
+| `upstream_analysis_failed` | upstream | no | yes |
+| `upstream_not_found` | upstream | no | no |
+| `upstream_contract_changed` | upstream_contract | no | no |
+| `invalid_config` | local_config | no | no |
+| `insecure_config_permissions` | local_config | no | no |
+| `insecure_history_permissions` | local_history | no | no |
+| `history_disabled` | local_history | no | no |
+| `history_unavailable` | local_history | no | yes |
+| `history_corrupt` | local_history | no | no |
+| `history_write_failed` | local_history | no | yes |
+| `local_task_unresolvable` | local_history | no | no |
+| `mcp_capability_required` | permission | no | no |
+| `mcp_root_required` | permission | no | no |
+| `mcp_path_outside_root` | permission | no | no |
+| `update_unavailable` | update | no | no |
+| `update_not_owned` | update | no | no |
+| `update_verification_failed` | update | no | no |
+| `update_replace_failed` | update | no | yes |
+
+# Exit codes
+
+Source: https://pangram.micr.dev/docs/reference/exit-codes
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+- `0`
+- `1`
+- `2`
+- `3`
+- `4`
+- `5`
+- `6`
+- `7`
+- `130`
+
+# History storage
+
+Source: https://pangram.micr.dev/docs/reference/history-storage
+
+History uses one SQLite database beneath the platform data directory. It is
+off by default and stores plaintext content only after explicit enablement or
+`--save`. The database, WAL, shared-memory sidecar, and parent directory use
+owner-only permissions or ACLs. Schema drift and unsafe sidecars fail closed.
+
+# MCP resources and capabilities
+
+Source: https://pangram.micr.dev/docs/reference/mcp-resources
+
+The stdio server implements MCP `2026-07-28`. Static resources expose the
+canonical output schema, error reference, and embedded Pangram skill. Resource
+and tool inventories return `ttlMs: 0` and `cacheScope: private`. The server
+has no prompts, subscriptions, HTTP transport, or experimental Tasks extension.
+
+# MCP tools
+
+Source: https://pangram.micr.dev/docs/reference/mcp-tools
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+Protocol: `2026-07-28`.
+
+| Tool | Purpose | Read only | Open world |
+| --- | --- | --- | --- |
+| `detect_text` | Detect AI-written text with Pangram 4. | no | yes |
+| `check_plagiarism` | Check text for plagiarism against online sources. | no | yes |
+| `analyze_text` | Run Pangram 4 AI detection and plagiarism checks on the same text. | no | yes |
+| `get_task` | Get one Pangram task without waiting. | yes | yes |
+| `wait_task` | Wait for one Pangram task to reach a terminal state. | yes | yes |
+| `submit_bulk` | Submit inline items or one approved JSONL file to Pangram 4. | no | yes |
+| `get_bulk` | Get one Pangram bulk job without waiting. | yes | yes |
+| `wait_bulk` | Wait for one Pangram bulk job to reach a terminal state. | yes | yes |
+| `get_bulk_results` | Get one explicit results page for a Pangram bulk job. | yes | yes |
+| `check_update` | Check for a Pangram CLI update without installing it. | yes | yes |
+| `history_list` | List saved local analysis summaries. | yes | no |
+| `history_search` | Search saved local analysis summaries with literal text. | yes | no |
+| `history_get` | Get one saved local analysis, redacted by default. | yes | no |
+| `history_rerun` | Submit the saved input from one local analysis again. | no | yes |
+| `history_delete` | Delete one saved local analysis. | no | no |
+| `history_clear` | Delete all saved local analyses. | no | no |
+| `update_config` | Set one supported non-secret Pangram CLI configuration key. | no | no |
+
+[Open the generated tool contracts](/schemas/mcp-tools.json).
+
+# Output schema
+
+Source: https://pangram.micr.dev/docs/reference/output-schema
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+Every structured CLI and MCP result starts from the canonical typed envelope.
+
+[Open the complete output JSON Schema](/schemas/output.schema.json).
+
+# Supported platforms and packages
+
+Source: https://pangram.micr.dev/docs/reference/platforms-packages
+
+Contracted targets are Linux x86-64 and ARM64, macOS x86-64 and Apple Silicon,
+and Windows x86-64. No public package channel is released yet. Planned public
+channels are GitHub Releases, direct POSIX and PowerShell installers, npm,
+Homebrew, and Scoop. A target becomes supported only after its native smoke
+test passes.
+
+# Progress events
+
+Source: https://pangram.micr.dev/docs/reference/progress
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+`--progress jsonl` writes canonical progress envelopes to stderr. Final command output remains on stdout. Progress never includes credentials, submitted content, plagiarism matches, or public links.
+
+[Open the complete output JSON Schema](/schemas/output.schema.json).
+
+# TUI shortcuts
+
+Source: https://pangram.micr.dev/docs/reference/tui-shortcuts
+
+`Tab` moves focus, `Enter` activates the focused action, and `Esc` closes the
+current overlay or moves back through onboarding. The settings screen selects
+the regular or Vim-style keymap. Press `?` for the in-product shortcut list,
+which remains the exact source for context-specific keys.
+
+Left-click routes, controls, settings, and visible Active or History rows to
+use the same actions as the keyboard. The wheel moves one row through Active,
+History, and result views. A click outside an overlay closes it when `Esc`
+would do the same.
+
+# Update manifest
+
+Source: https://pangram.micr.dev/docs/reference/update-manifest
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+The detached Ed25519 signature covers the exact downloaded manifest bytes.
+
+| Field | Contract |
+| --- | --- |
+| `schema_version` | 1 |
+| `channel` | stable |
+| `version` | string |
+| `published_at` | #/$defs/UtcTimestamp |
+| `notes_url` | string |
+| `minimum_updater_version` | string |
+| `artifacts` | array |
+
+[Open the complete update-manifest JSON Schema](/schemas/update-manifest.schema.json).
+
+# Your first JSON pipeline
+
+Source: https://pangram.micr.dev/docs/tutorials/first-json-pipeline
+
+```bash
+printf '%s\n' 'A synthetic sample for automation.' | pangram - > result.json
+jq '.command, .data.analyses[0].status' result.json
+```
+
+The analysis request is billable. The canonical envelope goes to stdout.
+Progress and interactive text never enter stdout. A nonzero exit code means
+the command did not produce a complete success.
+
+# Connect your first MCP client
+
+Source: https://pangram.micr.dev/docs/tutorials/first-mcp-client
+
+Preview the exact client edit first:
+
+```bash
+pangram mcp install --target cursor --dry-run
+pangram mcp install --target cursor
+```
+
+Restart the client, then call `detect_text` with synthetic `text` and a
+positive `max_billable_units`. The tool is billable and cannot submit above
+that ceiling. Default MCP startup exposes no history mutations, public links,
+or file roots.
+
+# Your first TUI analysis
+
+Source: https://pangram.micr.dev/docs/tutorials/first-tui-analysis
+
+## 1. Store the API key
+
+```bash
+printf '%s\n' "$PANGRAM_API_KEY" | pangram auth set --api-key-stdin
+```
+
+## 2. Open the TUI
+
+```bash
+pangram
+```
+
+Choose whether the TUI may check for CLI updates. Enter synthetic text, then
+submit it. The request is billable. The TUI shows the overall label and the
+ordered segment evidence returned by Pangram. Local history stays off unless
+you enable it.
+

@@ -50,8 +50,8 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
                     result.num_human_segments,
                 )));
                 for (index, segment) in result.segments.iter().enumerate() {
-                    lines.push(Line::raw(format!(
-                        "{}. {} - {:.1}% AI assistance | Text: {} | Confidence: {} | Offsets: {}..{} | Words: {} | Tokens: {} | Humanizer score: {:.1}% | Humanized: {}",
+                    let mut summary = format!(
+                        "{}. {} - {:.1}% AI assistance | Text: {} | Confidence: {} | Offsets: {}..{} | Words: {} | Tokens: {}",
                         index + 1,
                         sanitize_single_line(segment.label.as_str()),
                         segment.ai_assistance_score.get() * 100.0,
@@ -61,9 +61,17 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
                         segment.end_index,
                         segment.word_count,
                         segment.token_length,
-                        segment.humanizer_score.get() * 100.0,
-                        if segment.is_humanized { "yes" } else { "no" },
-                    )));
+                    );
+                    if let (Some(score), Some(is_humanized)) =
+                        (segment.humanizer_score, segment.is_humanized)
+                    {
+                        summary.push_str(&format!(
+                            " | Humanizer score: {:.1}% | Humanized: {}",
+                            score.get() * 100.0,
+                            if is_humanized { "yes" } else { "no" },
+                        ));
+                    }
+                    lines.push(Line::raw(summary));
                 }
                 if let Some(link) = &result.dashboard_link {
                     lines.push(Line::raw(format!(
@@ -327,8 +335,8 @@ mod tests {
                     end_index: 29,
                     word_count: 5,
                     token_length: 7,
-                    humanizer_score: Fraction::new(0.31).expect("valid fraction"),
-                    is_humanized: true,
+                    humanizer_score: Some(Fraction::new(0.31).expect("valid fraction")),
+                    is_humanized: Some(true),
                 },
                 Segment {
                     text: "second segment".to_owned(),
@@ -339,8 +347,8 @@ mod tests {
                     end_index: 43,
                     word_count: 2,
                     token_length: 3,
-                    humanizer_score: Fraction::new(0.0).expect("valid fraction"),
-                    is_humanized: false,
+                    humanizer_score: Some(Fraction::new(0.0).expect("valid fraction")),
+                    is_humanized: Some(false),
                 },
             ],
             dashboard_link: Some("https://dashboard.test/result\u{1b}[0m\nforged".to_owned()),

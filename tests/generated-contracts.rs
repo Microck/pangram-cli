@@ -167,12 +167,15 @@ fn mcp_tool_inventory_is_ordered_closed_and_phase_scoped() {
         names,
         [
             "detect_text",
+            "check_plagiarism",
+            "analyze_text",
             "get_task",
             "wait_task",
             "submit_bulk",
             "get_bulk",
             "wait_bulk",
             "get_bulk_results",
+            "check_update",
             "history_list",
             "history_search",
             "history_get",
@@ -182,10 +185,7 @@ fn mcp_tool_inventory_is_ordered_closed_and_phase_scoped() {
             "update_config",
         ]
     );
-    assert!(names.iter().all(|name| !matches!(
-        *name,
-        "detect_files" | "check_plagiarism" | "analyze_text" | "check_update"
-    )));
+    assert!(names.iter().all(|name| !matches!(*name, "detect_files")));
     assert!(names.iter().all(|name| !name.starts_with("test_")));
 
     for tool in tools {
@@ -270,12 +270,15 @@ fn mcp_output_schemas_specialize_command_and_data_root() {
     let tools = inventory["tools"].as_array().unwrap();
     let expected = [
         ("detect_text", "detect"),
+        ("check_plagiarism", "plagiarism"),
+        ("analyze_text", "analyze"),
         ("get_task", "task_status"),
         ("wait_task", "task_wait"),
         ("submit_bulk", "bulk_submit"),
         ("get_bulk", "bulk_status"),
         ("wait_bulk", "bulk_wait"),
         ("get_bulk_results", "bulk_results"),
+        ("check_update", "update_check"),
         ("history_list", "history_list"),
         ("history_search", "history_search"),
         ("history_get", "history_show"),
@@ -570,7 +573,7 @@ fn generated_cli_help_lists_the_activated_bulk_and_task_surface() {
         .map(|line| line.split_whitespace().next().unwrap())
         .collect();
 
-    for name in ["bulk", "task"] {
+    for name in ["plagiarism", "analyze", "bulk", "task"] {
         assert!(
             listed.contains(&name),
             "generated cli-help.txt must list the available {name} command"

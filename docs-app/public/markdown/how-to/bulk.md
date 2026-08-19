@@ -1,0 +1,10 @@
+# Submit and retrieve bulk work
+
+```bash
+pangram bulk submit items.jsonl --max-billable-units 20 --dry-run
+pangram bulk submit items.jsonl --max-billable-units 20 --wait
+pangram bulk results BULK_ID --offset 0 --limit 100
+```
+
+Submission is billable. Status and result retrieval are not. Upstream bulk
+results have a documented 48-hour retention window.

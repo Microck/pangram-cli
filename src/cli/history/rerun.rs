@@ -38,10 +38,11 @@ pub(super) fn execute(
     // integrity rule before credential lookup or network work. Keep the text
     // only because automatic history persistence needs the submitted content
     // after the analyzer consumes the private request.
-    let analysis_request = match crate::analysis::AnalysisRequest::from_saved_rerun(&original) {
-        Some(request) => request,
-        None => return failed(output, started, super::unresolvable()),
-    };
+    let (analysis_request, mode) =
+        match crate::analysis::AnalysisRequest::from_saved_rerun(&original) {
+            Some(prepared) => prepared,
+            None => return failed(output, started, super::unresolvable()),
+        };
     let text = analysis_request.text().to_owned();
 
     let analyzer = match analyzer_source.resolve(service) {
@@ -66,46 +67,51 @@ pub(super) fn execute(
     detect::install_sigint_driver();
     let result = runtime.block_on(async {
         let bridge = tokio::spawn(detect::bridge_sigint(stop.token().clone()));
-        let outcome = match analyzer.start_full(analysis_request, stop.token()).await {
-            Ok(crate::analysis::Accepted::Terminal(analysis)) => RerunFlow::Completed(*analysis),
-            Ok(crate::analysis::Accepted::Task(accepted)) => {
-                let running = analyzer.running(accepted);
-                match running
-                    .observe(
-                        crate::analysis::WaitOptions::UNBOUNDED,
-                        |event| emit_progress(progress, event),
-                        stop,
-                    )
-                    .await
-                {
-                    Ok(Ok(analysis)) => RerunFlow::Completed(analysis),
-                    Ok(Err(error)) => RerunFlow::Failed(error.into_error()),
-                    Err(interrupted) => RerunFlow::Interrupted(
-                        stopped_observation_error(),
-                        detect::identity_note(&interrupted.identity),
+        let outcome = match mode {
+            crate::analysis::TextAnalysisMode::Detection => {
+                run_detection_rerun(&analyzer, analysis_request, stop, progress).await
+            }
+            crate::analysis::TextAnalysisMode::Plagiarism => {
+                let retained = analysis_request.clone();
+                match analyzer.plagiarism(analysis_request, stop.token()).await {
+                    Ok(analysis) => RerunFlow::Completed(analysis),
+                    Err(error) if stop.token().is_cancelled() => RerunFlow::Interrupted(
+                        error.into_error(),
+                        "interrupted during plagiarism submission".to_owned(),
                     ),
+                    Err(error)
+                        if matches!(error.error().code(), ErrorCode::SubmissionOutcomeUnknown) =>
+                    {
+                        RerunFlow::Completed(crate::cli::phase7::failed_plagiarism_member(
+                            &retained,
+                            error.into_error(),
+                        ))
+                    }
+                    Err(error) => RerunFlow::Failed(error.into_error()),
                 }
             }
-            Err(failure) => {
-                let crate::analysis::SubmissionFailure {
-                    task_error,
-                    request,
-                } = failure;
-                let error = task_error.into_error();
-                if stop.token().is_cancelled() {
-                    RerunFlow::Interrupted(
-                        error,
-                        "interrupted; reconcile using the canonical error identity".to_owned(),
-                    )
-                } else if matches!(error.code(), ErrorCode::SubmissionOutcomeUnknown) {
-                    RerunFlow::Completed(detect::failed_member(
-                        &request.expect("an ambiguous submission retains its request"),
-                        error,
-                    ))
-                } else {
-                    RerunFlow::Failed(error)
-                }
-            }
+            crate::analysis::TextAnalysisMode::Combined => match analyzer
+                .analyze_combined(
+                    analysis_request,
+                    crate::analysis::WaitOptions::UNBOUNDED,
+                    |observation| {
+                        if let crate::analysis::CombinedAnalysisObservation::Progress(event) =
+                            observation
+                        {
+                            emit_progress(progress, event);
+                        }
+                    },
+                    stop,
+                )
+                .await
+            {
+                Ok(Ok(analysis)) => RerunFlow::Completed(analysis),
+                Ok(Err(error)) => RerunFlow::Failed(error.into_error()),
+                Err(interrupted) => RerunFlow::Interrupted(
+                    stopped_observation_error(),
+                    detect::identity_note(&interrupted.identity),
+                ),
+            },
         };
         bridge.abort();
         outcome
@@ -125,9 +131,10 @@ pub(super) fn execute(
             );
         }
     };
+    let retained_input = crate::history::RetainedInput::Text(text);
     let (mut analyses, _) = detect::save::persist_analyses(
         vec![analysis],
-        std::slice::from_ref(&text),
+        std::slice::from_ref(&retained_input),
         detect::SaveStoreGate::Automatic,
         service,
     );
@@ -137,6 +144,55 @@ pub(super) fn execute(
         started,
         analyses.pop().expect("one rerun analysis"),
     )
+}
+
+async fn run_detection_rerun(
+    analyzer: &crate::analysis::Analyzer,
+    analysis_request: crate::analysis::AnalysisRequest,
+    stop: crate::analysis::StopObserving,
+    progress: detect::ProgressMode,
+) -> RerunFlow {
+    match analyzer.start_full(analysis_request, stop.token()).await {
+        Ok(crate::analysis::Accepted::Terminal(analysis)) => RerunFlow::Completed(*analysis),
+        Ok(crate::analysis::Accepted::Task(accepted)) => {
+            let running = analyzer.running(accepted);
+            match running
+                .observe(
+                    crate::analysis::WaitOptions::UNBOUNDED,
+                    |event| emit_progress(progress, event),
+                    stop,
+                )
+                .await
+            {
+                Ok(Ok(analysis)) => RerunFlow::Completed(analysis),
+                Ok(Err(error)) => RerunFlow::Failed(error.into_error()),
+                Err(interrupted) => RerunFlow::Interrupted(
+                    stopped_observation_error(),
+                    detect::identity_note(&interrupted.identity),
+                ),
+            }
+        }
+        Err(failure) => {
+            let crate::analysis::SubmissionFailure {
+                task_error,
+                request,
+            } = failure;
+            let error = task_error.into_error();
+            if stop.token().is_cancelled() {
+                RerunFlow::Interrupted(
+                    error,
+                    "interrupted; reconcile using the canonical error identity".to_owned(),
+                )
+            } else if matches!(error.code(), ErrorCode::SubmissionOutcomeUnknown) {
+                RerunFlow::Completed(detect::failed_member(
+                    &request.expect("an ambiguous submission retains its request"),
+                    error,
+                ))
+            } else {
+                RerunFlow::Failed(error)
+            }
+        }
+    }
 }
 
 fn failed(

@@ -127,7 +127,8 @@ AI detection MUST preserve:
 - AI, AI-assisted, and human fractions
 - AI, AI-assisted, and human segment counts
 - ordered segment evidence
-- segment humanizer score and thresholded humanized decision
+- segment humanizer score and thresholded humanized decision for Pangram 4
+  text and bulk results; verified file results omit both fields
 - Pangram's upstream version value
 - upstream task identity and timing
 - public dashboard link when explicitly requested
@@ -158,8 +159,8 @@ Plagiarism MUST preserve:
 - similarity scores
 
 The current official API reference defines `plagiarized_sentences` as an
-integer count. The implementation follows that contract. A live authorized
-response must still confirm the shape before public conformance.
+integer count. A live authorized response confirmed that shape on 2026-08-24.
+The implementation follows that contract and rejects a list or missing value.
 
 ### 5.3 Combined analysis
 
@@ -203,15 +204,21 @@ response-pagination contract.
 UTF-8 text files use the text endpoint and support every applicable check.
 PDF, DOCX, and RTF files use the file endpoint for AI detection.
 
-Binary document implementation remains behind live conformance because the
-current official sources conflict. The Mintlify API reference documents an
-array containing only `public_dashboard_link`, while the Pangram SDK v1.0.0
-README documents extracted text, prediction fields, windows, `filename`, and
-an optional `dashboard_link`.
+Live RTF, PDF, and DOCX conformance on 2026-08-24 resolved the conflicting
+official sources in favor of the Pangram SDK's rich response: an ordered array
+with extracted text, prediction fields, windows, `filename`, and no public link
+when the request asks for none. File windows omit Pangram 4-only humanizer
+fields. A dashboard-link-only response fails upstream contract validation.
 
 The product MUST NOT invent client-side PDF, DOCX, or RTF text extraction as a
 fallback. Plagiarism and combined analysis for binary documents remain blocked
 until Pangram documents or confirms a supported contract.
+
+Pangram does not publish a pre-submission binary-file billable-unit estimator.
+The CLI accepts binary detection without a ceiling, but rejects
+`--max-billable-units` for binary input rather than guessing from file size or
+extracting content locally. MCP binary detection remains unavailable while MCP
+requires a billable-unit ceiling.
 
 ## 6. Status model
 
@@ -286,9 +293,53 @@ and focus. The resolved fox shrinks after the intro and MUST NOT consume
 persistent workspace. Sparse separators define structure; the interface MUST
 NOT box every value into dashboard-style cards.
 
-At 80 to 119 columns, the route rail becomes top tabs and the inspector moves
-into the center flow below its primary content. Below 80x24, a resize overlay
-preserves application state.
+The application palette is orange-first: Pangram orange `#FF6106` owns brand,
+focus, actions, headings, and active input rules over a dark neutral background.
+The default truecolor background is `#111111`; the interface does not require
+or depend on pure black, including in the fixed ANSI palette. Pangram pink
+`#FECAB9` marks result evidence, while white supports body text. Charcoal
+`#1C1C1C` surfaces are limited to navigation, the composer, compact controls,
+and modal overlays. The workspace, inspector, and command bar remain on the
+base canvas. Selected options use orange fill with dark text from the first
+rendered frame, even when another control owns keyboard focus, while inactive
+options use compact `#2A2A2A` targets. Toggle labels and values form one compact
+target. The primary action remains orange when idle, and focus adds a marker.
+The TUI does not use terminal underlining; focus and selection use markers,
+weight, foreground color, or fill instead. `NO_COLOR` and `TERM=dumb` remove
+foreground and background color without removing the ASCII focus, selection,
+availability, or action cues.
+
+At 80 to 119 columns, a one-row header combines a compact Pangram wordmark with
+top tabs. Before submission, Analyze combines its selectors, composer, privacy
+controls, estimate, and primary action in one bottom-aligned dock. Result and
+history inspector content may still move into the center flow. Below 80x24, a
+resize overlay preserves application state.
+
+Route tabs and the bottom command bar each occupy one row. Inactive route tabs
+use compact charcoal targets with one cell of padding on each side and one
+unfilled cell between targets. The selected tab keeps the orange treatment
+from the first frame, and the wide route rail keeps its focus marker outside
+the target fill. Analyze places each
+selector group on one row, uses a compact composer with a separate label and a
+single top rule, then aligns toggles, estimate, and Submit in one control row.
+The dock stays at the bottom of the workspace. On tall terminals, a centered
+empty-state prompt makes the open canvas above it intentional. Full rectangular
+borders are reserved for modal overlays.
+The narrow inspector sizes to its route content instead of reserving a fixed
+band. The command bar shows navigation, help, and at most one action for the
+current focus; it never repeats one key for multiple simultaneous actions. In
+the wide layout, the route-rail surface and separator reach the bottom edge,
+while the command band begins at the center workspace edge and its controls
+align with the workspace content.
+
+Workspace content uses a two-column horizontal inset and begins after one
+blank row. Related controls have one blank row between them, unrelated groups
+have two, and text begins one blank row inside a rule or border. Analyze keeps
+this rhythm in both layouts; dense result and history lists may remain one row
+per item when height is limited. Modal content has one row of vertical and two
+columns of horizontal inner padding. Selection markers keep a fixed slot so
+changing state does not move adjacent labels. Result rows wrap whole words
+where possible. Only an overlong token splits across rows.
 
 ### 8.2 Analyze workflow
 
@@ -298,7 +349,8 @@ The Analyze screen contains:
 - input selector: text or files
 - multiline text composer
 - validated file path field and pre-submission file queue
-- public-link toggle, unchecked for each submission
+- public-link toggle, unchecked for each submission and unavailable for
+  plagiarism-only work
 - manual-save toggle, unchecked unless the user selects it
 - estimated word and billable-unit summary
 - submit control
@@ -326,9 +378,13 @@ NOT carry meaning alone.
 
 Active shows in-session operations and saved unfinished analyses. Ephemeral
 analyses disappear after process exit.
+When Active is empty, a centered state includes one real Analyze action that
+returns focus to the composer. Active rows remain dense when work exists.
 
 History provides search, filters, detail, rerun, export, delete, and save-state
 information. It MUST always identify itself as local Pangram CLI history.
+Search, filters, and contextual actions use compact filled targets with stable
+focus-marker gutters. Empty history copy is centered below those controls.
 
 ### 8.5 Settings
 
@@ -341,6 +397,10 @@ Settings contains:
 - motion
 - updates
 - diagnostics
+
+Actionable settings render as compact filled label-and-value targets separated
+by blank rows. Diagnostics remains plain explanatory content because it is not
+an in-place action.
 
 There is no theme marketplace, project profile, or endpoint configuration.
 
@@ -356,58 +416,60 @@ normally in an active text field.
 Destructive actions require an action menu and confirmation. A single `d`
 keypress MUST NOT delete data.
 
-Mouse input may supplement keyboard input but MUST NOT be required.
+Mouse input supplements but never replaces keyboard input. Left click switches
+routes, focuses fields and result viewports, activates visible controls, and
+selects visible list rows. The wheel moves the Active list, History list, or
+result viewport under the pointer. Pointer actions use the same reducer,
+confirmation, pending-operation, and billing gates as their keyboard
+equivalents. Unsupported buttons and clicks outside visible targets do
+nothing.
 
 ### 8.7 Intro
 
-The intro is a terminal-native recreation of the supplied Pangram fox-mark
-motion reference. It uses precomputed terminal-cell frames, not bundled video,
-an image decoder, or Droid frame data.
+The intro is a terminal-native recreation of the approved Pangram fox GIF. It
+uses precomputed terminal-cell frames, not bundled runtime media, an image
+decoder, or third-party frame data.
 
 The default `tui.intro = "once"` plays the intro on the first eligible
 full-motion launch. `always` replays it on every eligible launch, and `off`
 opens Analyze immediately. Intro frequency and motion level are separate
 settings.
 
-The full-motion sequence is exactly 56 frames at 20 frames per second for a
-nominal 2.8 seconds:
+The generator resamples one 630 ms source cycle into 14 frames. Full motion
+repeats that cycle four times for exactly 56 frames at 20 frames per second and
+2.8 seconds. The final eight frames dissolve by decreasing terminal-cell
+density. While the fox runs, the backdrop reaches the TUI canvas color over the
+first 900 ms. After the fourth cycle, the real Analyze screen fades in over six
+50 ms steps. The complete presentation lasts 3.1 seconds.
 
-1. from 0 to 800 ms, the fox mark settles from 90 percent scale, 24 source
-   pixels low, and 2.2 degrees counterclockwise
-2. from 150 to 700 ms, the orange center unfolds upward from a bottom pivot
-3. from 280 to 920 ms, the pink facets unfold outward with a 60 ms stagger
-4. from 920 to 2,380 ms, the resolved mark holds without looping
-5. from 2,380 to 2,800 ms, the mark dissolves by decreasing terminal-cell
-   density and reveals Analyze
-
-Transform phases use `cubic-bezier(0.175, 0.885, 0.32, 1.1)`. The final
-dissolve is linear.
-
-The terminal renderer uses a 32x16 full mark and a 20x10 compact mark. It uses
-Pangram orange `#FF6106` and pink `#FECAB9` when truecolor is available,
-nearest ANSI colors otherwise, and density alone when color is disabled.
-Terminals without the required glyph support use `#`, `*`, `.`, and spaces.
+The terminal renderer uses one centered 72x16 mark. Pangram orange `#FF6106`
+is dominant, with pink `#FECAB9`, cream, and dark-orange detail. ANSI terminals
+use fixed indexed equivalents. `NO_COLOR` keeps the silhouette with ASCII
+`.`, `+`, `#`, and space density glyphs.
 
 Frame selection derives from monotonic elapsed time in 50 ms steps. A delayed
-render skips stale frames instead of extending the sequence.
+render skips stale frames instead of extending the sequence. The Analyze fade
+uses fixed samples of `cubic-bezier(0.23, 1, 0.32, 1)` and the normal TUI
+renderer, so it cannot drift into a second layout path.
 
 The intro MUST NOT display fake classifications, scores, or analysis progress.
 Escape, Enter, or Space skips it and the skip key is consumed.
 
-Reduced mode performs no timed animation. It places the resolved fox mark in
-the first interactive Analyze render, which is already usable, then uses the
-normal application header on the next input or state change. Motion off skips
-directly to Analyze.
+Reduced mode and motion off skip directly to Analyze. Neither substitutes a
+second timed or blocking presentation. A skip key or resize during either the
+fox sequence or the Analyze fade reveals the final TUI immediately.
 The intro is also suppressed outside an interactive TTY, under `CI`, with
-`TERM=dumb`, or until the terminal reaches 80x24.
+`TERM=dumb`, or until the terminal reaches 100x28. Falling below that floor
+during playback opens Analyze and leaves one-time state unconsumed.
 
-The supplied media is a design reference, not a runtime asset. Public source
-or release artifacts MUST include the fox artwork or derived frames only after
-written Pangram permission covers logo and trademark use.
+The approved GIF is a development source, not a runtime asset. The software
+license does not cover the source artwork or generated derivatives; public
+source and release artifacts carry the separate artwork notice.
 
 The normative source-art, provenance, rights, and visual acceptance requirements
-are in [intro-art-contract.md](intro-art-contract.md). Missing source geometry
-blocks frame generation, not the core CLI, TUI reducer, or terminal lifecycle.
+are in [intro-art-contract.md](intro-art-contract.md). Missing or invalid
+generated art blocks only the intro, not the core CLI, TUI reducer, or terminal
+lifecycle.
 
 ### 8.8 First launch
 
@@ -570,6 +632,9 @@ Pangram's documented research snapshot states:
 - realtime detection limit: 5 requests per second
 - Pangram 4 text API price: USD 0.05 per started 100 words
 - each valid Pangram 4 text request costs at least one unit
+- Pangram's current general credit contract charges 5 credits for one
+  plagiarism check; the Developer pricing page does not state a different
+  plagiarism rate, so local preflight uses 5 units as the conservative bound
 
 The Pangram SDK v1.0.0 tag documents the exact text and job-wide bulk
 model-selection request field (`model` set to `pangram-4`). Pangram's official
@@ -578,6 +643,8 @@ started 100-word block, with a minimum of one, and caps a request at 1,000
 units. The product MUST NOT reuse the Pangram 3 default or its 1,000-word
 estimator. Text and bulk submission send the explicit selector. Bulk preflight
 sums item units and enforces both the caller's ceiling and Pangram's limit.
+Plagiarism preflight adds 5 units per submitted text. Combined analysis adds
+that fixed plagiarism estimate to the text-detection estimate.
 
 Pricing is documentation, not a hard-coded monetary promise. The product
 estimates word counts and units but MUST NOT report an exact charged amount
@@ -655,9 +722,9 @@ The complete MCP tool contract is in [mcp-contract.md](mcp-contract.md).
 | Multilingual model behavior | Blocked pending Pangram 4 REST conformance |
 | Text public dashboard link | Blocked with text submission, then opt-in |
 | Bulk AI detection | Implemented against the documented Pangram 4 contract; blocked from public support pending live conformance |
-| PDF, DOCX, and RTF AI detection | Blocked pending live response conformance |
-| Plagiarism text check | Blocked from public conformance pending field validation |
-| Combined AI and plagiarism report | Local composition of supported checks |
+| PDF, DOCX, and RTF AI detection | Live and loopback verified through `detect` |
+| Plagiarism text check | Live and loopback verified through CLI, TUI, and MCP |
+| Combined AI and plagiarism report | Loopback verified through CLI, TUI, and MCP |
 | Local history | Local substitution, not Pangram account history |
 | Local exports | Local substitution, not Pangram-rendered reports |
 | Pangram account history management | Unavailable through documented APIs |
@@ -711,13 +778,15 @@ Public v1 requires:
 5. passing CLI, TUI, MCP, storage, update, and release contracts
 6. artifacts bound by the signed manifest and verified installers for every
    required target
-7. complete Fumadocs deployment at `pangram.micr.dev`
+7. production landing page at `pangram.micr.dev/` with the complete Fumadocs
+   site at `pangram.micr.dev/docs`
 8. owned registry and package-manager names
 9. accepted generated intro frame art
 10. no unresolved P0 or P1 test, security, or maintainability findings
 
-Private `0.x` development milestones perform no public distribution or update
-networking.
+Stable `0.x` releases may be distributed with the same exact-version authority
+and release gates as later versions. They perform no update networking. Signed
+self-update begins at `1.0.0`.
 
 ## 18. Explicit non-goals
 

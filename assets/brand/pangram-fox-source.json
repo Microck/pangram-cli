@@ -1,0 +1,15 @@
+{
+  "original_filename": "8csqv03g66yk1sq3.gif",
+  "acquired_on": "2026-08-26",
+  "source_owner": "Pangram Labs",
+  "source_url": "https://litter.catbox.moe/8csqv03g66yk1sq3.gif",
+  "sha256": "fa806f95e5775e9bc4ffda599a540910edd2042115eae80729308b02d89a542e",
+  "width_px": 1772,
+  "height_px": 709,
+  "frame_count": 9,
+  "frame_delay_ms": 70,
+  "cycle_duration_ms": 630,
+  "permission_reference": "User confirmation of Pangram authorization and source approval on 2026-08-26",
+  "license_boundary": "The source and generated derivatives are not covered by the repository MIT license.",
+  "generator": "tools/generate-intro-frames.rs"
+}

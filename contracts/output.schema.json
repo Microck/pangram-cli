@@ -777,11 +777,17 @@
         },
         "humanizer_score": {
           "description": "Pangram's per-segment estimate that a humanizer modified the text.",
-          "$ref": "#/$defs/Fraction"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fraction"
+            }
+          ]
         },
         "is_humanized": {
           "description": "Pangram's thresholded humanizer decision, preserved without local derivation.",
-          "type": "boolean"
+          "type": [
+            "boolean"
+          ]
         }
       },
       "required": [
@@ -792,9 +798,7 @@
         "start_index",
         "end_index",
         "word_count",
-        "token_length",
-        "humanizer_score",
-        "is_humanized"
+        "token_length"
       ]
     },
     "Confidence": {

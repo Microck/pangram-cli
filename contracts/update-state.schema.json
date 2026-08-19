@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pangram local update-check state v1",
+  "description": "Local TUI update-check state. CLI and MCP never consult it automatically.",
   "type": "object",
   "properties": {
     "schema_version": {
       "const": "1"
     },
     "last_checked_at": {
-      "type": "string",
-      "format": "date-time",
+      "$ref": "#/$defs/UtcTimestamp",
       "pattern": "Z$"
     },
     "etag": {
@@ -28,6 +28,14 @@
     "schema_version",
     "last_checked_at"
   ],
+  "$defs": {
+    "UtcTimestamp": {
+      "description": "An absolute UTC timestamp in the canonical `Z` form.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  },
   "$id": "https://pangram.micr.dev/schemas/update-state-v1.json",
   "x-contract-owner": "rust:microck_pangram_cli::contracts"
 }

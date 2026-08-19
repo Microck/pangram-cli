@@ -168,7 +168,7 @@ pub(super) fn bulk_submit(
                         accepted_at,
                     }
                 } else {
-                    Analyzed::Accepted(running)
+                    Analyzed::Accepted(Box::new(running))
                 }
             }
             Err(failure) => {
@@ -278,7 +278,7 @@ fn bulk_json_format_error() -> CanonicalError {
 /// failure or interruption.
 /// Failed/Interrupted carry a pre-acceptance canonical error.
 enum Analyzed {
-    Accepted(crate::analysis::RunningBulk),
+    Accepted(Box<crate::analysis::RunningBulk>),
     Observed {
         outcome: Result<
             Result<BulkCollection, crate::analysis::BulkAnalysisError>,

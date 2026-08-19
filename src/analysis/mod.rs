@@ -48,13 +48,18 @@ pub use bulk::{
 };
 pub use config::{AnalysisConfig, PollPolicy, RetryPolicy, WaitOptions};
 pub use handle::{
-    AnalysisProgress, Analyzer, InterruptedAnalysis, OperationIdentity, RunningAnalysis,
-    StopObserving,
+    AnalysisProgress, Analyzer, CombinedAnalysisObservation, InterruptedAnalysis,
+    OperationIdentity, RunningAnalysis, StopObserving,
 };
+pub use normalize::NormalizedFile;
 pub(crate) use task::canonical_text_word_count;
-pub use task::{Accepted, AcceptedInput, AnalysisRequest, AnalysisResult, TaskError};
+pub use task::{
+    Accepted, AcceptedInput, AnalysisRequest, AnalysisResult, FileAnalysisRequest,
+    PLAGIARISM_BILLABLE_UNITS, TaskError, TextAnalysisMode,
+};
 pub use upstream::{
-    AcceptedBulk, AnalysisError, SubmissionFailure, UpstreamClient, UpstreamEndpoints,
+    AcceptedBulk, AnalysisError, FileFormat, FileUpload, SubmissionFailure, UpstreamClient,
+    UpstreamEndpoints,
 };
 
 pub use crate::config::MAX_REQUESTS_PER_SECOND;

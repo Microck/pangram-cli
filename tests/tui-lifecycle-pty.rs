@@ -16,7 +16,9 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
 const ENABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
+const ENABLE_MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h";
 const DISABLE_BRACKETED_PASTE: &[u8] = b"\x1b[?2004l";
+const DISABLE_MOUSE_CAPTURE: &[u8] = b"\x1b[?1000l";
 const LEAVE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 
@@ -200,6 +202,16 @@ fn assert_terminal_restored(outcome: &PtyOutcome) {
         .windows(DISABLE_BRACKETED_PASTE.len())
         .position(|bytes| bytes == DISABLE_BRACKETED_PASTE)
         .expect("the TUI disables bracketed paste");
+    let enable_mouse = outcome
+        .transcript
+        .windows(ENABLE_MOUSE_CAPTURE.len())
+        .position(|bytes| bytes == ENABLE_MOUSE_CAPTURE)
+        .expect("the TUI enables mouse capture");
+    let disable_mouse = outcome
+        .transcript
+        .windows(DISABLE_MOUSE_CAPTURE.len())
+        .position(|bytes| bytes == DISABLE_MOUSE_CAPTURE)
+        .expect("the TUI disables mouse capture");
     let leave = outcome
         .transcript
         .windows(LEAVE_ALTERNATE_SCREEN.len())
@@ -208,8 +220,10 @@ fn assert_terminal_restored(outcome: &PtyOutcome) {
 
     assert!(
         enter < enable_paste
-            && enable_paste < disable_paste
-            && disable_paste < cursor
+            && enable_paste < enable_mouse
+            && enable_mouse < disable_paste
+            && disable_paste < disable_mouse
+            && disable_mouse < cursor
             && cursor < leave,
         "terminal restoration must follow alternate-screen entry"
     );

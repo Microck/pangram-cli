@@ -1,0 +1,9 @@
+# Export and rerun results
+
+```bash
+pangram history export --format jsonl --redact-content
+pangram history rerun ANALYSIS_ID
+```
+
+Export is local and not billable. Rerun creates a fresh billable submission
+with new identity and preserves durable lineage to the saved analysis.

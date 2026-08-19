@@ -1,0 +1,71 @@
+# Unofficial Pangram CLI direct installer. Generated for v{{VERSION}}.
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [Runtime.InteropServices.Architecture]::X64) {
+  throw "pangram installer: x86-64 Windows is required"
+}
+
+$version = "{{VERSION}}"
+$archiveName = "{{FILE_X86_64_PC_WINDOWS_MSVC}}"
+$archiveSize = [int64]{{SIZE_X86_64_PC_WINDOWS_MSVC}}
+$archiveSha256 = "{{SHA256_X86_64_PC_WINDOWS_MSVC}}"
+$destinationDirectory = Join-Path $env:LOCALAPPDATA "Programs\Pangram\bin"
+$destination = Join-Path $destinationDirectory "pangram.exe"
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ("pangram-installer-" + [Guid]::NewGuid().ToString("N"))
+
+try {
+  New-Item -ItemType Directory -Path $temporary | Out-Null
+  $manifest = Join-Path $temporary "pangram-update-manifest.json"
+  $signature = Join-Path $temporary "pangram-update-manifest.json.sig"
+  $archive = Join-Path $temporary $archiveName
+  $manifestUrl = "https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json"
+  $signatureUrl = "https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json.sig"
+  $archiveUrl = "https://github.com/Microck/pangram-cli/releases/download/v$version/$archiveName"
+
+  Invoke-WebRequest -UseBasicParsing -Uri $manifestUrl -OutFile $manifest
+  Invoke-WebRequest -UseBasicParsing -Uri $signatureUrl -OutFile $signature
+  Invoke-WebRequest -UseBasicParsing -Uri $archiveUrl -OutFile $archive
+
+  if ((Get-Item -LiteralPath $archive).Length -ne $archiveSize) {
+    throw "pangram installer: the archive size does not match the signed release"
+  }
+  $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+  if ($actualSha256 -ne $archiveSha256) {
+    throw "pangram installer: the archive hash does not match the signed release"
+  }
+
+  Expand-Archive -LiteralPath $archive -DestinationPath $temporary
+  $candidate = Join-Path $temporary "pangram.exe"
+  & $candidate __pangram-direct-install `
+    --manifest $manifest `
+    --signature $signature `
+    --archive $archive `
+    --destination $destination
+  if ($LASTEXITCODE -ne 0) {
+    throw "pangram installer: the verified candidate refused installation"
+  }
+
+  $installedVersion = $null
+  for ($attempt = 0; $attempt -lt 100; $attempt++) {
+    if (Test-Path -LiteralPath $destination) {
+      $installedVersion = (& $destination --version 2>$null)
+      if ($installedVersion -eq "pangram $version") { break }
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  if ($installedVersion -ne "pangram $version") {
+    throw "pangram installer: the installed binary failed its version check"
+  }
+
+  Write-Output "Installed Pangram CLI $version at $destination"
+  $pathEntries = $env:PATH -split [IO.Path]::PathSeparator
+  if ($pathEntries -notcontains $destinationDirectory) {
+    Write-Output "Add $destinationDirectory to PATH."
+  }
+} finally {
+  if (Test-Path -LiteralPath $temporary) {
+    Remove-Item -LiteralPath $temporary -Recurse -Force
+  }
+}

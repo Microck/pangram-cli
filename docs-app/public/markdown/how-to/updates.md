@@ -1,0 +1,7 @@
+# Check and install updates
+
+Private `0.x` builds expose `pangram update --check`, `pangram update`, and
+`pangram update --yes`, but all three return `update_unavailable` before any
+network or state access. Public direct installs will verify an Ed25519-signed
+manifest, archive size, SHA-256, layout, receipt ownership, and target version.
+Package-manager installs remain owned by their manager.

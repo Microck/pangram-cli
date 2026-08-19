@@ -72,6 +72,16 @@ impl RecordedRequest {
             .is_some_and(|(_, value)| value == expected)
     }
 
+    /// Prefix comparison returning a bare boolean so assertion failures never
+    /// echo a complete header value.
+    #[must_use]
+    pub fn header_starts_with(&self, name: &str, expected: &str) -> bool {
+        self.headers
+            .iter()
+            .find(|(header, _)| header.eq_ignore_ascii_case(name))
+            .is_some_and(|(_, value)| value.starts_with(expected))
+    }
+
     #[must_use]
     pub fn body_json(&self) -> serde_json::Value {
         serde_json::from_slice(&self.body).expect("fixture request body is JSON")
@@ -95,6 +105,8 @@ pub(crate) struct FixtureState {
     requests: Vec<RecordedRequest>,
     submits: VecDeque<Step>,
     polls: VecDeque<Step>,
+    files: VecDeque<Step>,
+    plagiarism: VecDeque<Step>,
     bulk: BulkQueues,
 }
 
@@ -130,6 +142,8 @@ impl ProtocolFixture {
         let app = Router::new()
             .route("/task", post(handle_submit))
             .route("/task/{id}", get(handle_poll))
+            .route("/file", post(handle_file))
+            .route("/plagiarism", post(handle_plagiarism))
             .merge(bulk::routes())
             .fallback(handle_unexpected)
             .with_state(state.clone());
@@ -172,6 +186,22 @@ impl ProtocolFixture {
             .lock()
             .expect("fixture state")
             .polls
+            .push_back(step);
+    }
+
+    pub fn on_file(&self, step: Step) {
+        self.state
+            .lock()
+            .expect("fixture state")
+            .files
+            .push_back(step);
+    }
+
+    pub fn on_plagiarism(&self, step: Step) {
+        self.state
+            .lock()
+            .expect("fixture state")
+            .plagiarism
             .push_back(step);
     }
 
@@ -387,6 +417,31 @@ async fn handle_poll(
     play(step).await
 }
 
+async fn handle_file(State(state): State<Arc<Mutex<FixtureState>>>, request: Request) -> Response {
+    record(&state, split(request).await);
+    let step = state
+        .lock()
+        .expect("fixture state")
+        .files
+        .pop_front()
+        .unwrap_or_else(|| panic!("an unscripted POST /file reached the fixture"));
+    play(step).await
+}
+
+async fn handle_plagiarism(
+    State(state): State<Arc<Mutex<FixtureState>>>,
+    request: Request,
+) -> Response {
+    record(&state, split(request).await);
+    let step = state
+        .lock()
+        .expect("fixture state")
+        .plagiarism
+        .pop_front()
+        .unwrap_or_else(|| panic!("an unscripted POST /plagiarism reached the fixture"));
+    play(step).await
+}
+
 async fn handle_unexpected(
     State(state): State<Arc<Mutex<FixtureState>>>,
     request: Request,
@@ -472,5 +527,48 @@ pub fn pangram4_failure(message: &str) -> serde_json::Value {
     serde_json::json!({
         "stage": "STAGE_FAILED",
         "error_message": message,
+    })
+}
+
+/// A sanitized rich file result matching the live-verified response shape.
+#[must_use]
+pub fn file_success(filename: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "filename": filename,
+        "text": text,
+        "version": "4.0",
+        "headline": "Human-written",
+        "prediction": "The document appears to be human-written.",
+        "prediction_short": "Human",
+        "fraction_ai": 0.0,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0,
+        "num_ai_segments": 0,
+        "num_ai_assisted_segments": 0,
+        "num_human_segments": 1,
+        "windows": [{
+            "text": text,
+            "label": "Human Written",
+            "ai_assistance_score": 0.0,
+            "confidence": "High",
+            "start_index": 0,
+            "end_index": text.chars().count(),
+            "word_count": text.split_whitespace().count(),
+            "token_length": text.split_whitespace().count()
+        }]
+    })
+}
+
+/// A sanitized plagiarism result matching the live-verified response shape.
+#[must_use]
+pub fn plagiarism_success() -> serde_json::Value {
+    serde_json::json!({
+        "text": "synthetic response text",
+        "plagiarism_detected": false,
+        "total_sentences": 2,
+        "plagiarized_sentences": 0,
+        "percent_plagiarized": 0.0,
+        "plagiarized_content": [],
+        "metadata": {}
     })
 }

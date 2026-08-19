@@ -2,6 +2,7 @@ use super::*;
 
 use std::str::FromStr as _;
 
+use crate::analysis::TextAnalysisMode;
 use crate::domain::{
     AnalysisInputKind, AnalysisStatus, AnalysisSummary, CheckKind, OrderedChecks, SaveState,
     UtcTimestamp,
@@ -22,11 +23,12 @@ pub(super) fn ready_state() -> AppState {
                 ..SettingsDraft::default()
             },
             keymap: Keymap::Regular,
+            ..StartupState::default()
         },
     )
 }
 
-fn history_state(items: Vec<AnalysisSummary>) -> AppState {
+pub(super) fn history_state(items: Vec<AnalysisSummary>) -> AppState {
     let state = ready_state();
     let request = state.history.load_request();
     let transition = reduce(
@@ -54,13 +56,13 @@ fn history_load(page: Vec<AnalysisSummary>) -> HistoryLoadResult {
     HistoryLoadResult { page, unfinished }
 }
 
-fn history_id(index: u8) -> AnalysisId {
+pub(super) fn history_id(index: u8) -> AnalysisId {
     format!("anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8a{index:02x}")
         .parse()
         .expect("canonical fixture ID")
 }
 
-fn history_summary(index: u8) -> AnalysisSummary {
+pub(super) fn history_summary(index: u8) -> AnalysisSummary {
     history_summary_with_status(index, AnalysisStatus::Succeeded)
 }
 
@@ -245,7 +247,7 @@ fn saved_unfinished_rows_do_not_block_a_new_in_session_submission() {
     );
 }
 
-fn assert_pending_rerun(
+pub(super) fn assert_pending_rerun(
     state: &AppState,
     original_id: AnalysisId,
     analysis_id: Option<AnalysisId>,
@@ -315,16 +317,64 @@ fn credential_entry_uses_the_same_cursor_editing_behavior() {
 }
 
 #[test]
-fn unavailable_controls_cannot_submit_work() {
+fn phase_seven_check_controls_select_text_work_without_submitting() {
     let mut state = ready_state();
+    state.public_link = true;
     state.focus = Focus::CheckPlagiarism;
     let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
     assert!(transition.effects.is_empty());
+    assert_eq!(transition.state.text_mode, TextAnalysisMode::Plagiarism);
+    assert!(!transition.state.public_link);
+    assert!(!transition.state.public_link_available());
+    assert_eq!(transition.state.billing_estimate().1, 5);
+
+    let mut state = transition.state;
+    state.focus = Focus::PublicLink;
+    let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
+    assert!(!transition.state.public_link);
+
+    let mut state = transition.state;
+    state.focus = Focus::Composer;
+    let transition = reduce(state, AppEvent::Key(KeyInput::Tab));
+    assert_eq!(transition.state.focus, Focus::ManualSave);
+
+    let mut state = transition.state;
+    state.focus = Focus::CheckBoth;
+    let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
+    assert!(transition.effects.is_empty());
+    assert_eq!(transition.state.text_mode, TextAnalysisMode::Combined);
+    assert!(transition.state.public_link_available());
+    assert_eq!(transition.state.billing_estimate().1, 6);
+
+    let mut state = transition.state;
+    state.focus = Focus::CheckAi;
+    let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
+    assert!(transition.effects.is_empty());
+    assert_eq!(transition.state.text_mode, TextAnalysisMode::Detection);
+    assert_eq!(transition.state.billing_estimate().1, 1);
 
     let mut state = transition.state;
     state.focus = Focus::InputFiles;
     let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
     assert!(transition.effects.is_empty());
+}
+
+#[test]
+fn selected_text_mode_is_carried_by_the_single_submit_effect() {
+    let mut state = ready_state();
+    state.text_mode = TextAnalysisMode::Combined;
+    state.composer = TextField::from_value("one billable request".to_owned());
+    state.focus = Focus::Submit;
+
+    let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
+
+    assert!(matches!(
+        transition.effects.as_slice(),
+        [Effect::SubmitText {
+            mode: TextAnalysisMode::Combined,
+            ..
+        }]
+    ));
 }
 
 #[test]
@@ -420,6 +470,7 @@ fn update_preference_escape_returns_to_credential_setup_only_when_missing() {
                 ..SettingsDraft::default()
             },
             keymap: Keymap::Regular,
+            ..StartupState::default()
         },
     );
     assert!(matches!(
@@ -746,118 +797,6 @@ fn full_history_export_requires_a_second_cancel_default_confirmation() {
 }
 
 #[test]
-fn rerun_gate_stays_closed_until_the_analysis_finishes() {
-    let mut state = history_state(vec![history_summary(1)]);
-    state.route = Route::History;
-    state.focus = Focus::HistoryRerun;
-    let analysis_id = history_id(1);
-    let rerun_id = AnalysisId::new();
-
-    let requested = reduce(state, AppEvent::Key(KeyInput::Enter));
-    assert!(matches!(
-        requested.effects.as_slice(),
-        [Effect::PrepareHistoryRerun {
-            analysis_id: requested_id,
-            automatic_save: false,
-        }] if *requested_id == analysis_id
-    ));
-    assert_pending_rerun(&requested.state, analysis_id, None);
-    assert!(requested.state.analysis.submitting);
-
-    let mut preparing = requested.state;
-    preparing.route = Route::Analyze;
-    preparing.focus = Focus::Submit;
-    preparing.composer = TextField::from_value("second request".to_owned());
-    let fresh_while_preparing = reduce(preparing, AppEvent::Key(KeyInput::Enter));
-    assert!(fresh_while_preparing.effects.is_empty());
-
-    let mut preparing = fresh_while_preparing.state;
-    preparing.route = Route::History;
-    preparing.focus = Focus::HistoryRerun;
-    let rerun_while_preparing = reduce(preparing, AppEvent::Key(KeyInput::Enter));
-    assert!(rerun_while_preparing.effects.is_empty());
-
-    let wrong = reduce(
-        rerun_while_preparing.state,
-        AppEvent::HistoryRerunPrepared {
-            analysis_id: history_id(2),
-            result: Ok(AnalysisId::new()),
-        },
-    );
-    assert_pending_rerun(&wrong.state, analysis_id, None);
-    let completed = reduce(
-        wrong.state,
-        AppEvent::HistoryRerunPrepared {
-            analysis_id,
-            result: Ok(rerun_id),
-        },
-    );
-    assert_eq!(completed.state.route, Route::Active);
-    assert_eq!(completed.state.focus, Focus::ActiveList);
-    assert_eq!(completed.state.notice.as_deref(), Some("Rerun started."));
-    assert!(completed.state.analysis.submitting);
-    assert_pending_rerun(&completed.state, analysis_id, Some(rerun_id));
-
-    let stale_preflight_failure = reduce(
-        completed.state,
-        AppEvent::HistoryRerunPrepared {
-            analysis_id,
-            result: Err(CanonicalError::new(
-                crate::output::ErrorCode::LocalTaskUnresolvable,
-                "stale preflight failure",
-            )
-            .expect("valid canonical error")),
-        },
-    );
-    assert!(stale_preflight_failure.state.analysis.submitting);
-    assert_pending_rerun(&stale_preflight_failure.state, analysis_id, Some(rerun_id));
-
-    let mut returned = stale_preflight_failure.state;
-    returned.route = Route::History;
-    returned.focus = Focus::HistoryRerun;
-    let duplicate = reduce(returned, AppEvent::Key(KeyInput::Enter));
-    assert!(duplicate.effects.is_empty());
-    assert_pending_rerun(&duplicate.state, analysis_id, Some(rerun_id));
-
-    let unrelated_failure = reduce(
-        duplicate.state,
-        AppEvent::AnalysisFailed(AnalysisFailure {
-            analysis_id: AnalysisId::new(),
-            error: CanonicalError::new(crate::output::ErrorCode::NetworkUnavailable, "offline")
-                .expect("valid canonical error"),
-        }),
-    );
-    assert!(unrelated_failure.state.analysis.submitting);
-    assert!(unrelated_failure.state.analysis.failure.is_none());
-    assert_pending_rerun(&unrelated_failure.state, analysis_id, Some(rerun_id));
-
-    let mut attempted_fresh_submit = unrelated_failure.state;
-    attempted_fresh_submit.route = Route::Analyze;
-    attempted_fresh_submit.focus = Focus::Submit;
-    attempted_fresh_submit.composer = TextField::from_value("second request".to_owned());
-    let blocked = reduce(attempted_fresh_submit, AppEvent::Key(KeyInput::Enter));
-    assert!(blocked.effects.is_empty());
-    assert_eq!(
-        blocked.state.notice.as_deref(),
-        Some("An analysis is already in progress.")
-    );
-
-    let failed = reduce(
-        blocked.state,
-        AppEvent::AnalysisFailed(AnalysisFailure {
-            analysis_id: rerun_id,
-            error: CanonicalError::new(crate::output::ErrorCode::NetworkUnavailable, "offline")
-                .expect("valid canonical error"),
-        }),
-    );
-    assert!(!failed.state.analysis.submitting);
-    assert!(failed.state.history.pending().is_none());
-    assert_eq!(failed.state.route, Route::Analyze);
-    assert_eq!(failed.state.focus, Focus::Submit);
-    assert_eq!(failed.state.notice, None);
-}
-
-#[test]
 fn history_reload_cannot_consume_a_confirmed_delete_or_export() {
     let mut state = history_state(vec![history_summary(1)]);
     state.route = Route::History;
@@ -926,4 +865,92 @@ fn successful_history_reload_preserves_an_existing_notice() {
         loaded.state.notice.as_deref(),
         Some("History deletion committed, but cleanup failed")
     );
+}
+
+#[test]
+fn pointer_actions_share_keyboard_selection_and_submission_gates() {
+    let selected = reduce(
+        ready_state(),
+        AppEvent::Pointer(PointerIntent::Activate(Focus::CheckPlagiarism)),
+    );
+    assert_eq!(selected.state.text_mode, TextAnalysisMode::Plagiarism);
+    assert!(selected.effects.is_empty());
+
+    let empty_submit = reduce(
+        selected.state,
+        AppEvent::Pointer(PointerIntent::Activate(Focus::Submit)),
+    );
+    assert!(empty_submit.effects.is_empty());
+    assert_eq!(
+        empty_submit.state.notice.as_deref(),
+        Some("Enter text before submitting.")
+    );
+
+    let mut pending = empty_submit.state;
+    pending.composer = TextField::from_value("one billable request".to_owned());
+    pending.analysis.submitting = true;
+    let duplicate = reduce(
+        pending,
+        AppEvent::Pointer(PointerIntent::Activate(Focus::Submit)),
+    );
+    assert!(duplicate.effects.is_empty());
+    assert_eq!(
+        duplicate.state.notice.as_deref(),
+        Some(ANALYSIS_IN_PROGRESS_NOTICE)
+    );
+
+    let mut export = ready_state();
+    export.overlay = Some(Overlay::HistoryExport {
+        field: HistoryExportField::Action,
+    });
+    let format = reduce(
+        export,
+        AppEvent::Pointer(PointerIntent::HistoryExportField(
+            HistoryExportField::Format,
+        )),
+    );
+    assert!(matches!(
+        format.state.overlay,
+        Some(Overlay::HistoryExport {
+            field: HistoryExportField::Format
+        })
+    ));
+    assert_eq!(
+        format.state.history.export_choices().format(),
+        HistoryExportFormat::Markdown
+    );
+}
+
+#[test]
+fn pointer_history_row_uses_the_same_detail_operation_gate() {
+    let mut state = history_state(vec![history_summary(1), history_summary(2)]);
+    state.route = Route::History;
+
+    let selected = reduce(state, AppEvent::Pointer(PointerIntent::HistoryRow(1)));
+
+    assert_eq!(selected.state.focus, Focus::HistoryList);
+    assert_eq!(selected.state.history.selected_id(), Some(history_id(2)));
+    assert!(matches!(
+        selected.effects.as_slice(),
+        [Effect::LoadHistoryDetail(analysis_id)] if *analysis_id == history_id(2)
+    ));
+
+    let duplicate = reduce(
+        selected.state,
+        AppEvent::Pointer(PointerIntent::HistoryRow(1)),
+    );
+    assert!(duplicate.effects.is_empty());
+}
+
+#[test]
+fn empty_active_analyze_action_returns_to_the_composer_without_an_effect() {
+    let mut state = ready_state();
+    state.route = Route::Active;
+    state.focus = Focus::ActiveList;
+
+    let transition = reduce(state, AppEvent::Key(KeyInput::Enter));
+
+    assert_eq!(transition.state.route, Route::Analyze);
+    assert_eq!(transition.state.focus, Focus::Composer);
+    assert!(transition.effects.is_empty());
 }

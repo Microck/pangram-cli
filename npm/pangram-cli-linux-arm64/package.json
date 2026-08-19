@@ -1,0 +1,11 @@
+{
+  "name": "@microck/pangram-cli-linux-arm64",
+  "version": "0.1.0",
+  "description": "Unofficial Pangram CLI binary for Linux ARM64",
+  "license": "MIT",
+  "repository": "https://github.com/Microck/pangram-cli",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin", "NOTICE.md"],
+  "publishConfig": { "access": "public" }
+}

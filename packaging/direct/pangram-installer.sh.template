@@ -1,0 +1,78 @@
+#!/bin/sh
+# Unofficial Pangram CLI direct installer. Generated for v{{VERSION}}.
+
+set -eu
+
+fail() {
+  printf '%s\n' "pangram installer: $1" >&2
+  exit 1
+}
+
+command -v curl >/dev/null 2>&1 || fail "curl is required"
+command -v tar >/dev/null 2>&1 || fail "tar is required"
+
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64|Linux:amd64)
+    archive_name={{FILE_X86_64_UNKNOWN_LINUX_GNU}}
+    archive_size={{SIZE_X86_64_UNKNOWN_LINUX_GNU}}
+    archive_sha256={{SHA256_X86_64_UNKNOWN_LINUX_GNU}}
+    ;;
+  Linux:aarch64|Linux:arm64)
+    archive_name={{FILE_AARCH64_UNKNOWN_LINUX_GNU}}
+    archive_size={{SIZE_AARCH64_UNKNOWN_LINUX_GNU}}
+    archive_sha256={{SHA256_AARCH64_UNKNOWN_LINUX_GNU}}
+    ;;
+  Darwin:x86_64|Darwin:amd64)
+    archive_name={{FILE_X86_64_APPLE_DARWIN}}
+    archive_size={{SIZE_X86_64_APPLE_DARWIN}}
+    archive_sha256={{SHA256_X86_64_APPLE_DARWIN}}
+    ;;
+  Darwin:arm64|Darwin:aarch64)
+    archive_name={{FILE_AARCH64_APPLE_DARWIN}}
+    archive_size={{SIZE_AARCH64_APPLE_DARWIN}}
+    archive_sha256={{SHA256_AARCH64_APPLE_DARWIN}}
+    ;;
+  *) fail "this operating system and architecture are not supported" ;;
+esac
+
+home=${HOME:?HOME is required}
+destination="$home/.local/bin/pangram"
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/pangram-installer.XXXXXX")
+trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+
+manifest="$temporary/pangram-update-manifest.json"
+signature="$temporary/pangram-update-manifest.json.sig"
+archive="$temporary/$archive_name"
+manifest_url=https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json
+signature_url=https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json.sig
+archive_url="https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/$archive_name"
+
+curl --fail --location --silent --show-error "$manifest_url" --output "$manifest"
+curl --fail --location --silent --show-error "$signature_url" --output "$signature"
+curl --fail --location --silent --show-error "$archive_url" --output "$archive"
+
+actual_size=$(wc -c <"$archive" | tr -d '[:space:]')
+[ "$actual_size" = "$archive_size" ] || fail "the archive size does not match the signed release"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_sha256=$(sha256sum "$archive" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual_sha256=$(shasum -a 256 "$archive" | awk '{print $1}')
+else
+  fail "sha256sum or shasum is required"
+fi
+[ "$actual_sha256" = "$archive_sha256" ] || fail "the archive hash does not match the signed release"
+
+tar -xJf "$archive" -C "$temporary" pangram
+chmod 755 "$temporary/pangram"
+"$temporary/pangram" __pangram-direct-install \
+  --manifest "$manifest" \
+  --signature "$signature" \
+  --archive "$archive" \
+  --destination "$destination"
+
+[ "$("$destination" --version)" = "pangram {{VERSION}}" ] || fail "the installed binary failed its version check"
+printf 'Installed Pangram CLI %s at %s\n' '{{VERSION}}' "$destination"
+case ":${PATH:-}:" in
+  *:"$home/.local/bin":*) ;;
+  *) printf 'Add %s to PATH: export PATH="%s:$PATH"\n' "$home/.local/bin" "$home/.local/bin" ;;
+esac

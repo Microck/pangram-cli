@@ -1,12 +1,7 @@
 //! Intro policy, timing, and one-time state persistence.
-//!
-//! The artwork and generated frame tables are intentionally absent until the
-//! logo-use gate is satisfied. This module owns only the control plane that is
-//! independent of that artwork: launch eligibility, policy resolution, frame
-//! timing, skip-key consumption, and the `intro_seen` marker.
 
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,17 +9,32 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crossterm::event::KeyCode;
 use serde::Deserialize;
 
-use super::model::{IntroFrequency, MIN_HEIGHT, MIN_WIDTH, MotionLevel, TerminalSize};
+use super::model::{IntroFrequency, MotionLevel, TerminalSize};
 
 pub(crate) const STATE_FILE_NAME: &str = "tui-state.json";
 const FRAME_DURATION_MILLIS: u64 = 50;
-const INTRO_DURATION_MILLIS: u64 = 2_800;
+const FOX_DURATION_MILLIS: u64 = 2_800;
+const TUI_FADE_DURATION_MILLIS: u64 = 300;
+const INTRO_DURATION_MILLIS: u64 = FOX_DURATION_MILLIS + TUI_FADE_DURATION_MILLIS;
 const _: () = assert!(INTRO_DURATION_MILLIS.is_multiple_of(FRAME_DURATION_MILLIS));
 pub(crate) const FRAME_DURATION: Duration = Duration::from_millis(FRAME_DURATION_MILLIS);
+#[cfg(test)]
+pub(crate) const FOX_DURATION: Duration = Duration::from_millis(FOX_DURATION_MILLIS);
+#[cfg(test)]
+pub(crate) const TUI_FADE_DURATION: Duration = Duration::from_millis(TUI_FADE_DURATION_MILLIS);
 pub(crate) const INTRO_DURATION: Duration = Duration::from_millis(INTRO_DURATION_MILLIS);
-pub(crate) const FRAME_COUNT: usize = (INTRO_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
+pub(crate) const FOX_FRAME_COUNT: usize = (FOX_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
+pub(crate) const TUI_FADE_FRAME_COUNT: usize =
+    (TUI_FADE_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
+pub(crate) const FRAME_COUNT: usize = FOX_FRAME_COUNT + TUI_FADE_FRAME_COUNT;
+/// Samples of cubic-bezier(0.23, 1, 0.32, 1) at 0%, 20%, ..., 100%.
+pub(crate) const TUI_FADE_OPACITY: [u16; TUI_FADE_FRAME_COUNT] =
+    [0, 6_819, 9_252, 9_859, 9_988, 10_000];
+pub(crate) const INTRO_MIN_COLUMNS: u16 = 100;
+pub(crate) const INTRO_MIN_ROWS: u16 = 28;
 
 const STATE_SCHEMA_VERSION: &str = "1";
+const MAX_STATE_BYTES: u64 = 256;
 const SEEN_STATE_BYTES: &[u8] = b"{\n  \"schema_version\": \"1\",\n  \"intro_seen\": true\n}\n";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -98,8 +108,8 @@ struct StateWire {
 /// warning, while malformed or out-of-schema JSON produces the distinct
 /// invalid-state warning. Both failures still resolve to unseen.
 pub(crate) fn load_state(data_dir: &Path) -> LoadedIntroState {
-    let bytes = match fs::read(state_path(data_dir)) {
-        Ok(bytes) => bytes,
+    let file = match fs::File::open(state_path(data_dir)) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return LoadedIntroState::unseen(None);
         }
@@ -107,6 +117,17 @@ pub(crate) fn load_state(data_dir: &Path) -> LoadedIntroState {
             return LoadedIntroState::unseen(Some(IntroDiagnostic::Read));
         }
     };
+    let mut bytes = Vec::with_capacity(SEEN_STATE_BYTES.len());
+    if file
+        .take(MAX_STATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return LoadedIntroState::unseen(Some(IntroDiagnostic::Read));
+    }
+    if bytes.len() as u64 > MAX_STATE_BYTES {
+        return LoadedIntroState::unseen(Some(IntroDiagnostic::Invalid));
+    }
 
     match serde_json::from_slice::<StateWire>(&bytes) {
         Ok(state) if state.schema_version == STATE_SCHEMA_VERSION && state.intro_seen => {
@@ -124,7 +145,6 @@ pub(crate) fn load_state(data_dir: &Path) -> LoadedIntroState {
 /// Content is written to a unique sibling, synced, and renamed into place.
 /// Any failed stage removes its temporary file. Directory sync is best effort
 /// on Unix, matching the repository's other atomic local-state writers.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn mark_seen(data_dir: &Path) -> Result<(), IntroDiagnostic> {
     let path = state_path(data_dir);
     let temporary = temporary_path(data_dir);
@@ -236,8 +256,8 @@ impl LaunchCapabilities {
         self.all_streams_tty
             && !self.ci
             && !self.term_is_dumb
-            && self.terminal_size.columns >= MIN_WIDTH
-            && self.terminal_size.rows >= MIN_HEIGHT
+            && self.terminal_size.columns >= INTRO_MIN_COLUMNS
+            && self.terminal_size.rows >= INTRO_MIN_ROWS
     }
 }
 
@@ -246,7 +266,6 @@ impl LaunchCapabilities {
 pub(crate) enum IntroPlan {
     Suppressed,
     FullMotion,
-    ReducedMark,
 }
 
 /// Resolves frequency and presentation without consuming one-time state.
@@ -258,33 +277,26 @@ pub(crate) const fn plan_intro(
 ) -> IntroPlan {
     if !capabilities.eligible()
         || matches!(frequency, IntroFrequency::Off)
-        || matches!(motion, MotionLevel::Off)
+        || !matches!(motion, MotionLevel::Full)
         || (matches!(frequency, IntroFrequency::Once) && seen)
     {
         return IntroPlan::Suppressed;
     }
 
-    match motion {
-        MotionLevel::Full => IntroPlan::FullMotion,
-        MotionLevel::Reduced => IntroPlan::ReducedMark,
-        MotionLevel::Off => IntroPlan::Suppressed,
-    }
+    IntroPlan::FullMotion
 }
 
 /// A point where an offered intro has actually resolved for the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum IntroResolution {
     Completed,
     Skipped,
-    ReducedRendered,
 }
 
 /// Whether resolving this plan consumes the `once` marker.
 ///
 /// Keeping the plan and resolution together prevents an ineligible or
 /// below-minimum launch from consuming state merely because startup ran.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const fn should_mark_seen(
     frequency: IntroFrequency,
     plan: IntroPlan,
@@ -298,20 +310,18 @@ pub(crate) const fn should_mark_seen(
         (
             IntroPlan::FullMotion,
             IntroResolution::Completed | IntroResolution::Skipped
-        ) | (IntroPlan::ReducedMark, IntroResolution::ReducedRendered)
+        )
     )
 }
 
 /// The frame due for a monotonic elapsed time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum FrameSelection {
     Frame(usize),
     Complete,
 }
 
 /// Selects directly from elapsed time, skipping every stale intermediate.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn select_frame(elapsed: Duration) -> FrameSelection {
     if elapsed >= INTRO_DURATION {
         return FrameSelection::Complete;
@@ -323,20 +333,17 @@ pub(crate) fn select_frame(elapsed: Duration) -> FrameSelection {
 
 /// Whether an intro key becomes a consumed skip event or remains routable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum IntroKeyDisposition {
     ConsumeAndSkip,
     RouteNormally,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl IntroKeyDisposition {
     pub(crate) const fn consumed(self) -> bool {
         matches!(self, Self::ConsumeAndSkip)
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const fn classify_key(code: KeyCode) -> IntroKeyDisposition {
     match code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ') => IntroKeyDisposition::ConsumeAndSkip,
@@ -354,8 +361,8 @@ mod tests {
 
     fn minimum_size() -> TerminalSize {
         TerminalSize {
-            columns: MIN_WIDTH,
-            rows: MIN_HEIGHT,
+            columns: INTRO_MIN_COLUMNS,
+            rows: INTRO_MIN_ROWS,
         }
     }
 
@@ -393,6 +400,17 @@ mod tests {
         assert_eq!(
             load_state(root.path()),
             LoadedIntroState::unseen(Some(IntroDiagnostic::Invalid))
+        );
+
+        fs::write(
+            state_path(root.path()),
+            vec![b' '; usize::try_from(MAX_STATE_BYTES + 1).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(
+            load_state(root.path()),
+            LoadedIntroState::unseen(Some(IntroDiagnostic::Invalid)),
+            "oversized marker files are invalid without being read in full"
         );
 
         fs::remove_file(state_path(root.path())).unwrap();
@@ -451,7 +469,7 @@ mod tests {
                 IntroFrequency::Once,
                 MotionLevel::Reduced,
                 false,
-                IntroPlan::ReducedMark,
+                IntroPlan::Suppressed,
             ),
             (
                 IntroFrequency::Once,
@@ -469,7 +487,7 @@ mod tests {
                 IntroFrequency::Always,
                 MotionLevel::Reduced,
                 true,
-                IntroPlan::ReducedMark,
+                IntroPlan::Suppressed,
             ),
             (
                 IntroFrequency::Always,
@@ -500,12 +518,12 @@ mod tests {
     fn below_minimum_launch_does_not_consume_once_state() {
         for size in [
             TerminalSize {
-                columns: MIN_WIDTH - 1,
-                rows: MIN_HEIGHT,
+                columns: INTRO_MIN_COLUMNS - 1,
+                rows: INTRO_MIN_ROWS,
             },
             TerminalSize {
-                columns: MIN_WIDTH,
-                rows: MIN_HEIGHT - 1,
+                columns: INTRO_MIN_COLUMNS,
+                rows: INTRO_MIN_ROWS - 1,
             },
         ] {
             let plan = plan_intro(
@@ -535,16 +553,6 @@ mod tests {
             IntroPlan::FullMotion,
             IntroResolution::Skipped
         ));
-        assert!(should_mark_seen(
-            IntroFrequency::Once,
-            IntroPlan::ReducedMark,
-            IntroResolution::ReducedRendered
-        ));
-        assert!(!should_mark_seen(
-            IntroFrequency::Once,
-            IntroPlan::ReducedMark,
-            IntroResolution::Completed
-        ));
         assert!(!should_mark_seen(
             IntroFrequency::Always,
             IntroPlan::FullMotion,
@@ -555,9 +563,20 @@ mod tests {
     #[test]
     fn elapsed_time_selects_boundaries_and_skips_stale_frames() {
         assert_eq!(
+            FOX_DURATION,
+            FRAME_DURATION * u32::try_from(FOX_FRAME_COUNT).expect("frame count fits u32"),
+            "the fox frame count must stay derived from its sequence timing"
+        );
+        assert_eq!(
+            TUI_FADE_DURATION,
+            FRAME_DURATION
+                * u32::try_from(TUI_FADE_FRAME_COUNT).expect("fade frame count fits u32"),
+            "the interface fade must stay derived from the frame cadence"
+        );
+        assert_eq!(
             INTRO_DURATION,
-            FRAME_DURATION * u32::try_from(FRAME_COUNT).expect("frame count fits u32"),
-            "the frame count must stay derived from the sequence timing"
+            FOX_DURATION + TUI_FADE_DURATION,
+            "the complete intro includes both the fox and interface fade"
         );
         assert_eq!(select_frame(Duration::ZERO), FrameSelection::Frame(0));
         assert_eq!(
@@ -573,6 +592,14 @@ mod tests {
             FrameSelection::Frame(3)
         );
         assert_eq!(
+            select_frame(FOX_DURATION - Duration::from_millis(1)),
+            FrameSelection::Frame(FOX_FRAME_COUNT - 1)
+        );
+        assert_eq!(
+            select_frame(FOX_DURATION),
+            FrameSelection::Frame(FOX_FRAME_COUNT)
+        );
+        assert_eq!(
             select_frame(INTRO_DURATION - Duration::from_millis(1)),
             FrameSelection::Frame(FRAME_COUNT - 1)
         );
@@ -581,6 +608,12 @@ mod tests {
             select_frame(Duration::from_secs(60)),
             FrameSelection::Complete
         );
+    }
+
+    #[test]
+    fn tui_fade_uses_the_locked_strong_ease_out_samples() {
+        assert_eq!(TUI_FADE_OPACITY, [0, 6_819, 9_252, 9_859, 9_988, 10_000]);
+        assert!(TUI_FADE_OPACITY.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

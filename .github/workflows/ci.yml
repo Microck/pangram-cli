@@ -105,9 +105,39 @@ jobs:
         if: matrix.toolchain == '1.97.1'
         run: |
           cargo run --locked --features dev-tools --bin generate-contracts
+          cargo run --locked --features dev-tools --bin generate-intro-frames -- --check
           git diff --exit-code
           git status --short
           test -z "$(git status --porcelain --untracked-files=all)"
+
+  docs:
+    name: Documentation site
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        # actions/setup-node v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install documentation dependencies
+        run: npm ci --ignore-scripts
+      - name: Audit documentation dependencies
+        run: npm audit --audit-level=critical
+      - name: Check package metadata and templates
+        run: npm run packages:check
+      - name: Check generated documentation drift
+        run: |
+          npm run docs:generate
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Type-check and build documentation
+        run: npm run check -w docs-app
 
   tui-acceptance:
     name: TUI acceptance (${{ matrix.os }})
@@ -133,7 +163,7 @@ jobs:
         # actions/setup-node v7.0.0
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - name: Install TUI acceptance dependencies
         run: npm ci --ignore-scripts
@@ -172,9 +202,9 @@ jobs:
         # actions/setup-node v7.0.0
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          # The pinned suite imports fs.globSync even though its package metadata
-          # still declares Node 20 support. Node 22 is its real runtime floor.
-          node-version: "22"
+          # Tegami requires Node 24, which also satisfies the pinned suite's
+          # real fs.globSync runtime floor.
+          node-version: "24"
           cache: npm
       - name: Install applicability audit dependencies
         run: npm ci --ignore-scripts
@@ -205,6 +235,76 @@ jobs:
         run: "cargo test --locked --lib history::sidecars::"
       - name: Run Windows MCP filesystem and installer tests
         run: "cargo test --locked --all-features --lib mcp::"
+
+  native-release-archive:
+    name: Native release archive (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            executable: pangram
+            packager: package-release
+            extension: tar.xz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            executable: pangram
+            packager: package-release
+            extension: tar.xz
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            executable: pangram
+            packager: package-release
+            extension: tar.xz
+          - target: aarch64-apple-darwin
+            os: macos-15
+            executable: pangram
+            packager: package-release
+            extension: tar.xz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            executable: pangram.exe
+            packager: package-release.exe
+            extension: zip
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.97.1"
+          targets: ${{ matrix.target }}
+      - name: Build, package, and run the native archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXECUTABLE: ${{ matrix.executable }}
+          PACKAGER: ${{ matrix.packager }}
+          EXTENSION: ${{ matrix.extension }}
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "$TARGET" --bin pangram
+          "target/$TARGET/release/$EXECUTABLE" --version
+          cargo build --locked --release --target "$TARGET" \
+            --features dev-tools --bin package-release
+          "target/$TARGET/release/$PACKAGER" \
+            --target "$TARGET" \
+            --executable "target/$TARGET/release/$EXECUTABLE" \
+            --out-dir release-artifacts
+          version="$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          mkdir extracted
+          archive="release-artifacts/pangram-v${version}-$TARGET.$EXTENSION"
+          if [[ "$EXTENSION" == "zip" ]]; then
+            python -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+              "$archive" extracted
+          else
+            tar -xf "$archive" -C extracted
+          fi
+          "extracted/$EXECUTABLE" --version
 
   supply-chain:
     name: Supply chain

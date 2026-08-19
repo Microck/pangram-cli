@@ -220,6 +220,27 @@ impl HttpClient {
         self.send(request, cancel).await
     }
 
+    /// Sends one multipart POST. The analysis protocol owner builds the form
+    /// from validated file submissions; auth injection and send-ambiguity
+    /// tracking remain identical to JSON billable requests.
+    pub async fn post_multipart(
+        &self,
+        url: &str,
+        api_key: &SecretString,
+        form: reqwest::multipart::Form,
+        cancel: &CancellationToken,
+    ) -> SendOutcome {
+        let request = self
+            .inner
+            .post(url)
+            .header(
+                reqwest::header::HeaderName::from_static("x-api-key"),
+                api_key.expose_secret(),
+            )
+            .multipart(form);
+        self.send(request, cancel).await
+    }
+
     /// Sends one GET to the given absolute URL. Auth is injected from the
     /// caller-supplied key.
     pub async fn get(

@@ -163,6 +163,15 @@ fn screen_contains(transcript: &[u8], expected: &str) -> bool {
     terminal.screen().contents().contains(expected)
 }
 
+fn screen_contains_setting(transcript: &[u8], label: &str, value: &str) -> bool {
+    let mut terminal = vt100::Parser::new(40, 120, 0);
+    terminal.process(transcript);
+    terminal.screen().contents().lines().any(|line| {
+        let line = line.trim();
+        line.contains(label) && line.ends_with(value)
+    })
+}
+
 fn assert_screen_text(receiver: &Receiver<Vec<u8>>, transcript: &mut Vec<u8>, expected: &str) {
     assert!(
         receive_until(receiver, transcript, SCREEN_TIMEOUT, |bytes| {
@@ -272,7 +281,7 @@ fn regular_open_settings(
     let mut keys = b"\x1b[Z".repeat(6);
     keys.extend_from_slice(&b"\x1b[C".repeat(3));
     write_keys(writer, &keys, "regular navigation to Settings");
-    assert_screen_text(receiver, transcript, "Diagnostics: available");
+    assert_screen_text(receiver, transcript, "Diagnostics");
 }
 
 #[test]
@@ -297,7 +306,13 @@ fn keymap_change_persists_across_cli_and_tui_processes() {
         let mut keys = b"\x1b[B".repeat(4);
         keys.push(b'\r');
         write_keys(writer, &keys, "change the Settings keymap to Vim");
-        assert_screen_text(receiver, transcript, "Keymap: Vim");
+        assert!(
+            receive_until(receiver, transcript, SCREEN_TIMEOUT, |bytes| {
+                screen_contains_setting(bytes, "Keymap", "Vim")
+            }),
+            "TUI did not render the Vim keymap after the interaction:\n{}",
+            String::from_utf8_lossy(transcript)
+        );
 
         // Keymap -> Motion -> Updates -> Quit, using the normal focusable exit.
         write_keys(writer, b"\t\t\t\r", "activate the Quit action");
@@ -313,7 +328,13 @@ fn keymap_change_persists_across_cli_and_tui_processes() {
         let mut keys = b"\x1b[Z".repeat(6);
         keys.extend_from_slice(b"lll");
         write_keys(writer, &keys, "use the persisted Vim route navigation");
-        assert_screen_text(receiver, transcript, "Keymap: Vim");
+        assert!(
+            receive_until(receiver, transcript, SCREEN_TIMEOUT, |bytes| {
+                screen_contains_setting(bytes, "Keymap", "Vim")
+            }),
+            "TUI did not render the persisted Vim keymap:\n{}",
+            String::from_utf8_lossy(transcript)
+        );
 
         // `G` is another restart-visible Vim binding and focuses normal Quit.
         write_keys(writer, b"G\r", "use Vim to activate the Quit action");

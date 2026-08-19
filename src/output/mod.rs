@@ -34,7 +34,7 @@ pub enum OutputValidationError {
     EmptyValue(&'static str),
     #[error("masked API-key suffix must contain no more than 8 characters")]
     AuthSuffixTooLong,
-    #[error("{0} must use major.minor.patch numeric form")]
+    #[error("{0} must be a canonical SemVer 2.0.0 string")]
     InvalidVersion(&'static str),
     #[error("{0} has fixed retryability")]
     FixedRetryability(ErrorCode),

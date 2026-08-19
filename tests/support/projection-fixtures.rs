@@ -51,8 +51,8 @@ fn segment(text: Option<&str>) -> Segment {
         end_index: 19,
         word_count: 4,
         token_length: 4,
-        humanizer_score: Fraction::new(0.0).unwrap(),
-        is_humanized: false,
+        humanizer_score: Some(Fraction::new(0.0).unwrap()),
+        is_humanized: Some(false),
     }
 }
 

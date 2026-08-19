@@ -3,10 +3,10 @@
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::analysis::{Accepted, AnalysisRequest, StopObserving, WaitOptions};
-use crate::domain::{AnalysisId, SaveState, TextOrigin, UpstreamTaskId, UtcTimestamp};
+use crate::analysis::{Accepted, AnalysisRequest, StopObserving, TextAnalysisMode, WaitOptions};
+use crate::domain::{Analysis, AnalysisId, SaveState, TextOrigin, UpstreamTaskId, UtcTimestamp};
 use crate::history::{HistoryError, HistoryErrorCode, HistoryStore};
-use crate::output::{CommandData, ErrorCode, ResolvedCommand};
+use crate::output::{CanonicalError, CommandData, ErrorCode, ResolvedCommand};
 
 use super::{
     ToolCallContext, ToolCallOutcome, blocking_operation_error, canonical_error, failure,
@@ -32,6 +32,14 @@ struct TaskArgs {
     analysis_id: Option<AnalysisId>,
     upstream_task_id: Option<UpstreamTaskId>,
     timeout_ms: Option<u64>,
+}
+
+const fn phase7_command(mode: TextAnalysisMode) -> ResolvedCommand {
+    match mode {
+        TextAnalysisMode::Detection => ResolvedCommand::Detect,
+        TextAnalysisMode::Plagiarism => ResolvedCommand::Plagiarism,
+        TextAnalysisMode::Combined => ResolvedCommand::Analyze,
+    }
 }
 
 pub(super) async fn detect_text(
@@ -144,26 +152,9 @@ pub(super) async fn detect_text(
     };
 
     let analysis = if arguments.save {
-        let data_dir = context.service().paths().data_dir().to_path_buf();
-        match tokio::task::spawn_blocking(move || {
-            let mut store = HistoryStore::open(&data_dir)?;
-            crate::history::save_complete_analysis(
-                &mut store,
-                &analysis,
-                SaveState::SavedManual,
-                retained_text.as_deref(),
-            )?;
-            Ok::<_, HistoryError>(analysis.with_save_state(SaveState::SavedManual))
-        })
-        .await
-        {
-            Ok(Ok(analysis)) => analysis,
-            Ok(Err(error)) => {
-                return failure(ResolvedCommand::Detect, error.into_canonical(), started);
-            }
-            Err(_) => {
-                return failure(ResolvedCommand::Detect, blocking_operation_error(), started);
-            }
+        match save_analysis(context, analysis, retained_text).await {
+            Ok(analysis) => analysis,
+            Err(error) => return failure(ResolvedCommand::Detect, error, started),
         }
     } else {
         analysis
@@ -175,6 +166,155 @@ pub(super) async fn detect_text(
         format!("analysis {id} completed"),
         started,
     )
+}
+
+pub(super) async fn phase7_text(
+    context: &ToolCallContext<'_>,
+    arguments: Map<String, Value>,
+    started: UtcTimestamp,
+    operation: TextAnalysisMode,
+) -> ToolCallOutcome {
+    let Ok(arguments) = serde_json::from_value::<DetectTextArgs>(Value::Object(arguments)) else {
+        return invalid_arguments();
+    };
+    let Some(word_count) = AnalysisRequest::eligible_text_word_count(&arguments.text) else {
+        return invalid_arguments();
+    };
+    if arguments.max_billable_units == 0 {
+        return invalid_arguments();
+    }
+    let command = phase7_command(operation);
+    if operation.billable_units(crate::domain::text_billable_units(word_count))
+        > arguments.max_billable_units
+    {
+        return failure(
+            command,
+            canonical_error(
+                ErrorCode::UnsupportedInput,
+                "the estimated billable units exceed max_billable_units",
+            ),
+            started,
+        );
+    }
+    if matches!(operation, TextAnalysisMode::Plagiarism) && arguments.public_link {
+        return invalid_arguments();
+    }
+    if arguments.public_link && !context.options().allow_public_links {
+        return failure(
+            command,
+            canonical_error(
+                ErrorCode::McpCapabilityRequired,
+                "public links require --allow-public-links",
+            ),
+            started,
+        );
+    }
+    if arguments.save && !context.history_mutations_enabled() {
+        return failure(
+            command,
+            canonical_error(
+                ErrorCode::McpCapabilityRequired,
+                "saving requires --history and --allow-history-mutations",
+            ),
+            started,
+        );
+    }
+
+    let analyzer = match resolve_analyzer(context).await {
+        Ok(analyzer) => analyzer,
+        Err(error) => return failure(command, *error, started),
+    };
+    if context.cancellation().is_cancelled() {
+        return ToolCallOutcome::Cancelled { diagnostic: None };
+    }
+    let retained_text = arguments.save.then(|| arguments.text.clone());
+    let request = AnalysisRequest::new(
+        arguments.text,
+        TextOrigin::Literal,
+        None,
+        word_count,
+        arguments.include_input,
+        arguments.public_link,
+    );
+    let result = match operation {
+        TextAnalysisMode::Detection => unreachable!("detect_text owns AI-only MCP analysis"),
+        TextAnalysisMode::Plagiarism => analyzer
+            .plagiarism(request, context.cancellation())
+            .await
+            .map_err(|error| error.into_error()),
+        TextAnalysisMode::Combined => {
+            let stop = StopObserving::new();
+            let operation =
+                analyzer.analyze_combined(request, WaitOptions::UNBOUNDED, |_| {}, stop.clone());
+            tokio::select! {
+                result = operation => match result {
+                    Ok(result) => result.map_err(|error| error.into_error()),
+                    Err(_) => {
+                        return ToolCallOutcome::Cancelled {
+                            diagnostic: Some("cancelled local combined analysis observation".to_owned()),
+                        };
+                    }
+                },
+                () = context.cancellation().cancelled() => {
+                    stop.stop();
+                    return ToolCallOutcome::Cancelled { diagnostic: None };
+                }
+            }
+        }
+    };
+    let analysis = match result {
+        Ok(analysis) => analysis,
+        Err(_) if context.cancellation().is_cancelled() => {
+            return ToolCallOutcome::Cancelled { diagnostic: None };
+        }
+        Err(error) => return failure(command, error, started),
+    };
+
+    let analysis = if arguments.save {
+        match save_analysis(context, analysis, retained_text).await {
+            Ok(analysis) => analysis,
+            Err(error) => return failure(command, error, started),
+        }
+    } else {
+        analysis
+    };
+
+    let id = analysis.id.to_string();
+    let data = match operation {
+        TextAnalysisMode::Detection => unreachable!("detect_text owns AI-only MCP analysis"),
+        TextAnalysisMode::Plagiarism => {
+            CommandData::Plagiarism(crate::output::AnalysisOutput::one(analysis))
+        }
+        TextAnalysisMode::Combined => {
+            CommandData::Analyze(crate::output::AnalysisOutput::one(analysis))
+        }
+    };
+    success(data, format!("analysis {id} completed"), started)
+}
+
+async fn save_analysis(
+    context: &ToolCallContext<'_>,
+    analysis: Analysis<CanonicalError>,
+    retained_text: Option<String>,
+) -> Result<Analysis<CanonicalError>, CanonicalError> {
+    let data_dir = context.service().paths().data_dir().to_path_buf();
+    match tokio::task::spawn_blocking(move || {
+        let mut store = HistoryStore::open(&data_dir)?;
+        let retained = retained_text.map(crate::history::RetainedInput::Text);
+        crate::history::save_complete_analysis(
+            &mut store,
+            &analysis,
+            SaveState::SavedManual,
+            retained.as_ref(),
+        )?;
+        Ok::<_, HistoryError>(analysis.with_save_state(SaveState::SavedManual))
+    })
+    .await
+    {
+        Ok(Ok(analysis)) => Ok(analysis),
+        Ok(Err(error)) => Err(error.into_canonical()),
+        Err(_) => Err(blocking_operation_error()),
+    }
 }
 
 #[derive(Clone, Copy)]

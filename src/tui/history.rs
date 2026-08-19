@@ -329,6 +329,19 @@ impl HistoryState {
         &self.items[start..end]
     }
 
+    pub(crate) fn select_visible(&mut self, index: usize) -> bool {
+        let Some(summary) = self.visible_items().get(index) else {
+            return false;
+        };
+        let analysis_id = summary.id;
+        if self.selected_id == Some(analysis_id) {
+            return false;
+        }
+        self.selected_id = Some(analysis_id);
+        self.detail = None;
+        true
+    }
+
     /// Accepts detail only for the currently selected ID. This rejects a
     /// stale worker response after the user moves selection.
     pub(crate) fn load_detail(&mut self, detail: RedactedAnalysis) -> bool {

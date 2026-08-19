@@ -1,4 +1,11 @@
 /target/
+/tmp/
+/node_modules/
+/docs-app/.next/
+/docs-app/.source/
+*.tsbuildinfo
+.env
+
 # Crustini/crabbox remote-build runtime state and captures: machine-local
 # artifacts, never committed or synced.
 .crabbox/

@@ -516,8 +516,8 @@ One SemVer value is shared by:
 - release manifest
 - GitHub Release
 
-Private development uses `0.x`. Public v1 follows all gates in the product
-specification.
+Stable `0.x` releases use the same exact-version authorization and public gates
+as later releases. Their built-in updater remains network-free until `1.0.0`.
 
 ## 16. Tegami workflow
 
@@ -698,7 +698,8 @@ The release workflow MUST require:
 - accepted generated intro frame art
 - hashed source geometry, provenance, and written redistribution terms for
   derived intro frames
-- public docs ready at `pangram.micr.dev`
+- public landing page ready at `pangram.micr.dev/` and Fumadocs ready at
+  `pangram.micr.dev/docs`
 - unofficial-project disclosure on the README, documentation site, and package
   metadata
 - every required check passing

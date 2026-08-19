@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use clap::ArgMatches;
 
 use super::local_setup::PhaseOneOutcome;
-use super::{FULL_GRAMMAR, bulk, history, local_setup, runtime_command};
+use super::{FULL_GRAMMAR, bulk, history, local_setup, phase7, runtime_command};
 use crate::analysis::AnalyzerSource;
 
 /// Terminal stream sharing used to decide whether an interactive prompt is
@@ -103,6 +103,13 @@ where
 /// empty stderr. This function never exits, so guarded callers remain in
 /// control of process lifetime.
 pub fn run() -> u8 {
+    if let Some(exit_code) = crate::update::run_direct_install_helper(std::env::args_os()) {
+        return exit_code;
+    }
+    #[cfg(windows)]
+    if let Some(exit_code) = crate::update::run_windows_replace_helper(std::env::args_os()) {
+        return exit_code;
+    }
     let streams = RealStreams;
     let analyzer_source = AnalyzerSource::Production;
     let invocation = InvocationContext::new(&streams, InvocationMode::Process, &analyzer_source);
@@ -203,6 +210,18 @@ where
     let global = crate::cli::detect::GlobalFlags::from_matches(&matches);
     match matches.subcommand() {
         Some(("detect", sub)) => execute_detect(sub, global, invocation),
+        Some(("plagiarism", sub)) => execute_phase7_analysis(
+            crate::analysis::TextAnalysisMode::Plagiarism,
+            sub,
+            global,
+            invocation,
+        ),
+        Some(("analyze", sub)) => execute_phase7_analysis(
+            crate::analysis::TextAnalysisMode::Combined,
+            sub,
+            global,
+            invocation,
+        ),
         Some(("bulk", sub)) => execute_bulk_leaf(sub, &matches, global, invocation),
         Some(("task", sub)) => execute_task_leaf(sub, &matches, global, invocation),
         Some(("history", sub)) => finish_detect(history::execute(
@@ -249,6 +268,8 @@ where
             };
             finish_raw_bytes(bytes, invocation)
         }
+        Some(("completions", sub)) => execute_completions(sub, invocation),
+        Some(("update", sub)) => execute_private_update(sub),
         // A bare literal-text reach (`pangram some text`) resolves to implicit
         // detection; the literal `-` reads stdin. A no-text reach can only
         // come from the non-rendering parsing hook because process-facing bare
@@ -283,6 +304,43 @@ where
             finish(outcome)
         }
     }
+}
+
+fn execute_completions(arguments: &ArgMatches, invocation: &InvocationContext<'_>) -> RunOutcome {
+    if !invocation.is_process_facing() {
+        return RunOutcome {
+            exit_code: 0,
+            clap_error: None,
+        };
+    }
+    let shell = match arguments.get_one::<String>("SHELL").map(String::as_str) {
+        Some("bash") => clap_complete::Shell::Bash,
+        Some("zsh") => clap_complete::Shell::Zsh,
+        Some("fish") => clap_complete::Shell::Fish,
+        Some("powershell") => clap_complete::Shell::PowerShell,
+        Some("elvish") => clap_complete::Shell::Elvish,
+        _ => return help_outcome(invocation),
+    };
+    let mut command = runtime_command();
+    let mut bytes = Vec::new();
+    clap_complete::generate(shell, &mut command, "pangram", &mut bytes);
+    finish_raw_bytes(&bytes, invocation)
+}
+
+/// Private development builds expose the final command grammar but stop at
+/// the updater's outer policy boundary. This dispatch intentionally resolves
+/// the command name before constructing the typed failure so scripts can
+/// distinguish a check from an install request without any updater I/O.
+fn execute_private_update(arguments: &ArgMatches) -> RunOutcome {
+    let command = if arguments.get_flag("check") {
+        crate::output::ResolvedCommand::UpdateCheck
+    } else {
+        crate::output::ResolvedCommand::UpdateInstall
+    };
+    finish(PhaseOneOutcome::failure(
+        command,
+        crate::update::private_build_error(),
+    ))
 }
 
 /// Runs the blocking stdio server only for the real process entrypoint.
@@ -518,7 +576,55 @@ fn execute_detect(
             ));
         }
     };
-    let source = if let Some(files) = matches.get_many::<String>("file") {
+    let source = analysis_source(matches);
+
+    if phase7::has_binary_file(&source) {
+        return run_phase7_analysis(
+            crate::analysis::TextAnalysisMode::Detection,
+            source,
+            arguments,
+            matches,
+            global,
+            None,
+            invocation,
+        );
+    }
+
+    run_detection(source, arguments, matches, global, None, invocation)
+}
+
+fn execute_phase7_analysis(
+    mode: crate::analysis::TextAnalysisMode,
+    matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    invocation: &InvocationContext<'_>,
+) -> RunOutcome {
+    let started = crate::domain::UtcTimestamp::now();
+    let arguments = match crate::cli::detect::DetectArgs::from_matches(matches) {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            return finish_detect(crate::cli::detect::early_failure(
+                phase7::command(mode),
+                global,
+                invocation.streams,
+                started,
+                error,
+            ));
+        }
+    };
+    run_phase7_analysis(
+        mode,
+        analysis_source(matches),
+        arguments,
+        matches,
+        global,
+        None,
+        invocation,
+    )
+}
+
+fn analysis_source(matches: &ArgMatches) -> crate::cli::detect::Source {
+    if let Some(files) = matches.get_many::<String>("file") {
         crate::cli::detect::Source::Files(files.cloned().collect())
     } else if let Some(text) = matches.get_one::<String>("TEXT") {
         if text == "-" {
@@ -528,9 +634,7 @@ fn execute_detect(
         }
     } else {
         crate::cli::detect::Source::Stdin
-    };
-
-    run_detection(source, arguments, matches, global, None, invocation)
+    }
 }
 
 /// Runs a bare-source detection (literal text, `-`, or piped stdin) using
@@ -578,6 +682,45 @@ fn run_detection(
         Err(outcome) => return finish_detect(outcome),
     };
     finish_detect(crate::cli::detect::execute(
+        &plan,
+        prepared.analyzer,
+        &prepared.service,
+        invocation.streams,
+    ))
+}
+
+fn run_phase7_analysis(
+    mode: crate::analysis::TextAnalysisMode,
+    source: crate::cli::detect::Source,
+    arguments: crate::cli::detect::DetectArgs,
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    stdin_text: Option<String>,
+    invocation: &InvocationContext<'_>,
+) -> RunOutcome {
+    let plan = match phase7::plan(
+        mode,
+        source,
+        arguments,
+        &global,
+        invocation.streams,
+        stdin_text,
+    ) {
+        Ok(plan) => plan,
+        Err(outcome) => return finish_detect(outcome),
+    };
+    let output = plan.resolved_output();
+    let prepared = match prepare_detection(
+        phase7::command(mode),
+        root_matches,
+        output,
+        crate::domain::UtcTimestamp::now(),
+        invocation.analyzer_source,
+    ) {
+        Ok(prepared) => prepared,
+        Err(outcome) => return finish_detect(outcome),
+    };
+    finish_detect(phase7::execute(
         &plan,
         prepared.analyzer,
         &prepared.service,

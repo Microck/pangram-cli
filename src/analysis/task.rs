@@ -6,14 +6,51 @@
 //! boundary.
 
 use crate::domain::{
-    Analysis, AnalysisId, AnalysisInput, Check, Sha256Hash, TextInput, TextOrigin, UpstreamTaskId,
+    Analysis, AnalysisId, AnalysisInput, Check, FileInput, NonEmptyString, Sha256Hash, TextInput,
+    TextOrigin, UpstreamTaskId,
 };
 use crate::output::CanonicalError;
+
+pub const PLAGIARISM_BILLABLE_UNITS: u64 = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextAnalysisMode {
+    Detection,
+    Plagiarism,
+    Combined,
+}
+
+impl TextAnalysisMode {
+    #[must_use]
+    pub const fn billable_units(self, ai_units: u64) -> u64 {
+        match self {
+            Self::Detection => ai_units,
+            Self::Plagiarism => PLAGIARISM_BILLABLE_UNITS,
+            Self::Combined => ai_units.saturating_add(PLAGIARISM_BILLABLE_UNITS),
+        }
+    }
+
+    fn from_checks(checks: &[Check<CanonicalError>]) -> Option<Self> {
+        match checks {
+            [Check::AiDetection(_)] => Some(Self::Detection),
+            [Check::Plagiarism(_)] => Some(Self::Plagiarism),
+            [Check::AiDetection(_), Check::Plagiarism(_)] => Some(Self::Combined),
+            _ => None,
+        }
+    }
+}
 
 /// Canonical billing/input word count for submitted UTF-8 text.
 #[must_use]
 pub(crate) fn canonical_text_word_count(text: &str) -> u64 {
     u64::try_from(text.split_whitespace().count()).unwrap_or(u64::MAX)
+}
+
+/// Builds the exact synchronous plagiarism document used for both wire bytes
+/// and ambiguity reconciliation. Keeping one constructor prevents the hash
+/// from drifting from a later protocol-field change.
+pub(super) fn plagiarism_body(text: &str) -> serde_json::Value {
+    serde_json::json!({ "text": text })
 }
 
 /// One validated text-analysis request. Construction time belongs to the
@@ -70,17 +107,17 @@ impl AnalysisRequest {
 
     /// Reconstructs a private rerun request from one saved canonical analysis.
     ///
-    /// A rerun is possible only when the record retains exact text for one
-    /// AI-detection check. The retained descriptor is treated as evidence,
+    /// A rerun is possible only when the record retains exact text and owns a
+    /// canonical AI-only, plagiarism-only, or combined check set. The retained descriptor is treated as evidence,
     /// not trusted input: its hash, byte count, word count, origin, name, and
     /// text must equal a descriptor rebuilt from the retained plaintext.
     /// Reruns always receive fresh identity and reset both plaintext output
     /// and public-link creation to their privacy-preserving defaults.
     #[must_use]
-    pub fn from_saved_rerun(original: &Analysis<CanonicalError>) -> Option<Self> {
-        if !matches!(original.checks(), [Check::AiDetection(_)]) {
-            return None;
-        }
+    pub fn from_saved_rerun(
+        original: &Analysis<CanonicalError>,
+    ) -> Option<(Self, TextAnalysisMode)> {
+        let mode = TextAnalysisMode::from_checks(original.checks())?;
         let Some(AnalysisInput::Text(retained_input)) = original.input() else {
             return None;
         };
@@ -99,7 +136,7 @@ impl AnalysisRequest {
             return None;
         }
 
-        Some(
+        Some((
             Self::new(
                 text,
                 retained_input.origin(),
@@ -109,7 +146,8 @@ impl AnalysisRequest {
                 false,
             )
             .with_rerun_of(original.id),
-        )
+            mode,
+        ))
     }
 
     /// Marks a fresh request as a rerun of one durable local analysis.
@@ -192,6 +230,85 @@ impl AnalysisRequest {
     #[must_use]
     pub fn request_sha256(&self) -> Sha256Hash {
         Sha256Hash::digest(self.submit_body().to_string().as_bytes())
+    }
+
+    /// Hashes the exact synchronous plagiarism JSON document. The route has
+    /// no model or public-link fields, so this must not reuse `submit_body`.
+    #[must_use]
+    pub(crate) fn plagiarism_request_sha256(&self) -> Sha256Hash {
+        Sha256Hash::digest(plagiarism_body(&self.text).to_string().as_bytes())
+    }
+}
+
+/// One binary file detection request with identity allocated before any
+/// billable send. The path and extracted text enter canonical output only
+/// when `include_input` was explicitly selected.
+#[derive(Clone)]
+pub struct FileAnalysisRequest {
+    id: AnalysisId,
+    upload: super::upstream::FileUpload,
+    path: Option<String>,
+    include_input: bool,
+}
+
+impl std::fmt::Debug for FileAnalysisRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FileAnalysisRequest")
+            .field("id", &self.id)
+            .field("upload", &self.upload)
+            .field("include_input", &self.include_input)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FileAnalysisRequest {
+    #[must_use]
+    pub fn new(
+        upload: super::upstream::FileUpload,
+        path: Option<String>,
+        include_input: bool,
+    ) -> Self {
+        Self {
+            id: AnalysisId::new(),
+            upload,
+            path,
+            include_input,
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> AnalysisId {
+        self.id
+    }
+
+    #[must_use]
+    pub(crate) const fn upload(&self) -> &super::upstream::FileUpload {
+        &self.upload
+    }
+
+    #[must_use]
+    pub(crate) fn request_sha256(&self) -> Sha256Hash {
+        self.upload.sha256()
+    }
+
+    #[must_use]
+    pub(crate) const fn include_input(&self) -> bool {
+        self.include_input
+    }
+
+    #[must_use]
+    pub(crate) fn input(&self, extracted_text: Option<String>) -> AnalysisInput {
+        AnalysisInput::File(FileInput {
+            filename: NonEmptyString::new(self.upload.filename().to_owned())
+                .expect("FileUpload validates a non-empty basename"),
+            media_type: NonEmptyString::new(self.upload.format().media_type().to_owned())
+                .expect("the closed file media type is non-empty"),
+            sha256: self.upload.sha256(),
+            size_bytes: self.upload.size_bytes(),
+            path: self.include_input.then(|| self.path.clone()).flatten(),
+            extracted_text: self.include_input.then_some(extracted_text).flatten(),
+        })
     }
 }
 
@@ -384,25 +501,28 @@ mod tests {
     }
 
     #[test]
-    fn saved_rerun_requires_exactly_one_ai_detection_check() {
-        assert!(
-            AnalysisRequest::from_saved_rerun(&saved_analysis(valid_input(), [plagiarism_check()]))
-                .is_none()
-        );
-        assert!(
-            AnalysisRequest::from_saved_rerun(&saved_analysis(
-                valid_input(),
-                [ai_check(), plagiarism_check()]
-            ))
-            .is_none()
-        );
+    fn saved_rerun_preserves_each_canonical_text_check_set() {
+        for (checks, expected) in [
+            (vec![ai_check()], TextAnalysisMode::Detection),
+            (vec![plagiarism_check()], TextAnalysisMode::Plagiarism),
+            (
+                vec![ai_check(), plagiarism_check()],
+                TextAnalysisMode::Combined,
+            ),
+        ] {
+            let (_, mode) =
+                AnalysisRequest::from_saved_rerun(&saved_analysis(valid_input(), checks))
+                    .expect("canonical text check set is rerunnable");
+            assert_eq!(mode, expected);
+        }
     }
 
     #[test]
     fn saved_rerun_creates_fresh_private_request_with_verified_identity() {
         let original = saved_analysis(valid_input(), [ai_check()]);
-        let request = AnalysisRequest::from_saved_rerun(&original).unwrap();
+        let (request, mode) = AnalysisRequest::from_saved_rerun(&original).unwrap();
 
+        assert_eq!(mode, TextAnalysisMode::Detection);
         assert_ne!(request.id(), original.id);
         assert_eq!(request.rerun_of(), Some(original.id));
         assert_eq!(request.text(), RETAINED_TEXT);

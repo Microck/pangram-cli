@@ -5,12 +5,15 @@ Protocol: MCP 2026-07-28 over stdio.
 ## Tools
 
 - `detect_text`: Detect AI-written text with Pangram 4.
+- `check_plagiarism`: Check text for plagiarism against online sources.
+- `analyze_text`: Run Pangram 4 AI detection and plagiarism checks on the same text.
 - `get_task`: Get one Pangram task without waiting.
 - `wait_task`: Wait for one Pangram task to reach a terminal state.
 - `submit_bulk`: Submit inline items or one approved JSONL file to Pangram 4.
 - `get_bulk`: Get one Pangram bulk job without waiting.
 - `wait_bulk`: Wait for one Pangram bulk job to reach a terminal state.
 - `get_bulk_results`: Get one explicit results page for a Pangram bulk job.
+- `check_update`: Check for a Pangram CLI update without installing it.
 - `history_list`: List saved local analysis summaries.
 - `history_search`: Search saved local analysis summaries with literal text.
 - `history_get`: Get one saved local analysis, redacted by default.

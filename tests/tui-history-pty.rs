@@ -394,8 +394,8 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
             receive_until(&output_rx, &mut transcript, SCREEN_TIMEOUT, |bytes| {
                 screen_contains(bytes, "searched AI target")
                     && screen_contains(bytes, "Showing 1")
-                    && screen_contains(bytes, "Check filter: AI detection")
-                    && screen_contains(bytes, "Status filter: succeeded")
+                    && screen_contains(bytes, "Check  AI detection")
+                    && screen_contains(bytes, "Status  succeeded")
             }),
             "the final literal search and closed filters did not select the AI target:\n{}",
             String::from_utf8_lossy(&transcript)
@@ -421,7 +421,7 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
         // overlay with Cancel selected; the second Enter must not mutate.
         write_keys(&mut writer, b"\t\t\t\r", "open selected-record deletion");
         assert_screen_text(&output_rx, &mut transcript, "Delete local history record");
-        assert_screen_text(&output_rx, &mut transcript, "> [Enter] Cancel <");
+        assert_screen_text(&output_rx, &mut transcript, "> Cancel   right Delete");
         write_keys(&mut writer, b"\r", "accept the default cancel action");
         assert!(
             HistoryStore::open_existing(&isolated.data)

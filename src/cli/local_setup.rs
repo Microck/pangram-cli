@@ -46,7 +46,7 @@ impl PhaseOneOutcome {
         }
     }
 
-    fn failure(command: ResolvedCommand, error: CanonicalError) -> Self {
+    pub(super) fn failure(command: ResolvedCommand, error: CanonicalError) -> Self {
         let exit_code = ExitCode::for_error(error.category()).as_u8();
         Self {
             exit_code,

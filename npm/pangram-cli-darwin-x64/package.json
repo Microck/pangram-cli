@@ -1,0 +1,11 @@
+{
+  "name": "@microck/pangram-cli-darwin-x64",
+  "version": "0.1.0",
+  "description": "Unofficial Pangram CLI binary for macOS x64",
+  "license": "MIT",
+  "repository": "https://github.com/Microck/pangram-cli",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["bin", "NOTICE.md"],
+  "publishConfig": { "access": "public" }
+}

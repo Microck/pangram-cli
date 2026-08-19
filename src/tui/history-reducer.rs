@@ -317,7 +317,7 @@ fn reload_if_dirty(state: &mut AppState, effects: &mut Vec<Effect>) -> bool {
     true
 }
 
-fn load_selected_detail(state: &mut AppState, effects: &mut Vec<Effect>) {
+pub(super) fn load_selected_detail(state: &mut AppState, effects: &mut Vec<Effect>) {
     let Some(analysis_id) = state.history.selected_id() else {
         return;
     };

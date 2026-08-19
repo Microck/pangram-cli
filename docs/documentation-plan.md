@@ -2,7 +2,8 @@
 
 Status: approved outline
 Framework: Diataxis
-Public destination: `https://pangram.micr.dev`
+Landing-page destination: `https://pangram.micr.dev/`
+Documentation destination: `https://pangram.micr.dev/docs`
 
 ## 1. Documentation goals
 
@@ -32,7 +33,8 @@ First-class secondary audience:
 Contributor documentation is separate from user documentation and lives in
 the repository.
 
-The home page provides two equally visible starting paths:
+The landing page at `/` provides two equally visible starting paths into the
+documentation at `/docs`:
 
 ```text
 Use the CLI or TUI        Connect an AI agent
@@ -69,51 +71,52 @@ Excluded:
 ## 4. Information architecture
 
 ```text
-Home
-|-- Tutorials
-|   |-- Your first TUI analysis
-|   |-- Your first JSON pipeline
-|   `-- Connect your first MCP client
-|-- How-to guides
-|   |-- Install Pangram CLI
-|   |-- Configure an API key
-|   |-- Detect AI-written text
-|   |-- Check plagiarism
-|   |-- Run a combined analysis
-|   |-- Analyze PDF, DOCX, and RTF files
-|   |-- Submit and retrieve bulk work
-|   |-- Enable and search local history
-|   |-- Export and rerun results
-|   |-- Use JSON, JSONL, TOON, and Markdown
-|   |-- Configure MCP clients
-|   |-- Gate MCP capabilities and file access
-|   |-- Generate shell completions
-|   |-- Check and install updates
-|   `-- Uninstall Pangram MCP entries
-|-- Reference
-|   |-- Command index
-|   |-- Authentication
-|   |-- Configuration
-|   |-- Environment variables
-|   |-- Output schema
-|   |-- Error catalog
-|   |-- Exit codes
-|   |-- Progress events
-|   |-- MCP tools
-|   |-- MCP resources and capabilities
-|   |-- TUI shortcuts
-|   |-- History storage
-|   |-- Update manifest
-|   `-- Supported platforms and packages
-|-- Explanation
-|   |-- How to interpret AI-detection evidence
-|   |-- AI detection and plagiarism
-|   |-- Privacy and retention boundaries
-|   |-- Billing and billable-unit estimates
-|   |-- Pangram web parity and API limitations
-|   |-- Why one core serves CLI, TUI, and MCP
-|   `-- How signed releases and updates work
-`-- Changelog
+Landing page (/)
+`-- Documentation (/docs)
+    |-- Tutorials
+    |   |-- Your first TUI analysis
+    |   |-- Your first JSON pipeline
+    |   `-- Connect your first MCP client
+    |-- How-to guides
+    |   |-- Install Pangram CLI
+    |   |-- Configure an API key
+    |   |-- Detect AI-written text
+    |   |-- Check plagiarism
+    |   |-- Run a combined analysis
+    |   |-- Analyze PDF, DOCX, and RTF files
+    |   |-- Submit and retrieve bulk work
+    |   |-- Enable and search local history
+    |   |-- Export and rerun results
+    |   |-- Use JSON, JSONL, TOON, and Markdown
+    |   |-- Configure MCP clients
+    |   |-- Gate MCP capabilities and file access
+    |   |-- Generate shell completions
+    |   |-- Check and install updates
+    |   `-- Uninstall Pangram MCP entries
+    |-- Reference
+    |   |-- Command index
+    |   |-- Authentication
+    |   |-- Configuration
+    |   |-- Environment variables
+    |   |-- Output schema
+    |   |-- Error catalog
+    |   |-- Exit codes
+    |   |-- Progress events
+    |   |-- MCP tools
+    |   |-- MCP resources and capabilities
+    |   |-- TUI shortcuts
+    |   |-- History storage
+    |   |-- Update manifest
+    |   `-- Supported platforms and packages
+    |-- Explanation
+    |   |-- How to interpret AI-detection evidence
+    |   |-- AI detection and plagiarism
+    |   |-- Privacy and retention boundaries
+    |   |-- Billing and billable-unit estimates
+    |   |-- Pangram web parity and API limitations
+    |   |-- Why one core serves CLI, TUI, and MCP
+    |   `-- How signed releases and updates work
+    `-- Changelog
 ```
 
 ## 5. Tutorials
@@ -226,7 +229,7 @@ Use one generated matrix with:
 Explain the single-core model at a user-integrator level. Detailed module
 ownership stays in the repository architecture specification.
 
-## 9. Home page
+## 9. Landing page
 
 Title:
 
@@ -234,7 +237,7 @@ Title:
 Pangram CLI - AI detection and plagiarism from the terminal
 ```
 
-Home-page sequence:
+Landing-page sequence:
 
 1. one-sentence product statement
 2. two starting-path cards for humans and agents
@@ -247,7 +250,7 @@ Home-page sequence:
 
 The docs site footer carries a concise unofficial-project disclosure and links
 to the full README disclaimer. Package metadata carries the same concise
-disclosure. The home-page body does not need a second long disclaimer.
+disclosure. The landing-page body does not need a second long disclaimer.
 
 ## 10. Search positioning
 
@@ -363,6 +366,8 @@ After public-release gates:
 
 - deploy through Vercel
 - attach `pangram.micr.dev`
+- serve the product landing page at `/`
+- serve Fumadocs at `/docs` without redirecting the domain root
 - make production deployment part of release readiness
 
 ## 16. Documentation verification
@@ -370,6 +375,8 @@ After public-release gates:
 CI MUST verify:
 
 - links resolve
+- `/` builds as the product landing page and Fumadocs uses `/docs` as its base
+  URL
 - added Markdown URLs return expected content
 - generated reference matches Rust contracts
 - examples validate against JSON Schemas

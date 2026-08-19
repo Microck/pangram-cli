@@ -199,6 +199,15 @@ pub(super) fn success_outcome(
     started_at: crate::domain::UtcTimestamp,
     analyses: Vec<crate::domain::Analysis<CanonicalError>>,
 ) -> DetectOutcome {
+    success_outcome_for(ResolvedCommand::Detect, output, started_at, analyses)
+}
+
+pub(crate) fn success_outcome_for(
+    command: ResolvedCommand,
+    output: ResolvedOutput,
+    started_at: crate::domain::UtcTimestamp,
+    analyses: Vec<crate::domain::Analysis<CanonicalError>>,
+) -> DetectOutcome {
     let duration_ms = elapsed_ms(started_at);
     let meta = EnvelopeMeta::default()
         .with_started_at(started_at)
@@ -212,11 +221,13 @@ pub(super) fn success_outcome(
     match analyses.len() {
         1 => {
             let analysis = analyses.into_iter().next().expect("one analysis");
-            let envelope =
-                CommandEnvelope::success(CommandData::Detect(AnalysisOutput::one(analysis)), meta);
+            let envelope = CommandEnvelope::success(
+                analysis_data(command, AnalysisOutput::one(analysis)),
+                meta,
+            );
             let exit_code = output_exit_code(&envelope).as_u8();
             emit_primary(
-                ResolvedCommand::Detect,
+                command,
                 std::slice::from_ref(&envelope),
                 output,
                 exit_code,
@@ -241,29 +252,23 @@ pub(super) fn success_outcome(
                         .into_iter()
                         .map(|analysis| {
                             CommandEnvelope::success(
-                                CommandData::Detect(AnalysisOutput::one(analysis)),
+                                analysis_data(command, AnalysisOutput::one(analysis)),
                                 meta.clone(),
                             )
                         })
                         .collect();
-                    emit_primary(
-                        ResolvedCommand::Detect,
-                        &envelopes,
-                        output,
-                        exit_code,
-                        started_at,
-                    )
+                    emit_primary(command, &envelopes, output, exit_code, started_at)
                 }
                 _ => {
                     let data = match AnalysisOutput::from_analyses(analyses) {
                         Ok(data) => data,
                         Err(_) => {
-                            return internal_outcome(ResolvedCommand::Detect, output, started_at);
+                            return internal_outcome(command, output, started_at);
                         }
                     };
-                    let envelope = CommandEnvelope::success(CommandData::Detect(data), meta);
+                    let envelope = CommandEnvelope::success(analysis_data(command, data), meta);
                     emit_primary(
-                        ResolvedCommand::Detect,
+                        command,
                         std::slice::from_ref(&envelope),
                         output,
                         exit_code,
@@ -272,6 +277,15 @@ pub(super) fn success_outcome(
                 }
             }
         }
+    }
+}
+
+fn analysis_data(command: ResolvedCommand, data: AnalysisOutput) -> CommandData {
+    match command {
+        ResolvedCommand::Detect => CommandData::Detect(data),
+        ResolvedCommand::Plagiarism => CommandData::Plagiarism(data),
+        ResolvedCommand::Analyze => CommandData::Analyze(data),
+        _ => unreachable!("only analysis-series commands use this renderer"),
     }
 }
 
@@ -314,10 +328,16 @@ pub(crate) fn analysis_command_outcome(
 /// 6); an accepted (`--detach`) run stays 0.
 fn output_exit_code(envelope: &CommandEnvelope) -> ExitCode {
     match envelope.data() {
-        Some(CommandData::Detect(AnalysisOutput::One(analysis))) => analysis_exit_code(analysis),
-        Some(CommandData::Detect(AnalysisOutput::Many(analyses))) => {
-            run_exit_code(analyses.as_slice())
-        }
+        Some(
+            CommandData::Detect(AnalysisOutput::One(analysis))
+            | CommandData::Plagiarism(AnalysisOutput::One(analysis))
+            | CommandData::Analyze(AnalysisOutput::One(analysis)),
+        ) => analysis_exit_code(analysis),
+        Some(
+            CommandData::Detect(AnalysisOutput::Many(analyses))
+            | CommandData::Plagiarism(AnalysisOutput::Many(analyses))
+            | CommandData::Analyze(AnalysisOutput::Many(analyses)),
+        ) => run_exit_code(analyses.as_slice()),
         _ => ExitCode::Success,
     }
 }

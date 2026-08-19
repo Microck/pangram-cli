@@ -46,16 +46,38 @@ pub fn stored_analysis_with_retained_text(
     save_state: SaveState,
     retained_text: Option<&str>,
 ) -> Result<StoredAnalysis, HistoryError> {
+    let retained = retained_text.map(|text| super::RetainedInput::Text(text.to_owned()));
+    stored_analysis_with_retained_input(analysis, save_state, retained.as_ref())
+}
+
+pub fn stored_analysis_with_retained_input(
+    analysis: &Analysis<CanonicalError>,
+    save_state: SaveState,
+    retained_input: Option<&super::RetainedInput>,
+) -> Result<StoredAnalysis, HistoryError> {
     let mut input_value = serde_json::to_value(&analysis.input)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
-    if let (Some(text), Some(input)) = (retained_text, input_value.as_object_mut())
-        && input.get("type").and_then(serde_json::Value::as_str) == Some("text")
-        && input.get("text").and_then(serde_json::Value::as_str) != Some(text)
-    {
-        input.insert(
-            "text".to_owned(),
-            serde_json::Value::String(text.to_owned()),
-        );
+    if let (Some(retained), Some(input)) = (retained_input, input_value.as_object_mut()) {
+        match retained {
+            super::RetainedInput::Text(text)
+                if input.get("type").and_then(serde_json::Value::as_str) == Some("text") =>
+            {
+                input.insert("text".to_owned(), serde_json::Value::String(text.clone()));
+            }
+            super::RetainedInput::File {
+                path,
+                extracted_text,
+            } if input.get("type").and_then(serde_json::Value::as_str) == Some("file") => {
+                input.insert("path".to_owned(), serde_json::Value::String(path.clone()));
+                if let Some(extracted_text) = extracted_text {
+                    input.insert(
+                        "extracted_text".to_owned(),
+                        serde_json::Value::String(extracted_text.clone()),
+                    );
+                }
+            }
+            _ => return Err(serialization_failure("retain analysis input")),
+        }
     }
     let input_json = serde_json::to_string(&input_value)
         .map_err(|_| serialization_failure("serialize analysis input"))?;
@@ -64,8 +86,13 @@ pub fn stored_analysis_with_retained_text(
 
     let (input_kind, input_sha256, display_name, mut search_input_text, search_filename) =
         project_input(analysis);
-    if retained_text.is_some() && analysis.input().is_some() {
-        search_input_text = retained_text.map(str::to_owned);
+    if let Some(retained) = retained_input
+        && analysis.input().is_some()
+    {
+        search_input_text = match retained {
+            super::RetainedInput::Text(text) => Some(text.clone()),
+            super::RetainedInput::File { extracted_text, .. } => extracted_text.clone(),
+        };
     }
 
     Ok(StoredAnalysis {

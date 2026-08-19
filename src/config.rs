@@ -18,6 +18,17 @@ pub(crate) mod windows_acl;
 pub use credentials::{
     CREDENTIALS_FILE_NAME, CredentialResolution, CredentialService, CredentialSource,
 };
+pub(crate) use credentials::{atomic_secret_write, enforce_protected_permissions};
+use zeroize::Zeroizing;
+
+/// Reads one owner-only file into zeroizing memory for release tooling.
+#[doc(hidden)]
+pub fn read_protected_file(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>, ConfigError> {
+    enforce_protected_permissions(path)?;
+    std::fs::read(path)
+        .map(Zeroizing::new)
+        .map_err(|error| ConfigError::Io(format!("cannot read protected file: {error}")))
+}
 pub(crate) use file_config::ConfigSetOutcome;
 pub use file_config::{CONFIG_FILE_NAME, ConfigKey, ConfigValue, FileConfigStore};
 pub use model::{

@@ -1,0 +1,47 @@
+# Command index
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+| Command | Kind | Availability | Arguments |
+| --- | --- | --- | --- |
+| `pangram` | entrypoint | available | TEXT TEXT |
+| `pangram detect` | command | available | TEXT TEXT, --file PATH, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram plagiarism` | command | available | TEXT TEXT, --file PATH, --format FORMAT, --include-input, --save, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram analyze` | command | available | TEXT TEXT, --file PATH, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram bulk` | namespace | available | none |
+| `pangram bulk submit` | command | available | JSONL_PATH JSONL_PATH, --max-billable-units N, --dry-run, --wait, --format FORMAT, --progress MODE |
+| `pangram bulk status` | command | available | ID ID |
+| `pangram bulk wait` | command | available | ID ID, --timeout DURATION, --progress MODE |
+| `pangram bulk results` | command | available | ID ID, --offset N, --limit N, --format FORMAT |
+| `pangram task` | namespace | available | none |
+| `pangram task status` | command | available | ID ID |
+| `pangram task wait` | command | available | ID ID, --timeout DURATION, --progress MODE |
+| `pangram history` | namespace | available | none |
+| `pangram history list` | command | available | --status STATUS, --check CHECK, --limit N |
+| `pangram history show` | command | available | ID ID, --include-input, --format FORMAT |
+| `pangram history search` | command | available | QUERY QUERY, --status STATUS, --check CHECK, --limit N |
+| `pangram history delete` | command | available | ID ID, --yes |
+| `pangram history clear` | command | available | --yes |
+| `pangram history export` | command | available | --format FORMAT, --redact-content |
+| `pangram history rerun` | command | available | ID ID, --format FORMAT, --progress MODE |
+| `pangram auth` | command | available | none |
+| `pangram auth set` | command | available | --api-key VALUE, --api-key-stdin |
+| `pangram auth status` | command | available | none |
+| `pangram auth logout` | command | available | --yes |
+| `pangram mcp` | command | available | --history, --allow-history-mutations, --allow-config-mutations, --allow-public-links, --allow-file-root PATH |
+| `pangram mcp install` | command | available | --target CLIENT, --all, --server-name NAME, --dry-run |
+| `pangram mcp uninstall` | command | available | --target CLIENT, --all, --server-name NAME, --dry-run |
+| `pangram mcp status` | command | available | --format FORMAT |
+| `pangram agent` | command | available | none |
+| `pangram skills` | namespace | available | none |
+| `pangram skills list` | command | available | none |
+| `pangram skills get` | command | available | SKILL SKILL, --full |
+| `pangram skills path` | command | available | SKILL SKILL |
+| `pangram config` | namespace | available | none |
+| `pangram config list` | command | available | none |
+| `pangram config get` | command | available | KEY KEY |
+| `pangram config set` | command | available | KEY KEY, VALUE VALUE |
+| `pangram config path` | command | available | none |
+| `pangram doctor` | command | available | --format FORMAT |
+| `pangram completions` | command | available | SHELL SHELL |
+| `pangram update` | command | available | --check, --yes |

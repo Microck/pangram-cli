@@ -68,6 +68,24 @@ impl ToolRuntime {
 
         match name {
             ToolName::DetectText => analysis::detect_text(&context, arguments, started).await,
+            ToolName::CheckPlagiarism => {
+                analysis::phase7_text(
+                    &context,
+                    arguments,
+                    started,
+                    crate::analysis::TextAnalysisMode::Plagiarism,
+                )
+                .await
+            }
+            ToolName::AnalyzeText => {
+                analysis::phase7_text(
+                    &context,
+                    arguments,
+                    started,
+                    crate::analysis::TextAnalysisMode::Combined,
+                )
+                .await
+            }
             ToolName::GetTask => {
                 analysis::task(&context, arguments, started, analysis::TaskOperation::Get).await
             }
@@ -84,6 +102,11 @@ impl ToolRuntime {
             ToolName::GetBulkResults => {
                 bulk::observe(&context, arguments, started, bulk::BulkOperation::Results).await
             }
+            ToolName::CheckUpdate => failure(
+                ResolvedCommand::UpdateCheck,
+                crate::update::private_build_error(),
+                started,
+            ),
             ToolName::HistoryList => {
                 local::history_query(&context, arguments, false, started).await
             }
