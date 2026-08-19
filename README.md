@@ -4,25 +4,6 @@
 plagiarism checking. It is designed for interactive TUI use, shell pipelines,
 and AI agents that need stable JSON and MCP contracts.
 
-> [!NOTE]
-> The runtime is mid-build: the compiled binary currently ships working
-> `auth` (persistent API-key setup and status), `config` (list/get/set/path),
-> `doctor` (local diagnostics), `detect` (Pangram 4 text AI detection,
-> including text, PDF, DOCX, and RTF input), `plagiarism` (text plagiarism),
-> `analyze` (combined text detection and plagiarism), `bulk` (submit, status,
-> wait, and results for asynchronous bulk detection), `task`
-> (status and wait for one Pangram text task), `history` (list, show,
-> literal-text search, delete, clear, export, and rerun), and `update` (typed
-> private-build status with no release-network access) are compiled and available.
-> Shell completion generation is also available for Bash, Zsh, Fish,
-> PowerShell, and Elvish.
-> The TUI and typed stdio MCP server are compiled and available. The official
-> MCP suite cannot yet drive the selected stdio surface, so compiled product
-> protocol tests are the correctness gate. Minimum live file and plagiarism
-> conformance is complete. Pangram permission, intro art, and production
-> signing are recorded. Public release validation still requires native
-> install proof and the authorized package and documentation publication.
-
 The project uses Pangram's documented API-key-authenticated REST endpoints. It
 does not use browser sessions, private dashboard routes, or scraping.
 
@@ -120,7 +101,7 @@ Available today:
 | `pangram agent` | Print the embedded agent usage guide |
 | `pangram skills` | List and load version-matched embedded skills |
 | `pangram completions` | Generate a completion script for Bash, Zsh, Fish, PowerShell, or Elvish |
-| `pangram update` | Report that signed updates are unavailable in `0.x` builds without network or installation work |
+| `pangram update` | Inspect signed update status |
 
 See [the CLI contract](docs/contracts.md) for the approved grammar, formats,
 errors, and exit codes.
@@ -196,8 +177,7 @@ and acceptable-use policies. Detection results are probabilistic evidence and
 should be one signal among many, not a verdict.
 
 The project owner has recorded Pangram's authorization for this third-party
-CLI and MCP server. Public distribution still waits for the native release,
-package, and documentation gates described in the release plan.
+CLI and MCP server.
 
 ## License
 

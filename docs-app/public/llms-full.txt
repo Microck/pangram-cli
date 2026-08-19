@@ -2,8 +2,7 @@
 
 Source: https://pangram.micr.dev/docs/changelog
 
-No public release has been published. Pending user-visible changes live in
-Tegami fragments in the repository until release authority and all gates pass.
+Release notes are published here with each version.
 
 # Billing and billable-unit estimates
 
@@ -159,9 +158,6 @@ with new identity and preserves durable lineage to the saved analysis.
 # Install Pangram CLI
 
 Source: https://pangram.micr.dev/docs/how-to/install
-
-These commands become live when the first public release is published. Until
-then, clone the repository and build the locked Rust package for development.
 
 ## macOS or Linux
 
@@ -512,10 +508,9 @@ Source: https://pangram.micr.dev/docs/reference/platforms-packages
 | macOS Apple Silicon | macOS 15 |
 | Windows x86-64 | Windows Server 2025 |
 
-No public package channel is released yet. Planned public channels are GitHub
-Releases, direct POSIX and PowerShell installers, npm, Homebrew, and Scoop. A
-target becomes supported only after its exact archive passes the native smoke
-test required by the observable contract.
+Distribution channels include GitHub Releases, direct POSIX and PowerShell
+installers, npm, Homebrew, and Scoop. A target is supported only after its
+exact archive passes the native smoke test required by the observable contract.
 
 # Progress events
 
