@@ -338,7 +338,27 @@ fn known_package_manager_paths_return_advice_without_claiming_update_ownership()
             "scoop update pangram",
         ),
         (
-            "/usr/local/lib/node_modules/@microck/pangram-cli/bin/pangram",
+            "/usr/local/lib/node_modules/@microck/pangram-cli-linux-x64/bin/pangram",
+            InstallManager::Npm,
+            "npm update --global @microck/pangram-cli",
+        ),
+        (
+            "/usr/local/lib/node_modules/@microck/pangram-cli-linux-arm64/bin/pangram",
+            InstallManager::Npm,
+            "npm update --global @microck/pangram-cli",
+        ),
+        (
+            "/usr/local/lib/node_modules/@microck/pangram-cli-darwin-x64/bin/pangram",
+            InstallManager::Npm,
+            "npm update --global @microck/pangram-cli",
+        ),
+        (
+            "/usr/local/lib/node_modules/@microck/pangram-cli-darwin-arm64/bin/pangram",
+            InstallManager::Npm,
+            "npm update --global @microck/pangram-cli",
+        ),
+        (
+            r"C:\Users\example\AppData\Roaming\npm\node_modules\@microck\pangram-cli-win32-x64\bin\pangram.exe",
             InstallManager::Npm,
             "npm update --global @microck/pangram-cli",
         ),
@@ -347,7 +367,13 @@ fn known_package_manager_paths_return_advice_without_claiming_update_ownership()
         assert_eq!(advisory.manager(), manager);
         assert_eq!(advisory.command(), command);
     }
-    assert!(detect_manager_install(Path::new("/home/example/.local/bin/pangram")).is_none());
+    for path in [
+        "/home/example/.local/bin/pangram",
+        "/usr/local/lib/node_modules/@microck/pangram-cli/bin/pangram",
+        "/usr/local/lib/node_modules/@microck/pangram-cli-linux-x64-extra/bin/pangram",
+    ] {
+        assert!(detect_manager_install(Path::new(path)).is_none(), "{path}");
+    }
 }
 
 #[test]

@@ -133,7 +133,12 @@ compromised, recovery is an out-of-band reinstall; the updater does not accept
 an unsigned revocation document.
 
 Manager-owned installations never replace their executable. They return the
-detected manager and its update command.
+detected manager and its update command. npm ownership is recognized only for
+native executables below the five shipped platform packages:
+`@microck/pangram-cli-darwin-arm64`, `@microck/pangram-cli-darwin-x64`,
+`@microck/pangram-cli-linux-arm64`, `@microck/pangram-cli-linux-x64`, and
+`@microck/pangram-cli-win32-x64`. The advice for each is
+`npm update --global @microck/pangram-cli`.
 
 ## Archive contract
 

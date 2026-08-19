@@ -10,6 +10,13 @@ use super::{Target, UpdateError, UpdateErrorKind, parse_version};
 use crate::domain::{Sha256Hash, UtcTimestamp, deserialize_missing_only};
 
 const UPDATE_STATE_FILE_NAME: &str = "update-state.json";
+const NPM_PLATFORM_PACKAGES: [&str; 5] = [
+    "/node_modules/@microck/pangram-cli-darwin-arm64/",
+    "/node_modules/@microck/pangram-cli-darwin-x64/",
+    "/node_modules/@microck/pangram-cli-linux-arm64/",
+    "/node_modules/@microck/pangram-cli-linux-x64/",
+    "/node_modules/@microck/pangram-cli-win32-x64/",
+];
 
 /// Package managers recognized only for update instructions. Detection never
 /// creates a direct-install receipt or permits binary replacement.
@@ -58,7 +65,10 @@ pub fn detect_manager_install(executable: &Path) -> Option<ManagerAdvisory> {
             command: "scoop update pangram",
         });
     }
-    if normalized.contains("/node_modules/@microck/pangram-cli/") {
+    if NPM_PLATFORM_PACKAGES
+        .iter()
+        .any(|package| normalized.contains(package))
+    {
         return Some(ManagerAdvisory {
             manager: InstallManager::Npm,
             command: "npm update --global @microck/pangram-cli",

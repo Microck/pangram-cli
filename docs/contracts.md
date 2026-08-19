@@ -2148,9 +2148,15 @@ native archive from the same immutable `vVERSION` GitHub Release. It never
 mixes `latest` metadata with a version-pinned candidate. The npm Linux platform
 packages declare `glibc` as their required libc because both Linux release
 targets are GNU builds; npm must skip them on musl hosts rather than install an
-incompatible executable. Candidate smoke tests retry only transient operating
-system spawn contention with a small fixed bound. A started process that fails
-or reports the wrong version is rejected immediately.
+incompatible executable. The updater recognizes manager ownership from the
+native executable paths in exactly these npm platform packages:
+`@microck/pangram-cli-darwin-arm64`, `@microck/pangram-cli-darwin-x64`,
+`@microck/pangram-cli-linux-arm64`, `@microck/pangram-cli-linux-x64`, and
+`@microck/pangram-cli-win32-x64`. It returns the main-package command
+`npm update --global @microck/pangram-cli` as advice and never claims direct
+update ownership. Candidate smoke tests retry only transient operating-system
+spawn contention with a small fixed bound. A started process that fails or
+reports the wrong version is rejected immediately.
 
 ## 15. Local setup contract
 
