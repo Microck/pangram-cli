@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::state::{parse_install_receipt, validate_parsed_install_receipt};
 use super::{InstallReceipt, Target, UpdateError, UpdateErrorKind, validate_install_receipt};
@@ -291,16 +291,46 @@ fn stage_executable(destination: &Path, bytes: &[u8]) -> Result<PathBuf, UpdateE
 }
 
 fn smoke_version(executable: &Path, expected_version: &str) -> bool {
-    let output = Command::new(executable)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output();
-    output.is_ok_and(|output| {
-        output.status.success()
-            && String::from_utf8(output.stdout)
-                .is_ok_and(|stdout| stdout.trim_end() == format!("pangram {expected_version}"))
-    })
+    smoke_version_with_retry_observer(executable, expected_version, || {})
+}
+
+fn smoke_version_with_retry_observer(
+    executable: &Path,
+    expected_version: &str,
+    mut observe_retry: impl FnMut(),
+) -> bool {
+    const ATTEMPTS: usize = 5;
+    const RETRY_DELAY: Duration = Duration::from_millis(25);
+
+    for attempt in 0..ATTEMPTS {
+        let output = Command::new(executable)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        match output {
+            Ok(output) => {
+                return output.status.success()
+                    && String::from_utf8(output.stdout).is_ok_and(|stdout| {
+                        stdout.trim_end() == format!("pangram {expected_version}")
+                    });
+            }
+            Err(error) if attempt + 1 < ATTEMPTS && transient_spawn_error(&error) => {
+                observe_retry();
+                std::thread::sleep(RETRY_DELAY);
+            }
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+fn transient_spawn_error(error: &std::io::Error) -> bool {
+    let kind = error.kind();
+    matches!(
+        kind,
+        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+    ) || (cfg!(target_os = "linux") && kind == std::io::ErrorKind::ExecutableFileBusy)
 }
 
 #[cfg(unix)]
@@ -507,4 +537,70 @@ const fn not_owned_error() -> UpdateError {
         UpdateErrorKind::InstallNotOwned,
         "The install destination is not owned by a matching direct-install receipt.",
     )
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::{smoke_version, smoke_version_with_retry_observer};
+
+    #[test]
+    fn version_smoke_retries_linux_executable_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("pangram");
+        fs::write(&executable, b"#!/bin/sh\nprintf 'pangram 1.2.3\\n'\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Linux rejects exec with ETXTBSY while the file is open for writing.
+        // Release that real contention only after the failed spawn is observed.
+        let mut writer = Some(
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&executable)
+                .unwrap(),
+        );
+        let mut retries = 0;
+
+        assert!(smoke_version_with_retry_observer(
+            &executable,
+            "1.2.3",
+            || {
+                retries += 1;
+                drop(writer.take());
+            }
+        ));
+        assert_eq!(retries, 1);
+    }
+
+    #[test]
+    fn version_smoke_does_not_retry_a_started_wrong_version() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("pangram");
+        fs::write(
+            &executable,
+            b"#!/bin/sh\nif [ -e \"$0.ran\" ]; then printf 'pangram 1.2.3\\n'; else : >\"$0.ran\"; printf 'pangram 9.9.9\\n'; fi\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!smoke_version(&executable, "1.2.3"));
+        assert!(executable.with_extension("ran").is_file());
+    }
+
+    #[test]
+    fn version_smoke_does_not_retry_a_started_nonzero_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("pangram");
+        fs::write(
+            &executable,
+            b"#!/bin/sh\nif [ -e \"$0.ran\" ]; then printf 'pangram 1.2.3\\n'; else : >\"$0.ran\"; exit 9; fi\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(!smoke_version(&executable, "1.2.3"));
+        assert!(executable.with_extension("ran").is_file());
+    }
 }

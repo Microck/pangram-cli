@@ -2140,7 +2140,9 @@ native archive from the same immutable `vVERSION` GitHub Release. It never
 mixes `latest` metadata with a version-pinned candidate. The npm Linux platform
 packages declare `glibc` as their required libc because both Linux release
 targets are GNU builds; npm must skip them on musl hosts rather than install an
-incompatible executable.
+incompatible executable. Candidate smoke tests retry only transient operating
+system spawn contention with a small fixed bound. A started process that fails
+or reports the wrong version is rejected immediately.
 
 ## 15. Local setup contract
 

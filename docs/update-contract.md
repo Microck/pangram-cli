@@ -178,6 +178,10 @@ same immutable `releases/download/vVERSION` location. The mutable `latest`
 locations above belong only to an installed updater checking for a newer
 release. A versioned installer never combines them with its pinned candidate.
 
+Candidate smoke tests retry only transient operating-system spawn contention,
+with at most five attempts separated by 25 milliseconds. A process that starts
+but exits unsuccessfully or reports the wrong version fails without a retry.
+
 The release workflow renders installers only after signing the manifest. It
 runs each native candidate against those exact signed files before any release
 or registry publication. Installer templates and rendered scripts contain no
