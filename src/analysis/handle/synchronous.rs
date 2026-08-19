@@ -22,9 +22,10 @@ impl<C: super::super::config::Clock> Analyzer<C> {
     pub async fn detect_file(
         &self,
         request: FileAnalysisRequest,
+        options: WaitOptions,
         cancel: &CancellationToken,
     ) -> Result<Analysis<CanonicalError>, TaskError> {
-        self.detect_file_retained(request, cancel)
+        self.detect_file_retained(request, options, cancel)
             .await
             .map(|(analysis, _)| analysis)
     }
@@ -36,14 +37,23 @@ impl<C: super::super::config::Clock> Analyzer<C> {
     pub(crate) async fn detect_file_retained(
         &self,
         request: FileAnalysisRequest,
+        options: WaitOptions,
         cancel: &CancellationToken,
     ) -> Result<(Analysis<CanonicalError>, String), TaskError> {
         let submitted_at = UtcTimestamp::now();
-        let normalized = match self
-            .client
-            .submit_files(std::slice::from_ref(request.upload()), cancel)
-            .await
-        {
+        let operation_cancel = cancel.child_token();
+        let clock = self.client.config().clock();
+        let deadline = options.timeout.map(|timeout| clock.now() + timeout);
+        let (outcome, deadline_passed) = super::await_submission(
+            clock,
+            deadline,
+            cancel,
+            &operation_cancel,
+            self.client
+                .submit_files(std::slice::from_ref(request.upload()), &operation_cancel),
+        )
+        .await;
+        let normalized = match outcome {
             Ok(mut results) => results
                 .pop()
                 .expect("one submitted file yields one normalized result"),
@@ -51,7 +61,16 @@ impl<C: super::super::config::Clock> Analyzer<C> {
                 return Err(TaskError::new(request.id(), *error));
             }
             Err(SubmitOutcome::Cancelled) => {
-                return Err(TaskError::new(request.id(), cancelled_error()));
+                let error = if deadline_passed {
+                    super::wait_timeout_error(&OperationIdentity {
+                        analysis_id: request.id(),
+                        task_id: None,
+                        last_stage: None,
+                    })
+                } else {
+                    cancelled_error()
+                };
+                return Err(TaskError::new(request.id(), error));
             }
             Err(SubmitOutcome::Ambiguous(_)) => {
                 return Err(TaskError::new(
@@ -226,23 +245,37 @@ impl<C: super::super::config::Clock> Analyzer<C> {
         };
         let plagiarism = self.plagiarism_until(request.clone(), deadline, stop.token());
         let (detection, plagiarism) = tokio::join!(detection, plagiarism);
-        let detection = match detection {
-            Ok(result) => result,
-            Err(interrupted) => return Err(interrupted),
-        };
 
         if stop.token().is_cancelled() {
-            return Err(match &detection {
-                Ok(analysis) => interrupted_after_detection(analysis),
-                Err(_) => InterruptedAnalysis {
+            if matches!(&detection, Ok(Err(error)) if is_submission_unknown(error)) {
+                let Ok(Err(error)) = detection else {
+                    unreachable!("matched the detection ambiguity above")
+                };
+                return Ok(Err(error));
+            }
+            if matches!(&plagiarism, Err(error) if is_submission_unknown(error)) {
+                let Err(error) = plagiarism else {
+                    unreachable!("matched the plagiarism ambiguity above")
+                };
+                return Ok(Err(error));
+            }
+            return Err(match detection {
+                Ok(Ok(analysis)) => interrupted_after_detection(&analysis),
+                Ok(Err(_)) => InterruptedAnalysis {
                     identity: OperationIdentity {
                         analysis_id: request.id(),
                         task_id: None,
                         last_stage: None,
                     },
                 },
+                Err(interrupted) => interrupted,
             });
         }
+
+        let detection = match detection {
+            Ok(result) => result,
+            Err(interrupted) => return Err(interrupted),
+        };
 
         let mut submission_outcome = SubmissionOutcome::Terminal;
         let (ai_check, mut provenance, created_at) = match detection {
@@ -256,7 +289,7 @@ impl<C: super::super::config::Clock> Analyzer<C> {
                 analysis.created_at,
             ),
             Err(error) => {
-                if matches!(error.error().code(), ErrorCode::SubmissionOutcomeUnknown) {
+                if is_submission_unknown(&error) {
                     submission_outcome = SubmissionOutcome::AcceptanceUnknown;
                 }
                 (
@@ -288,7 +321,7 @@ impl<C: super::super::config::Clock> Analyzer<C> {
                     .expect("a plagiarism analysis owns its plagiarism check")
             }
             Err(error) => {
-                if matches!(error.error().code(), ErrorCode::SubmissionOutcomeUnknown) {
+                if is_submission_unknown(&error) {
                     submission_outcome = SubmissionOutcome::AcceptanceUnknown;
                 }
                 Check::Plagiarism(CheckState::Failed {
@@ -316,6 +349,10 @@ impl<C: super::super::config::Clock> Analyzer<C> {
         )
         .map_err(|_| TaskError::new(request.id(), contract_symptom("analysis", "invalid"))))
     }
+}
+
+fn is_submission_unknown(error: &TaskError) -> bool {
+    error.error().code() == ErrorCode::SubmissionOutcomeUnknown
 }
 
 fn interrupted_after_detection(analysis: &Analysis<CanonicalError>) -> InterruptedAnalysis {

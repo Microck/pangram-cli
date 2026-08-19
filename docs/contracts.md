@@ -1764,16 +1764,19 @@ Rules:
   canonical AI-detection-then-plagiarism order regardless of response order.
   If either check reaches a canonical success while the other concludes with
   an error, the parent analysis is `partial` and retains both the successful
-  result and the failed check. Only local cancellation interrupts the combined
-  result instead of assembling it.
+  result and the failed check. Local cancellation interrupts the combined
+  result instead of assembling it unless cancelling an issued billable request
+  makes its submission outcome ambiguous. In that case,
+  `submission_outcome_unknown` takes precedence over the generic interruption
+  and retains the request hash and reconciliation status.
 - timeout stops waiting, not upstream work. One supplied deadline starts when
   the analysis operation begins and bounds the complete local wait, including
-  a synchronous plagiarism response and both concurrent members of combined
-  analysis. Combined members share that one deadline; neither member resets
-  the budget. If the deadline passes before a billable request is issued, the
-  operation reports `wait_timeout`. If it passes after issue without a
-  response, the outcome is ambiguous and reports
-  `submission_outcome_unknown` under section 12.1.
+  a synchronous plagiarism response, a synchronous binary file response, and
+  both concurrent members of combined analysis. Combined members share that
+  one deadline; neither member resets the budget. If the deadline passes
+  before a billable request is issued, the operation reports `wait_timeout`.
+  If it passes after issue without a response, the outcome is ambiguous and
+  reports `submission_outcome_unknown` under section 12.1.
 - `--max-billable-units` rejects a locally estimated text request above the
   ceiling before submission; MCP billable tools require the same field. Each
   AI-detected text contributes its own started-100-word estimate. A
@@ -2157,6 +2160,14 @@ native executable paths in exactly these npm platform packages:
 update ownership. Candidate smoke tests retry only transient operating-system
 spawn contention with a small fixed bound. A started process that fails or
 reports the wrong version is rejected immediately.
+
+The POSIX direct installer accepts the two GNU Linux targets only when
+`getconf GNU_LIBC_VERSION` proves glibc before any release download; musl and
+unknown libc environments fail with an explicit unsupported-platform error.
+An authorized draft release is created from the workflow commit SHA, never the
+then-current default branch head. Its notes file is generated at runtime from
+the exact version section in the Tegami-owned root `CHANGELOG.md`; a missing or
+mismatched section fails before tag or release creation.
 
 ## 15. Local setup contract
 

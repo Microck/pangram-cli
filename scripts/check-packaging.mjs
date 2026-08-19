@@ -81,3 +81,9 @@ if (
 ) {
   throw new Error("release workflow does not checksum every public release asset");
 }
+if (
+  !releaseWorkflow.includes('--target "$GITHUB_SHA"') ||
+  !releaseWorkflow.includes('--notes-file "$RUNNER_TEMP/release-notes.md"')
+) {
+  throw new Error("release workflow does not pin its tag and generated notes input");
+}

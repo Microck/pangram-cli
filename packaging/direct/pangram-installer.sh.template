@@ -11,7 +11,9 @@ fail() {
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 
-case "$(uname -s):$(uname -m)" in
+system=$(uname -s)
+machine=$(uname -m)
+case "$system:$machine" in
   Linux:x86_64|Linux:amd64)
     archive_name={{FILE_X86_64_UNKNOWN_LINUX_GNU}}
     archive_size={{SIZE_X86_64_UNKNOWN_LINUX_GNU}}
@@ -34,6 +36,14 @@ case "$(uname -s):$(uname -m)" in
     ;;
   *) fail "this operating system and architecture are not supported" ;;
 esac
+
+if [ "$system" = Linux ]; then
+  libc_version=$(getconf GNU_LIBC_VERSION 2>/dev/null) || fail "glibc is required on Linux"
+  case "$libc_version" in
+    glibc\ *) ;;
+    *) fail "glibc is required on Linux" ;;
+  esac
+fi
 
 home=${HOME:?HOME is required}
 destination="$home/.local/bin/pangram"

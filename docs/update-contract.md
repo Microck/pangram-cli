@@ -182,6 +182,9 @@ The installer fetches the manifest, detached signature, and archive from the
 same immutable `releases/download/vVERSION` location. The mutable `latest`
 locations above belong only to an installed updater checking for a newer
 release. A versioned installer never combines them with its pinned candidate.
+The POSIX installer selects GNU Linux archives only after
+`getconf GNU_LIBC_VERSION` proves the host uses glibc. It rejects musl and an
+unknown libc before downloading release files.
 
 Candidate smoke tests retry only transient operating-system spawn contention,
 with at most five attempts separated by 25 milliseconds. A process that starts

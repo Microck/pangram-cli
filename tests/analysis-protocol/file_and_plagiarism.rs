@@ -126,7 +126,7 @@ async fn analyzer_projects_a_terminal_file_analysis_without_task_identity() {
     let request = FileAnalysisRequest::new(upload, Some("/tmp/sample.rtf".to_owned()), true);
 
     let analysis = Analyzer::from_client(fixture.client())
-        .detect_file(request, &CancellationToken::new())
+        .detect_file(request, WaitOptions::UNBOUNDED, &CancellationToken::new())
         .await
         .expect("file analysis succeeds");
 
@@ -148,6 +148,39 @@ async fn analyzer_projects_a_terminal_file_analysis_without_task_identity() {
         &analysis.checks()[0],
         Check::AiDetection(CheckState::Succeeded { .. })
     ));
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn file_timeout_bounds_a_post_issue_synchronous_wait() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_file(Step::Hang);
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
+        RetryPolicy::OFF,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_secs(10),
+    ));
+    let upload = FileUpload::new(
+        "sample.rtf",
+        FileFormat::Rtf,
+        b"{\\rtf1 synthetic}".to_vec(),
+    )
+    .unwrap();
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        analyzer.detect_file(
+            FileAnalysisRequest::new(upload, Some("/tmp/sample.rtf".to_owned()), false),
+            WaitOptions::with_timeout(Duration::from_millis(500)),
+            &CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("the local deadline must win over the transport timeout")
+    .expect_err("the local deadline stops the stalled file response wait");
+
+    assert_eq!(error.error().code(), ErrorCode::SubmissionOutcomeUnknown);
+    assert_eq!(fixture.post_count(), 1);
     fixture.shutdown().await;
 }
 
@@ -422,6 +455,46 @@ async fn combined_analysis_submits_plagiarism_while_ai_observation_is_stalled() 
             .count(),
         1
     );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn combined_cancellation_preserves_an_ambiguous_plagiarism_submission() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({ "task_id": TASK_ID })));
+    fixture.on_poll(Step::Hang);
+    fixture.on_plagiarism(Step::Hang);
+    let analyzer = Analyzer::from_client(fixture.client_with_policy(
+        RetryPolicy::OFF,
+        PollPolicy::new(Duration::ZERO, Duration::ZERO),
+        Duration::from_secs(10),
+    ));
+    let stop = StopObserving::new();
+    let analysis_stop = stop.clone();
+
+    let (outcome, ()) = tokio::join!(
+        analyzer.analyze_combined(
+            request(SYNTHETIC_TEXT),
+            WaitOptions::UNBOUNDED,
+            |_| {},
+            analysis_stop,
+        ),
+        async {
+            tokio::time::timeout(Duration::from_secs(5), fixture.wait_for_posts(2))
+                .await
+                .expect("both billable submissions are issued before cancellation");
+            stop.stop();
+        }
+    );
+
+    let error = outcome
+        .expect("submission ambiguity takes precedence over interruption")
+        .expect_err("the unacknowledged plagiarism response remains ambiguous");
+    assert_eq!(error.error().code(), ErrorCode::SubmissionOutcomeUnknown);
+    let payload = serde_json::to_string(error.error()).unwrap();
+    assert!(payload.contains("request_sha256"), "{payload}");
+    assert!(payload.contains("last_status"), "{payload}");
+    assert_eq!(fixture.post_count(), 2);
     fixture.shutdown().await;
 }
 

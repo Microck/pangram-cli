@@ -197,3 +197,41 @@ fn manifest_builder_signs_a_stable_zero_major_five_target_set() {
         0o755
     );
 }
+
+#[test]
+fn posix_installer_rejects_non_glibc_linux_before_download() {
+    let root = tempfile::tempdir().unwrap();
+    let commands = root.path().join("commands");
+    fs::create_dir(&commands).unwrap();
+    let download_marker = root.path().join("download-attempted");
+
+    for (name, program) in [
+        (
+            "uname",
+            "#!/bin/sh\ncase \"$1\" in -s) printf 'Linux\\n';; -m) printf 'x86_64\\n';; esac\n",
+        ),
+        ("getconf", "#!/bin/sh\nprintf 'musl 1.2.5\\n'\n"),
+        (
+            "curl",
+            "#!/bin/sh\nprintf 'attempted' >\"$DOWNLOAD_MARKER\"\nexit 99\n",
+        ),
+        ("tar", "#!/bin/sh\nexit 99\n"),
+    ] {
+        let path = commands.join(name);
+        fs::write(&path, program).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let output = Command::new("/bin/sh")
+        .arg("packaging/direct/pangram-installer.sh.template")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("PATH", &commands)
+        .env("HOME", root.path())
+        .env("DOWNLOAD_MARKER", &download_marker)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("glibc is required on Linux"));
+    assert!(!download_marker.exists(), "the installer tried to download");
+}

@@ -367,7 +367,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-        run: >-
-          gh release create "v${VERSION}" release-artifacts/*
-          --draft --title "Pangram CLI v${VERSION}"
-          --notes-file CHANGELOG.md
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          with Path("Cargo.toml").open("rb") as file:
+              package = tomllib.load(file)["package"]
+          heading = f"## {package['name']}@{version}"
+          changelog = Path("CHANGELOG.md")
+          try:
+              content = changelog.read_text(encoding="utf-8")
+          except FileNotFoundError:
+              raise SystemExit("Tegami package changelog is missing")
+          start = content.find(f"{heading}\n")
+          if start < 0:
+              raise SystemExit(f"Tegami changelog section is missing: {heading}")
+          end = content.find("\n## ", start + len(heading))
+          notes = content[start:] if end < 0 else content[start:end]
+          Path(os.environ["RUNNER_TEMP"], "release-notes.md").write_text(
+              notes.rstrip() + "\n",
+              encoding="utf-8",
+          )
+          PY
+          gh release create "v${VERSION}" release-artifacts/* \
+            --draft --title "Pangram CLI v${VERSION}" \
+            --target "$GITHUB_SHA" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

@@ -268,7 +268,14 @@ async fn execute_one(
                 plan.arguments.include_input,
             );
             let retained_request = request.clone();
-            match analyzer.detect_file_retained(request, stop.token()).await {
+            let wait = plan
+                .arguments
+                .timeout
+                .map_or(WaitOptions::UNBOUNDED, WaitOptions::with_timeout);
+            match analyzer
+                .detect_file_retained(request, wait, stop.token())
+                .await
+            {
                 Ok((analysis, extracted_text)) => Ok((
                     analysis,
                     crate::history::RetainedInput::File {
