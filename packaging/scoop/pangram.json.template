@@ -1,0 +1,23 @@
+{
+  "version": "{{VERSION}}",
+  "description": "Unofficial Pangram terminal client",
+  "homepage": "https://pangram.micr.dev",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/Microck/pangram-cli/releases/download/v{{VERSION}}/pangram-v{{VERSION}}-x86_64-pc-windows-msvc.zip",
+      "hash": "{{SHA256_X86_64_PC_WINDOWS_MSVC}}"
+    }
+  },
+  "bin": "pangram.exe",
+  "checkver": {
+    "github": "https://github.com/Microck/pangram-cli"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/Microck/pangram-cli/releases/download/v$version/pangram-v$version-x86_64-pc-windows-msvc.zip"
+      }
+    }
+  }
+}

@@ -104,8 +104,8 @@ terminal check row cannot be mistaken for a valid one-check analysis.
 Missing, duplicate, malformed, or order-disagreeing rows fail closed as
 `history_corrupt`; reads never repair them. The legacy parent body columns
 are not consulted for reconstruction. For every locally authored manual or
-automatic save, `input_json`
-durably retains the submitted plaintext even when the command's primary
+automatic save, `input_json` durably retains submitted text, or the original
+path and provider-extracted text for a binary file, even when the command's primary
 projection omitted `--include-input`; this is permitted only because the
 manual `--save` or enabled automatic-history gate made retention explicit
 under the first-enable plaintext warning. A resumed remote read that has no

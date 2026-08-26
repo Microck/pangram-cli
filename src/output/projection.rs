@@ -501,11 +501,12 @@ fn write_ai_result<W: HumanWriter>(
             "ai_assistance_score",
             &segment.ai_assistance_score.get().to_string(),
         )?;
-        writer.label_value(
-            "humanizer_score",
-            &segment.humanizer_score.get().to_string(),
-        )?;
-        writer.label_value("is_humanized", &segment.is_humanized.to_string())?;
+        if let Some(score) = segment.humanizer_score {
+            writer.label_value("humanizer_score", &score.get().to_string())?;
+        }
+        if let Some(is_humanized) = segment.is_humanized {
+            writer.label_value("is_humanized", &is_humanized.to_string())?;
+        }
         writer.label_value(
             "range",
             &format!("{}..{}", segment.start_index, segment.end_index),

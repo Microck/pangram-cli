@@ -331,7 +331,9 @@ fn enter_history_export(
     assert_screen(
         receiver,
         transcript,
-        |screen| screen.contains(">Export<"),
+        |screen| {
+            screen.contains("Rerun") && screen.contains("> Export") && screen.contains("Delete")
+        },
         "the focused History Export action",
     );
     write_keys(writer, b"\r", "open the History export overlay");
@@ -340,9 +342,9 @@ fn enter_history_export(
         transcript,
         |screen| {
             screen.contains("Export local history")
-                && screen.contains("Format: JSONL")
-                && screen.contains("Content: redacted")
-                && screen.contains("> Action: cancel <")
+                && screen.contains("Format  JSONL")
+                && screen.contains("Content  redacted")
+                && screen.contains("> Action  cancel <")
         },
         "the default-cancel JSONL redacted export overlay",
     );
@@ -476,7 +478,7 @@ fn confirmed_redacted_jsonl_restores_terminal_before_exporting_certified_record(
         assert_screen(
             receiver,
             transcript,
-            |screen| screen.contains("> Action: export <"),
+            |screen| screen.contains("> Action  export <"),
             "the confirmed redacted export action",
         );
         write_keys(writer, b"\r", "confirm redacted JSONL export");
@@ -554,7 +556,7 @@ fn full_content_requires_second_confirmation_whose_bare_enter_cancels() {
         assert_screen(
             receiver,
             transcript,
-            |screen| screen.contains("> Content: full retained content <"),
+            |screen| screen.contains("> Content  full retained content <"),
             "the full retained content choice",
         );
         write_keys(
@@ -567,7 +569,7 @@ fn full_content_requires_second_confirmation_whose_bare_enter_cancels() {
             transcript,
             |screen| {
                 screen.contains("Export full retained content")
-                    && screen.contains("> [Enter] Cancel <")
+                    && screen.contains("> Cancel   right Export full content")
             },
             "the second default-cancel full-content confirmation",
         );

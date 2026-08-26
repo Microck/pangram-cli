@@ -273,10 +273,10 @@ pub(super) async fn history_rerun(
         Ok(Err(error)) => return history_failure(command, error, started),
         Err(_) => return internal_failure(command, started),
     };
-    let Some(request) = AnalysisRequest::from_saved_rerun(&original) else {
+    let Some((request, mode)) = AnalysisRequest::from_saved_rerun(&original) else {
         return failure(command, unresolvable(), started);
     };
-    let estimated = crate::domain::text_billable_units(request.word_count());
+    let estimated = mode.billable_units(crate::domain::text_billable_units(request.word_count()));
     if estimated > arguments.max_billable_units {
         return failure(
             command,
@@ -299,37 +299,16 @@ pub(super) async fn history_rerun(
         return ToolCallOutcome::Cancelled { diagnostic: None };
     }
 
-    let analysis = match analyzer.start_full(request, context.cancellation()).await {
-        Ok(Accepted::Terminal(analysis)) => *analysis,
-        Ok(Accepted::Task(accepted)) => {
-            let running = analyzer.running(accepted);
-            let identity = running.identity();
-            let observation = running.observe(WaitOptions::UNBOUNDED, |_| {}, StopObserving::new());
-            let observed = tokio::select! {
-                result = observation => Some(result),
-                () = context.cancellation().cancelled() => None,
-            };
-            match observed {
-                Some(Ok(Ok(analysis))) => analysis,
-                Some(Ok(Err(error))) => return failure(command, error.into_error(), started),
-                Some(Err(_)) | None => {
-                    return ToolCallOutcome::Cancelled {
-                        diagnostic: Some(format!(
-                            "MCP history rerun observation stopped for {}",
-                            identity.analysis_id
-                        )),
-                    };
-                }
-            }
-        }
-        Err(failure_value) => {
-            return failure(command, failure_value.task_error.into_error(), started);
-        }
+    let analysis = match run_rerun_analysis(context, &analyzer, request, mode).await {
+        Ok(Some(analysis)) => analysis,
+        Ok(None) => return ToolCallOutcome::Cancelled { diagnostic: None },
+        Err(error) => return failure(command, error, started),
     };
 
     // An MCP history rerun is an explicit mutation. Persist the terminal
     // analysis with retained plaintext before reporting it as saved.
     let saved = analysis.with_save_state(SaveState::SavedManual);
+    let retained_input = crate::history::RetainedInput::Text(retained_text);
     let data_dir = context.service().paths().data_dir().to_path_buf();
     let persisted = tokio::task::spawn_blocking(move || {
         let mut store = HistoryStore::open(&data_dir)?;
@@ -337,7 +316,7 @@ pub(super) async fn history_rerun(
             &mut store,
             &saved,
             SaveState::SavedManual,
-            Some(&retained_text),
+            Some(&retained_input),
         )?;
         Ok::<_, HistoryError>(saved)
     })
@@ -350,6 +329,64 @@ pub(super) async fn history_rerun(
         ),
         Ok(Err(error)) => history_failure(command, error, started),
         Err(_) => internal_failure(command, started),
+    }
+}
+
+async fn run_rerun_analysis(
+    context: &ToolCallContext<'_>,
+    analyzer: &crate::analysis::Analyzer,
+    request: AnalysisRequest,
+    mode: crate::analysis::TextAnalysisMode,
+) -> Result<Option<crate::domain::Analysis<CanonicalError>>, CanonicalError> {
+    match mode {
+        crate::analysis::TextAnalysisMode::Detection => {
+            let accepted = analyzer
+                .start_full(request, context.cancellation())
+                .await
+                .map_err(|failure| failure.task_error.into_error())?;
+            match accepted {
+                Accepted::Terminal(analysis) => Ok(Some(*analysis)),
+                Accepted::Task(accepted) => {
+                    let running = analyzer.running(accepted);
+                    let observation =
+                        running.observe(WaitOptions::UNBOUNDED, |_| {}, StopObserving::new());
+                    tokio::select! {
+                        result = observation => match result {
+                            Ok(Ok(analysis)) => Ok(Some(analysis)),
+                            Ok(Err(error)) => Err(error.into_error()),
+                            Err(_) => Ok(None),
+                        },
+                        () = context.cancellation().cancelled() => Ok(None),
+                    }
+                }
+            }
+        }
+        crate::analysis::TextAnalysisMode::Plagiarism => tokio::select! {
+            result = analyzer.plagiarism(
+                request,
+                WaitOptions::UNBOUNDED,
+                context.cancellation(),
+            ) => {
+                result.map(Some).map_err(crate::analysis::TaskError::into_error)
+            }
+            () = context.cancellation().cancelled() => Ok(None),
+        },
+        crate::analysis::TextAnalysisMode::Combined => {
+            let stop = StopObserving::new();
+            let operation =
+                analyzer.analyze_combined(request, WaitOptions::UNBOUNDED, |_| {}, stop.clone());
+            tokio::select! {
+                result = operation => match result {
+                    Ok(Ok(analysis)) => Ok(Some(analysis)),
+                    Ok(Err(error)) => Err(error.into_error()),
+                    Err(_) => Ok(None),
+                },
+                () = context.cancellation().cancelled() => {
+                    stop.stop();
+                    Ok(None)
+                },
+            }
+        }
     }
 }
 

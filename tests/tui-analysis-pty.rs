@@ -13,7 +13,9 @@ use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use fixture::{ProtocolFixture, SYNTHETIC_KEY, Step, TASK_ID, pangram4_success};
+use fixture::{
+    ProtocolFixture, SYNTHETIC_KEY, Step, TASK_ID, pangram4_success, plagiarism_success,
+};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 const SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,11 +107,20 @@ fn assert_visible(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success() {
+async fn all_tty_combined_analysis_reaches_both_shared_analyzer_routes_once() {
     let text = "This synthetic TUI sentence\tremains human written\n?j today";
     let fixture = ProtocolFixture::start().await;
     fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(serde_json::json!({
+        "task_id": TASK_ID,
+        "stage": "STAGE_PREPROCESSING"
+    })));
+    fixture.on_poll(Step::Json(serde_json::json!({
+        "task_id": TASK_ID,
+        "stage": "STAGE_PREPROCESSING"
+    })));
     fixture.on_poll(Step::Json(pangram4_success(text)));
+    fixture.on_plagiarism(Step::Json(plagiarism_success()));
 
     let isolated = tempfile::tempdir().unwrap();
     let pair = NativePtySystem::default()
@@ -148,7 +159,14 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
     // unwind boundary. A failed contract must still reach the common kill,
     // reap, writer-drop, and reader-join path below.
     let interaction = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, "Update");
+        // Wait for the complete overlay body, not its early title bytes. The
+        // PTY reader may deliver one frame in several chunks.
+        assert_visible(
+            &output_rx,
+            &mut transcript,
+            SCREEN_TIMEOUT,
+            "Automatic checks: on",
+        );
         writer.write_all(b"n").expect("decline update checks");
         writer.flush().expect("flush onboarding choice");
         assert!(
@@ -168,42 +186,80 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
             "the TUI enables bracketed paste before accepting composer input"
         );
 
+        // A terminal emulator delivers the complete bracketed-paste frame as
+        // one input burst. Keeping the delimiters and payload together also
+        // prevents the PTY transport from splitting crossterm's parse unit.
+        let mut paste = Vec::with_capacity(text.len() + 12);
+        paste.extend_from_slice(b"\x1b[200~");
+        paste.extend_from_slice(text.as_bytes());
+        paste.extend_from_slice(b"\x1b[201~");
         writer
-            .write_all(b"\x1b[200~")
-            .expect("start bracketed paste");
-        writer
-            .write_all(text.as_bytes())
-            .expect("paste analysis text");
-        writer
-            .write_all(b"\x1b[201~")
-            .expect("finish bracketed paste");
+            .write_all(&paste)
+            .expect("paste bracketed analysis text");
         writer.flush().expect("flush bracketed analysis text");
+        assert_visible(
+            &output_rx,
+            &mut transcript,
+            SCREEN_TIMEOUT,
+            "This synthetic TUI sentence",
+        );
 
-        // Composer -> Public link -> Manual save -> Submit in the documented
-        // regular keymap. Enter in the composer would insert a newline, so the
-        // test proves the focus model as well as the positive action.
-        writer.write_all(b"\t\t\t").expect("focus Submit");
+        // Composer -> Input files -> Input text -> Both. Select the combined
+        // check, wait for that state transition, then traverse the documented
+        // regular-keymap order to Submit. The visible boundaries keep PTY
+        // input bursts from overtaking one another in crossterm's event queue.
+        writer
+            .write_all(b"\x1b[Z\x1b[Z\x1b[Z\r")
+            .expect("select Both");
+        writer.flush().expect("flush combined-check selection");
+        assert_visible(&output_rx, &mut transcript, SCREEN_TIMEOUT, ">*Both");
+        writer.write_all(b"\t\t\t\t\t\t").expect("focus Submit");
         writer.flush().expect("flush focus navigation");
         writer.write_all(b"\r").expect("activate Submit");
         writer.flush().expect("flush Submit");
 
+        // Accepted combined work must enter Active before its first progress
+        // event, and later progress must advance that same session-owned row.
+        writer
+            .write_all(b"\x1b[<0;3;6M")
+            .expect("click the Active route");
+        writer.flush().expect("flush Active click");
+        assert_visible(
+            &output_rx,
+            &mut transcript,
+            ANALYSIS_TIMEOUT,
+            "this session",
+        );
+        writer
+            .write_all(b"\x1b[<0;3;4M")
+            .expect("click the Analyze route");
+        writer.flush().expect("flush Analyze click");
+
         assert!(
             receive_until(&output_rx, &mut transcript, ANALYSIS_TIMEOUT, |bytes| {
-                screen_contains(bytes, "Classification:") && screen_contains(bytes, "100.0%")
+                screen_contains(bytes, "Classification:")
+                    && screen_contains(bytes, "Plagiarism: not detected")
             }),
-            "completed AI result was not visibly rendered:\n{}",
+            "completed combined result was not visibly rendered:\n{}",
             String::from_utf8_lossy(&transcript)
         );
 
-        assert_eq!(fixture.post_count(), 1, "the TUI submits exactly once");
+        assert_eq!(fixture.post_count(), 2, "each selected check submits once");
         assert_eq!(
             fixture.get_count(),
-            1,
-            "the TUI observes the task exactly once"
+            3,
+            "the TUI observes each scripted task state exactly once"
         );
         let requests = fixture.requests();
-        assert_eq!(requests.len(), 2, "one POST and one poll reach the fixture");
-        let submit = &requests[0];
+        assert_eq!(
+            requests.len(),
+            5,
+            "two POSTs and three polls reach the fixture"
+        );
+        let submit = requests
+            .iter()
+            .find(|request| request.path == "/task")
+            .expect("AI submission request");
         assert_eq!(submit.method, "POST");
         assert_eq!(submit.path, "/task");
         assert!(submit.header_equals("x-api-key", SYNTHETIC_KEY));
@@ -211,8 +267,18 @@ async fn all_tty_text_analysis_reaches_the_shared_analyzer_and_renders_success()
         assert_eq!(body["text"], text);
         assert_eq!(body["model"], "pangram-4");
         assert_eq!(body["public_dashboard_link"], false);
-        assert_eq!(requests[1].method, "GET");
-        assert_eq!(requests[1].path, format!("/task/{TASK_ID}"));
+        let poll = requests
+            .iter()
+            .find(|request| request.path == format!("/task/{TASK_ID}"))
+            .expect("AI poll request");
+        assert_eq!(poll.method, "GET");
+        let plagiarism = requests
+            .iter()
+            .find(|request| request.path == "/plagiarism")
+            .expect("plagiarism submission request");
+        assert_eq!(plagiarism.method, "POST");
+        assert!(plagiarism.header_equals("x-api-key", SYNTHETIC_KEY));
+        assert_eq!(plagiarism.body_json(), serde_json::json!({"text": text}));
 
         // Completed results focus the scrollable evidence first. Traverse the
         // focusable New analysis action before reaching Quit without a shortcut.

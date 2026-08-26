@@ -1,0 +1,11 @@
+# TUI shortcuts
+
+`Tab` moves focus, `Enter` activates the focused action, and `Esc` closes the
+current overlay or moves back through onboarding. The settings screen selects
+the regular or Vim-style keymap. Press `?` for the in-product shortcut list,
+which remains the exact source for context-specific keys.
+
+Left-click routes, controls, settings, and visible Active or History rows to
+use the same actions as the keyboard. The wheel moves one row through Active,
+History, and result views. A click outside an overlay closes it when `Esc`
+would do the same.

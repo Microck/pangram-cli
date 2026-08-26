@@ -16,12 +16,15 @@ use crate::output::ResolvedCommand;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ToolName {
     DetectText,
+    CheckPlagiarism,
+    AnalyzeText,
     GetTask,
     WaitTask,
     SubmitBulk,
     GetBulk,
     WaitBulk,
     GetBulkResults,
+    CheckUpdate,
     HistoryList,
     HistorySearch,
     HistoryGet,
@@ -32,14 +35,17 @@ pub(crate) enum ToolName {
 }
 
 impl ToolName {
-    pub(crate) const ALL: [Self; 14] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::DetectText,
+        Self::CheckPlagiarism,
+        Self::AnalyzeText,
         Self::GetTask,
         Self::WaitTask,
         Self::SubmitBulk,
         Self::GetBulk,
         Self::WaitBulk,
         Self::GetBulkResults,
+        Self::CheckUpdate,
         Self::HistoryList,
         Self::HistorySearch,
         Self::HistoryGet,
@@ -52,12 +58,15 @@ impl ToolName {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::DetectText => "detect_text",
+            Self::CheckPlagiarism => "check_plagiarism",
+            Self::AnalyzeText => "analyze_text",
             Self::GetTask => "get_task",
             Self::WaitTask => "wait_task",
             Self::SubmitBulk => "submit_bulk",
             Self::GetBulk => "get_bulk",
             Self::WaitBulk => "wait_bulk",
             Self::GetBulkResults => "get_bulk_results",
+            Self::CheckUpdate => "check_update",
             Self::HistoryList => "history_list",
             Self::HistorySearch => "history_search",
             Self::HistoryGet => "history_get",
@@ -107,6 +116,22 @@ where
                 annotations(false, false, false, true),
                 &output_schema,
             ),
+            ToolName::CheckPlagiarism => tool(
+                identity,
+                "Check text for plagiarism against online sources.",
+                ResolvedCommand::Plagiarism,
+                phase7_text_input(false),
+                annotations(false, false, false, true),
+                &output_schema,
+            ),
+            ToolName::AnalyzeText => tool(
+                identity,
+                "Run Pangram 4 AI detection and plagiarism checks on the same text.",
+                ResolvedCommand::Analyze,
+                detect_text_input(),
+                annotations(false, false, false, true),
+                &output_schema,
+            ),
             ToolName::GetTask => tool(
                 identity,
                 "Get one Pangram task without waiting.",
@@ -152,6 +177,14 @@ where
                 "Get one explicit results page for a Pangram bulk job.",
                 ResolvedCommand::BulkResults,
                 bulk_input(false, true),
+                annotations(true, false, true, true),
+                &output_schema,
+            ),
+            ToolName::CheckUpdate => tool(
+                identity,
+                "Check for a Pangram CLI update without installing it.",
+                ResolvedCommand::UpdateCheck,
+                closed_object(json!({}), &[], Vec::new()),
                 annotations(true, false, true, true),
                 &output_schema,
             ),
@@ -253,6 +286,19 @@ fn detect_text_input() -> Value {
         &["text", "max_billable_units"],
         Vec::new(),
     )
+}
+
+fn phase7_text_input(public_link: bool) -> Value {
+    let mut properties = json!({
+        "text": {"type": "string", "minLength": 1},
+        "max_billable_units": positive_integer(),
+        "save": {"type": "boolean", "default": false},
+        "include_input": {"type": "boolean", "default": false},
+    });
+    if public_link {
+        properties["public_link"] = json!({"type": "boolean", "default": false});
+    }
+    closed_object(properties, &["text", "max_billable_units"], Vec::new())
 }
 
 fn task_input(with_timeout: bool) -> Value {

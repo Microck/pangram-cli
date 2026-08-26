@@ -150,14 +150,19 @@ pub(crate) fn automatic_history_armed(service: &crate::config::ConfigService) ->
 /// never opened, so a disabled run creates no directory or database.
 pub(crate) fn persist_analyses(
     analyses: Vec<Analysis<CanonicalError>>,
-    retained_texts: &[String],
+    retained_inputs: &[crate::history::RetainedInput],
     gate: SaveStoreGate,
     service: &crate::config::ConfigService,
 ) -> (Vec<Analysis<CanonicalError>>, Option<CanonicalError>) {
     let Some(policy) = policy_for(gate, service) else {
         return (analyses, None);
     };
-    persist_series(analyses, retained_texts, policy, service.paths().data_dir())
+    persist_series(
+        analyses,
+        retained_inputs,
+        policy,
+        service.paths().data_dir(),
+    )
 }
 
 /// Persists one remotely observed analysis (a `task status`/`task wait`
@@ -301,7 +306,7 @@ fn persist_observed(
 /// save outcome (contracts.md 14.2 note). The tail is never dropped.
 fn persist_series(
     analyses: Vec<Analysis<CanonicalError>>,
-    retained_texts: &[String],
+    retained_inputs: &[crate::history::RetainedInput],
     policy: SavePolicy,
     data_dir: &std::path::Path,
 ) -> (Vec<Analysis<CanonicalError>>, Option<CanonicalError>) {
@@ -336,7 +341,7 @@ fn persist_series(
             &mut store,
             &analysis,
             save_state,
-            retained_texts.get(index).map(String::as_str),
+            retained_inputs.get(index),
         ) {
             Ok(()) => saved.push(analysis.with_save_state(save_state)),
             Err(error) => {

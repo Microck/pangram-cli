@@ -232,23 +232,6 @@ const fn grouped_argument(
     }
 }
 
-const fn planned_command(
-    path: &'static [&'static str],
-    kind: CommandKind,
-    arguments: &'static [ArgumentSpec],
-    argument_groups: &'static [ArgumentGroupSpec],
-    phase: Phase,
-) -> CommandSpec {
-    CommandSpec {
-        path,
-        kind,
-        arguments,
-        argument_groups,
-        phase,
-        availability: Availability::Planned,
-    }
-}
-
 /// A command whose compiled behavior and contract tests landed together.
 const fn available_command(
     path: &'static [&'static str],
@@ -308,27 +291,27 @@ const DETECT_ARGUMENTS: &[ArgumentSpec] = &[
 
 #[rustfmt::skip]
 const PLAGIARISM_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("TEXT", &[], false, false, Phase::FileAndPlagiarism).in_group("source_category").with_stdin_marker("-"),
-    option("--file", "PATH", &[], false, true, Phase::FileAndPlagiarism).in_group("source_category"),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::FileAndPlagiarism),
-    flag("--include-input", Phase::FileAndPlagiarism),
-    flag("--save", Phase::FileAndPlagiarism),
-    option("--timeout", "DURATION", &[], false, false, Phase::FileAndPlagiarism),
-    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::FileAndPlagiarism),
-    option("--max-billable-units", "N", &[], false, false, Phase::FileAndPlagiarism),
+    positional("TEXT", &[], false, false, Phase::FileAndPlagiarism).in_group("source_category").with_stdin_marker("-").available(),
+    option("--file", "PATH", &[], false, true, Phase::FileAndPlagiarism).in_group("source_category").available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::FileAndPlagiarism).available(),
+    flag("--include-input", Phase::FileAndPlagiarism).available(),
+    flag("--save", Phase::FileAndPlagiarism).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::FileAndPlagiarism).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::FileAndPlagiarism).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::FileAndPlagiarism).available(),
 ];
 
 #[rustfmt::skip]
 const ANALYZE_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("TEXT", &[], false, false, Phase::FileAndPlagiarism).in_group("source_category").with_stdin_marker("-"),
-    option("--file", "PATH", &[], false, true, Phase::FileAndPlagiarism).in_group("source_category"),
-    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::FileAndPlagiarism),
-    flag("--include-input", Phase::FileAndPlagiarism),
-    flag("--save", Phase::FileAndPlagiarism),
-    flag("--public-link", Phase::FileAndPlagiarism),
-    option("--timeout", "DURATION", &[], false, false, Phase::FileAndPlagiarism),
-    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::FileAndPlagiarism),
-    option("--max-billable-units", "N", &[], false, false, Phase::FileAndPlagiarism),
+    positional("TEXT", &[], false, false, Phase::FileAndPlagiarism).in_group("source_category").with_stdin_marker("-").available(),
+    option("--file", "PATH", &[], false, true, Phase::FileAndPlagiarism).in_group("source_category").available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::FileAndPlagiarism).available(),
+    flag("--include-input", Phase::FileAndPlagiarism).available(),
+    flag("--save", Phase::FileAndPlagiarism).available(),
+    flag("--public-link", Phase::FileAndPlagiarism).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::FileAndPlagiarism).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::FileAndPlagiarism).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::FileAndPlagiarism).available(),
 ];
 
 const BULK_SOURCE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
@@ -493,7 +476,7 @@ const DOCTOR_ARGUMENTS: &[ArgumentSpec] = &[
 
 #[rustfmt::skip]
 const COMPLETIONS_ARGUMENTS: &[ArgumentSpec] = &[
-    positional("SHELL", SHELLS, true, false, Phase::DistributionAndUpdate),
+    positional("SHELL", SHELLS, true, false, Phase::DistributionAndUpdate).available(),
 ];
 
 const UPDATE_MODE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
@@ -505,8 +488,8 @@ const UPDATE_MODE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
 
 #[rustfmt::skip]
 const UPDATE_ARGUMENTS: &[ArgumentSpec] = &[
-    grouped_argument("--check", ArgumentKind::Flag, None, "update_mode", Phase::DistributionAndUpdate),
-    grouped_argument("--yes", ArgumentKind::Flag, None, "update_mode", Phase::DistributionAndUpdate),
+    grouped_argument("--check", ArgumentKind::Flag, None, "update_mode", Phase::DistributionAndUpdate).available(),
+    grouped_argument("--yes", ArgumentKind::Flag, None, "update_mode", Phase::DistributionAndUpdate).available(),
 ];
 
 /// The complete grammar remains generator data until each phase makes its
@@ -522,8 +505,8 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
             argument_groups: SOURCE_CATEGORY_GROUP, phase: Phase::Scaffold, availability: Availability::Available,
         },
         available_command(&["detect"], CommandKind::Command, DETECT_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::TextDetection),
-        planned_command(&["plagiarism"], CommandKind::Command, PLAGIARISM_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
-        planned_command(&["analyze"], CommandKind::Command, ANALYZE_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
+        available_command(&["plagiarism"], CommandKind::Command, PLAGIARISM_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
+        available_command(&["analyze"], CommandKind::Command, ANALYZE_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
         available_command(&["bulk"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
         available_command(&["bulk", "submit"], CommandKind::Command, BULK_SUBMIT_ARGUMENTS, BULK_SOURCE_GROUP, Phase::BulkAndTasks),
         available_command(&["bulk", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),
@@ -559,8 +542,8 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         available_command(&["config", "set"], CommandKind::Command, CONFIG_SET_ARGUMENTS, &[], Phase::LocalSetup),
         available_command(&["config", "path"], CommandKind::Command, &[], &[], Phase::LocalSetup),
         available_command(&["doctor"], CommandKind::Command, DOCTOR_ARGUMENTS, &[], Phase::LocalSetup),
-        planned_command(&["completions"], CommandKind::Command, COMPLETIONS_ARGUMENTS, &[], Phase::DistributionAndUpdate),
-        planned_command(&["update"], CommandKind::Command, UPDATE_ARGUMENTS, UPDATE_MODE_GROUP, Phase::DistributionAndUpdate),
+        available_command(&["completions"], CommandKind::Command, COMPLETIONS_ARGUMENTS, &[], Phase::DistributionAndUpdate),
+        available_command(&["update"], CommandKind::Command, UPDATE_ARGUMENTS, UPDATE_MODE_GROUP, Phase::DistributionAndUpdate),
     ],
 };
 

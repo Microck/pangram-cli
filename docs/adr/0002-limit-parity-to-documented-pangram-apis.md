@@ -2,7 +2,7 @@
 
 Status: accepted
 Date: 2026-07-23
-Amended: 2026-07-31, 2026-08-13
+Amended: 2026-07-31, 2026-08-13, 2026-08-24
 
 ## Context
 
@@ -45,8 +45,11 @@ block per valid item, a minimum of one per item, and at most 1,000 units per
 request. Text and bulk are no longer blocked on public request documentation.
 Bulk is implemented; public support still requires live conformance.
 
-File analysis and plagiarism remain release-gated until live conformance
-resolves their documented response conflicts.
+Live conformance on 2026-08-24 resolved file analysis in favor of the SDK's
+rich ordered response and confirmed the numeric plagiarism count. File AI
+detection and text plagiarism are implemented, and combined text analysis
+composes the two documented routes. Binary plagiarism and binary combined
+analysis remain unavailable because Pangram documents only text plagiarism.
 
 ## Consequences
 

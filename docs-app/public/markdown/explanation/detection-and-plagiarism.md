@@ -1,0 +1,7 @@
+# AI detection and plagiarism
+
+AI detection classifies writing evidence. Plagiarism compares text with online
+sources and can return source matches. They use distinct Pangram operations.
+Combined text analysis starts both, then preserves their separate results in
+one canonical analysis. A successful check does not imply that the other check
+succeeded.

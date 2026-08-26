@@ -15,11 +15,11 @@ use super::render::usage_error;
 /// A resolved input source before any billable work. `origin` feeds the
 /// canonical `TextOrigin`; `name` is present only for files.
 #[derive(Debug)]
-pub(super) struct ResolvedInput {
-    pub(super) text: String,
-    pub(super) origin: TextOrigin,
-    pub(super) name: Option<String>,
-    pub(super) word_count: u64,
+pub(crate) struct ResolvedInput {
+    pub(crate) text: String,
+    pub(crate) origin: TextOrigin,
+    pub(crate) name: Option<String>,
+    pub(crate) word_count: u64,
 }
 
 /// Resolves the single source category into validated inputs. Literal text,
@@ -27,7 +27,7 @@ pub(super) struct ResolvedInput {
 /// exclusive (Clap rejected conflicts for the explicit `detect` spelling, and
 /// the bare path selects exactly one). Bare `[TEXT]` and bare `-` reach here
 /// through root dispatch.
-pub(super) fn resolve_inputs(
+pub(crate) fn resolve_inputs(
     source: super::Source,
     streams: &dyn crate::cli::StreamTty,
     stdin_text: Option<String>,
@@ -92,7 +92,7 @@ fn resolve_stdin_source(
 
 /// Reads one UTF-8 text file, rejecting binary or undecodable content before
 /// any billable request. Empty text is a usage error.
-fn read_text_file(path: &str) -> Result<ResolvedInput, CanonicalError> {
+pub(crate) fn read_text_file(path: &str) -> Result<ResolvedInput, CanonicalError> {
     let bytes = std::fs::read(path).map_err(|error| {
         usage_error(
             ErrorCode::InputRequired,

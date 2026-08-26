@@ -31,7 +31,8 @@ pub(crate) use client::{bridge_sigint, install_sigint_driver, reset_sigint_flag}
 pub(crate) use render::{
     DetectOutcome, analysis_command_outcome, analysis_exit_code, early_failure, elapsed_ms,
     failure_outcome, identity_note, internal_error, interrupted_outcome, note_stderr,
-    primary_outcome, sanitize_for_stderr, usage_error, warning_stderr,
+    note_stderr_raw, primary_outcome, sanitize_for_stderr, success_outcome_for, usage_error,
+    warning_stderr,
 };
 pub(crate) use save::SaveStoreGate;
 
@@ -44,6 +45,9 @@ use super::StreamTty;
 
 use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
 use render::{DETACH_NOTE, success_outcome};
+
+pub(crate) const AMBIGUOUS_INTERRUPTION_NOTE: &str =
+    "interrupted; reconcile using the canonical error identity";
 
 // The submodules hold the cohesive halves of the adapter:
 // - `inputs`: source resolution, word counting, and billing preflight
@@ -88,14 +92,14 @@ pub(crate) enum Source {
 /// panic.
 #[derive(Debug, Clone)]
 pub(crate) struct DetectArgs {
-    detach: bool,
-    include_input: bool,
-    save: bool,
-    public_link: bool,
-    format: Option<OutputFormat>,
-    progress: ProgressMode,
-    timeout: Option<std::time::Duration>,
-    max_billable_units: Option<u64>,
+    pub(crate) detach: bool,
+    pub(crate) include_input: bool,
+    pub(crate) save: bool,
+    pub(crate) public_link: bool,
+    pub(crate) format: Option<OutputFormat>,
+    pub(crate) progress: ProgressMode,
+    pub(crate) timeout: Option<std::time::Duration>,
+    pub(crate) max_billable_units: Option<u64>,
 }
 
 impl DetectArgs {
@@ -156,10 +160,20 @@ impl DetectArgs {
             })
             .transpose()?;
         Ok(Self {
-            detach: matches.get_flag("detach"),
+            detach: matches
+                .try_get_one::<bool>("detach")
+                .ok()
+                .flatten()
+                .copied()
+                .unwrap_or(false),
             include_input: matches.get_flag("include-input"),
             save: matches.get_flag("save"),
-            public_link: matches.get_flag("public-link"),
+            public_link: matches
+                .try_get_one::<bool>("public-link")
+                .ok()
+                .flatten()
+                .copied()
+                .unwrap_or(false),
             format,
             progress,
             timeout,
@@ -325,8 +339,12 @@ pub(crate) fn execute(
         .take(members.len())
         .map(|input| input.text.clone())
         .collect::<Vec<_>>();
+    let retained_inputs = retained_texts
+        .into_iter()
+        .map(crate::history::RetainedInput::Text)
+        .collect::<Vec<_>>();
     let (members, save_failure) =
-        save::persist_analyses(members, &retained_texts, plan.history_gate, service);
+        save::persist_analyses(members, &retained_inputs, plan.history_gate, service);
     let mut outcome = success_outcome(output, started_at, members);
     let required_save_exit = save_failure.and_then(|error| {
         outcome.attach_failure(command, output, started_at, error);
@@ -385,7 +403,7 @@ impl GlobalFlags {
 /// preserved as a failed series member (Option A) rather than aborting; only
 /// an accepted task's local observation failure and a genuine SIGINT stop the
 /// run through these variants.
-enum Flow {
+pub(crate) enum Flow {
     /// An accepted task's local observation failure (wait timeout, contract
     /// drift, transport): surfaces as the canonical top-level error envelope.
     Failed(CanonicalError),
@@ -400,7 +418,7 @@ enum Flow {
 
 /// Runs one input end to end: request construction, submit, optional wait,
 /// and progress emission. This is the only place that awaits the analyzer.
-async fn analyze_one(
+pub(crate) async fn analyze_one(
     analyzer: &Analyzer,
     arguments: &DetectArgs,
     input: &ResolvedInput,
@@ -584,17 +602,17 @@ fn identity_note_for_error(error: &CanonicalError) -> String {
 
 /// Emits progress events to stderr in the resolved mode. Human progress is
 /// textual; `jsonl` progress emits canonical `ProgressEvent` lines.
-struct ProgressSink {
+pub(crate) struct ProgressSink {
     mode: ProgressMode,
     analysis_id: crate::domain::AnalysisId,
 }
 
 impl ProgressSink {
-    fn new(mode: ProgressMode, analysis_id: crate::domain::AnalysisId) -> Self {
+    pub(crate) fn new(mode: ProgressMode, analysis_id: crate::domain::AnalysisId) -> Self {
         Self { mode, analysis_id }
     }
 
-    fn on_progress(&self, event: &crate::analysis::AnalysisProgress) {
+    pub(crate) fn on_progress(&self, event: &crate::analysis::AnalysisProgress) {
         match self.mode {
             // `Auto` is always resolved away by `resolve_progress` before a
             // sink exists, so it is unreachable here.

@@ -545,162 +545,9 @@ MCP adapter.
 
 ## 13. TUI adapter
 
-### 13.1 Reducer
+The reducer, layout, intro, lifecycle, and autonomous acceptance boundaries
+are specified in the dedicated [TUI architecture](tui-architecture.md).
 
-The TUI uses one state transition boundary:
-
-```text
-AppState + AppEvent -> AppState + Effects
-```
-
-Effects request analysis, history, update, URL, or terminal actions. Async work
-returns typed events through a channel.
-
-Screen code renders state and emits user-intent events. It does not own
-networking or SQLite.
-
-### 13.2 State
-
-The root state owns:
-
-- active route
-- focus
-- composer and file queue
-- current analysis identity and progress
-- selected history record
-- settings draft
-- overlays
-- terminal size
-- intro phase
-
-Derived values such as parent analysis status, responsive layout, and enabled
-actions SHOULD be computed from this state instead of copied into additional
-mutable fields.
-
-### 13.3 Layout
-
-The wide layout derives three areas from root state:
-
-```text
-+-------------+---------------------------+------------------+
-| Route rail  | Center workspace          | Inspector        |
-| compact fox | input, progress, results  | state and actions|
-+-------------+---------------------------+------------------+
-| Contextual command bar                                     |
-+------------------------------------------------------------+
-```
-
-The center workspace receives most available width. The inspector contains
-checks, privacy, cost, result filters, and actions that apply to the active
-state. The route rail contains only the compact resolved mark and primary
-routes. It is not an intro canvas.
-
-At narrower supported sizes, navigation becomes top tabs and inspector content
-joins the center flow. Layout is derived from terminal size and current state;
-wide and narrow screens do not maintain separate mutable UI models.
-
-Rendering uses sparse separators, focus markers, and a restrained command bar.
-It does not reproduce web-style cards, oversized buttons, or a persistent
-large brand mark.
-
-### 13.4 Intro renderer
-
-The intro is an internal deep module in the TUI adapter. It has no trait and no
-public interface. Callers provide resolved intro policy, terminal capabilities,
-whether the one-time state has been seen, and monotonic elapsed time. The
-module returns either no intro, the reduced resolved mark, or the frame to
-render.
-
-The implementation uses two generated constant frame tables:
-
-- 56 frames at 32x16 cells
-- 56 frames at 20x10 cells
-
-Both tables share the same 20 fps timeline. A development-only generator
-converts approved fox vector geometry into styled terminal cells. Generated
-tables are committed so normal builds and runtime startup need no SVG, video,
-image decoder, floating-point rasterizer, or filesystem asset lookup.
-
-The generator samples one timeline:
-
-- transform settle: 0 through 800 ms
-- orange center unfold: 150 through 700 ms
-- pink facet unfold: 280 through 920 ms with 60 ms stagger
-- resolved hold: 920 through 2,380 ms
-- linear density dissolve: 2,380 through 2,800 ms
-
-Transform phases use `cubic-bezier(0.175, 0.885, 0.32, 1.1)`.
-
-For elapsed time below 2,800 ms, frame selection uses
-`floor(elapsed_ms / 50)`. At 2,800 ms or later, the module returns completion
-instead of another frame. The event loop does not enqueue one event per missed
-frame. This keeps the nominal duration at 2.8 seconds when terminal rendering
-stalls.
-
-Glyph capability and color capability are resolved once before playback.
-Fallback selection is deterministic:
-
-1. full or compact terminal-cell table based on terminal size
-2. truecolor, ANSI approximation, or no-color styling
-3. Unicode cell glyphs or the generated ASCII `#`, `*`, `.`, and space table
-
-`Escape`, `Enter`, and `Space` produce one skip event that transitions directly
-to Analyze. The input event is consumed before normal routing.
-
-For `tui.intro = "once"`, the TUI atomically writes its `intro_seen` marker
-after completion, skip, or reduced rendering. The marker lives in TUI state
-at `PANGRAM_DATA_DIR/tui-state.json`, not in configuration. A failed write
-reports a non-blocking diagnostic and does not stop Analyze. Suppressed startup
-does not write it.
-
-The generator and derived frame tables may enter the public tree only after
-the Pangram logo-use release gate is satisfied. Droid source, frames, and
-marketing assets are research evidence only and MUST NOT enter the repository.
-
-### 13.5 Terminal lifecycle
-
-One terminal guard owns:
-
-- raw mode
-- alternate screen and bracketed-paste mode
-- cursor visibility
-- mouse capture when enabled
-- panic restoration
-
-The guard's restoration operation is idempotent and restores state on drop.
-Process-level unwind panic handling and supported signal handling invoke the
-same operation before printing diagnostics. Guarded code returns exit intent
-and MUST NOT call `process::exit`. The build uses `panic = "unwind"`.
-
-The release guarantee covers normal return, handled I/O failure, Ctrl+C,
-supported catchable termination signals, and unwind panic. Process abort,
-SIGKILL, and equivalent uncatchable termination are outside the guarantee.
-
-### 13.6 Autonomous acceptance boundary
-
-The compiled TUI is exercised through a development-only Terminal Control
-harness. Product-only journeys launch the real `pangram` binary in a real PTY.
-Protocol journeys launch `pangram-test-driver`, which injects a loopback
-analyzer and then enters the exact same TUI adapter. Both paths drive the same
-keyboard and resize handling a person uses. Neither the harness nor the test
-driver ships in release artifacts.
-
-The harness uses `@kitlangton/terminal-control 0.6.0` with Vitest. Tests set an
-isolated config directory, data directory, home directory, locale, terminal
-type, and viewport. They do not inherit the operator's environment. Settled
-text and cell frames are source-controlled snapshots. Text, JSON, SVG, logs,
-and metadata are retained as failure evidence. PNG captures and recordings are
-opt-in review artifacts and use synthetic, credential-free scenarios because
-typed input and terminal streams may contain secrets.
-
-The acceptance harness runs on GNU/Linux and macOS, matching Terminal Control's
-published native packages. Windows keeps its native platform PTY and terminal
-restoration tests. A platform-independent Ratatui `TestBackend` layer remains
-the source of deterministic renderer snapshots.
-
-Do not implement Terminal Control's optional OpenTUI semantic protocol. It is
-not a Ratatui contract, and adding it would create a second machine-only UI
-surface that could pass while the visible terminal is broken.
 
 ## 14. MCP adapter
 
@@ -839,8 +686,8 @@ rules remain in [mcp-contract.md](mcp-contract.md).
 
 The updater embeds Ed25519 public keys. It accepts a release only after:
 
-1. manifest schema validation
-2. detached signature verification over the exact downloaded manifest bytes
+1. detached signature verification over the exact downloaded manifest bytes
+2. manifest schema validation
 3. target and version-policy match
 4. archive byte-size validation
 5. archive SHA-256 validation

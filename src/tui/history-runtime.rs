@@ -13,7 +13,7 @@
 use std::io;
 use std::sync::mpsc::Sender;
 
-use crate::analysis::{Accepted, AnalysisRequest, StopObserving, WaitOptions};
+use crate::analysis::{Accepted, AnalysisRequest, StopObserving, TextAnalysisMode, WaitOptions};
 use crate::config::ConfigService;
 use crate::domain::{Analysis, AnalysisId, SaveState, TextOrigin};
 use crate::history::{HistoryError, HistoryErrorCode, HistoryExportError, HistoryStore};
@@ -24,9 +24,29 @@ use super::model::{AnalysisFailure, AppEvent};
 
 pub(super) struct FreshAnalysisOptions {
     pub(super) text: String,
+    pub(super) mode: TextAnalysisMode,
     pub(super) public_link: bool,
     pub(super) manual_save: bool,
     pub(super) automatic_save: bool,
+}
+
+/// Values retained only until a completed result is optionally persisted.
+/// Grouping them keeps the worker boundary focused without introducing a
+/// second execution path for Phase 7 checks.
+struct CompletionPersistence {
+    retained_text: Option<String>,
+    save_state: Option<SaveState>,
+}
+
+/// One owned unit of work passed from the terminal thread to its async worker.
+struct AnalysisWork {
+    service: ConfigService,
+    request: AnalysisRequest,
+    mode: TextAnalysisMode,
+    persistence: CompletionPersistence,
+    stop: StopObserving,
+    events: Sender<AppEvent>,
+    analyzer_source: crate::analysis::AnalyzerSource,
 }
 
 /// Starts one fresh text analysis without making the terminal loop async.
@@ -39,21 +59,25 @@ pub(super) fn spawn_fresh_analysis(
 ) -> AnalysisId {
     let save_state = requested_save_state(options.manual_save, options.automatic_save);
     let retained_text = save_state.map(|_| options.text.clone());
+    let mode = options.mode;
     let request = fresh_request(options.text, options.public_link);
     let analysis_id = request.id();
     let fallback_events = events.clone();
     if let Err(error) = std::thread::Builder::new()
         .name("pangram-tui-analysis".to_owned())
         .spawn(move || {
-            run_analysis_worker(
+            run_analysis_worker(AnalysisWork {
                 service,
-                retained_text,
                 request,
-                save_state,
+                mode,
+                persistence: CompletionPersistence {
+                    retained_text,
+                    save_state,
+                },
                 stop,
                 events,
                 analyzer_source,
-            );
+            });
         })
     {
         send_failure(&fallback_events, analysis_id, analysis_runtime_error(error));
@@ -161,8 +185,8 @@ pub(super) fn spawn_history_rerun(
         .name("pangram-tui-history-rerun".to_owned())
         .spawn(move || {
             let prepared = catch_history_worker(|| prepare_rerun(&service, original_id));
-            let request = match prepared {
-                Ok(request) => request,
+            let (request, mode) = match prepared {
+                Ok(prepared) => prepared,
                 Err(error) => {
                     let _ = events.send(AppEvent::HistoryRerunPrepared {
                         analysis_id: original_id,
@@ -186,15 +210,18 @@ pub(super) fn spawn_history_rerun(
             // bytes after Analyzer consumes the private request.
             let save_state = automatic_save.then_some(SaveState::SavedHistory);
             let retained_text = save_state.map(|_| request.text().to_owned());
-            run_analysis_worker(
+            run_analysis_worker(AnalysisWork {
                 service,
-                retained_text,
                 request,
-                save_state,
+                mode,
+                persistence: CompletionPersistence {
+                    retained_text,
+                    save_state,
+                },
                 stop,
                 events,
                 analyzer_source,
-            );
+            });
         })
     {
         let _ = fallback_events.send(AppEvent::HistoryRerunPrepared {
@@ -229,17 +256,9 @@ pub(super) fn export_after_restore(service: &ConfigService, request: ExportReque
     }
 }
 
-fn run_analysis_worker(
-    service: ConfigService,
-    retained_text: Option<String>,
-    request: AnalysisRequest,
-    save_state: Option<SaveState>,
-    stop: StopObserving,
-    events: Sender<AppEvent>,
-    analyzer_source: crate::analysis::AnalyzerSource,
-) {
-    let analysis_id = request.id();
-    let panic_events = events.clone();
+fn run_analysis_worker(work: AnalysisWork) {
+    let analysis_id = work.request.id();
+    let panic_events = work.events.clone();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -247,34 +266,27 @@ fn run_analysis_worker(
         {
             Ok(runtime) => runtime,
             Err(error) => {
-                send_failure(&events, analysis_id, analysis_runtime_error(error));
+                send_failure(&work.events, analysis_id, analysis_runtime_error(error));
                 return;
             }
         };
-        runtime.block_on(run_analysis(
-            service,
-            retained_text,
-            request,
-            save_state,
-            stop,
-            events,
-            analyzer_source,
-        ));
+        runtime.block_on(run_analysis(work));
     }));
     if outcome.is_err() {
         send_failure(&panic_events, analysis_id, analysis_worker_panic_error());
     }
 }
 
-async fn run_analysis(
-    service: ConfigService,
-    retained_text: Option<String>,
-    request: AnalysisRequest,
-    save_state: Option<SaveState>,
-    stop: StopObserving,
-    events: Sender<AppEvent>,
-    analyzer_source: crate::analysis::AnalyzerSource,
-) {
+async fn run_analysis(work: AnalysisWork) {
+    let AnalysisWork {
+        service,
+        request,
+        mode,
+        persistence,
+        stop,
+        events,
+        analyzer_source,
+    } = work;
     let analysis_id = request.id();
     let analyzer = match analyzer_source.resolve(&service) {
         Ok(analyzer) => analyzer,
@@ -283,6 +295,20 @@ async fn run_analysis(
             return;
         }
     };
+
+    if mode != TextAnalysisMode::Detection {
+        run_phase_seven_text_analysis(
+            &service,
+            request,
+            mode,
+            persistence,
+            stop,
+            events,
+            &analyzer,
+        )
+        .await;
+        return;
+    }
 
     let accepted = match analyzer.start_full(request, stop.token()).await {
         Ok(accepted) => accepted,
@@ -324,15 +350,88 @@ async fn run_analysis(
             }
         }
     };
-    let Some(mut analysis) = completed else {
+    let Some(analysis) = completed else {
         return;
     };
 
+    finish_completed_analysis(&service, persistence, analysis, &events);
+}
+
+async fn run_phase_seven_text_analysis(
+    service: &ConfigService,
+    request: AnalysisRequest,
+    mode: TextAnalysisMode,
+    persistence: CompletionPersistence,
+    stop: StopObserving,
+    events: Sender<AppEvent>,
+    analyzer: &crate::analysis::Analyzer,
+) {
+    let analysis_id = request.id();
+    let event_stop = stop.clone();
+    let completed = match mode {
+        TextAnalysisMode::Detection => unreachable!("detection uses the task observation path"),
+        TextAnalysisMode::Plagiarism => match analyzer
+            .plagiarism(request, WaitOptions::UNBOUNDED, stop.token())
+            .await
+        {
+            Ok(analysis) => analysis,
+            Err(error) => {
+                send_failure(&events, analysis_id, error.into_error());
+                return;
+            }
+        },
+        TextAnalysisMode::Combined => match analyzer
+            .analyze_combined(
+                request,
+                WaitOptions::UNBOUNDED,
+                |observation| match observation {
+                    crate::analysis::CombinedAnalysisObservation::Accepted(running) => {
+                        if events
+                            .send(AppEvent::AnalysisAccepted(running.snapshot()))
+                            .is_err()
+                        {
+                            event_stop.stop();
+                        }
+                    }
+                    crate::analysis::CombinedAnalysisObservation::Progress(progress) => {
+                        if events
+                            .send(AppEvent::AnalysisProgress(progress.clone()))
+                            .is_err()
+                        {
+                            event_stop.stop();
+                        }
+                    }
+                },
+                stop,
+            )
+            .await
+        {
+            Ok(Ok(analysis)) => analysis,
+            Ok(Err(error)) => {
+                send_failure(&events, analysis_id, error.into_error());
+                return;
+            }
+            Err(_) => return,
+        },
+    };
+    finish_completed_analysis(service, persistence, completed, &events);
+}
+
+fn finish_completed_analysis(
+    service: &ConfigService,
+    persistence: CompletionPersistence,
+    mut analysis: Analysis<CanonicalError>,
+    events: &Sender<AppEvent>,
+) {
+    let CompletionPersistence {
+        retained_text,
+        save_state,
+    } = persistence;
     if let Some(save_state) = save_state {
         let text = retained_text
             .as_deref()
             .expect("a requested save retains its submitted text");
-        match save_analysis(&service, &analysis, text, save_state) {
+        match save_analysis(service, &analysis, text, save_state) {
             Ok(()) => {
                 analysis = analysis.with_save_state(save_state);
                 let _ = events.send(AppEvent::HistoryChanged);
@@ -382,7 +481,7 @@ fn fresh_request(text: String, public_link: bool) -> AnalysisRequest {
 fn prepare_rerun(
     service: &ConfigService,
     analysis_id: AnalysisId,
-) -> Result<AnalysisRequest, CanonicalError> {
+) -> Result<(AnalysisRequest, TextAnalysisMode), CanonicalError> {
     let store = existing_record_store(service)?;
     let original = store
         .canonical_analysis(&analysis_id, true)
@@ -432,7 +531,8 @@ fn save_analysis(
     save_state: SaveState,
 ) -> Result<(), HistoryError> {
     let mut store = HistoryStore::open(service.paths().data_dir())?;
-    crate::history::save_complete_analysis(&mut store, analysis, save_state, Some(text))
+    let retained = crate::history::RetainedInput::Text(text.to_owned());
+    crate::history::save_complete_analysis(&mut store, analysis, save_state, Some(&retained))
 }
 
 fn delete_history(

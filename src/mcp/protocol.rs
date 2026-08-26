@@ -282,11 +282,14 @@ fn tool_enabled(name: ToolName, options: &McpOptions) -> bool {
         }
         ToolName::UpdateConfig => options.allow_config_mutations,
         ToolName::DetectText
+        | ToolName::CheckPlagiarism
+        | ToolName::AnalyzeText
         | ToolName::GetTask
         | ToolName::WaitTask
         | ToolName::SubmitBulk
         | ToolName::GetBulk
         | ToolName::WaitBulk
-        | ToolName::GetBulkResults => true,
+        | ToolName::GetBulkResults
+        | ToolName::CheckUpdate => true,
     }
 }

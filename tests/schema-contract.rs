@@ -442,14 +442,14 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
                 valid: false,
             },
             Case {
-                name: "segments require Pangram 4 humanizer scores",
+                name: "segments allow file responses without humanizer scores",
                 instance: success("detect", missing_humanizer_score),
-                valid: false,
+                valid: true,
             },
             Case {
-                name: "segments require Pangram 4 humanized decisions",
+                name: "segments allow file responses without humanized decisions",
                 instance: success("detect", missing_is_humanized),
-                valid: false,
+                valid: true,
             },
             Case {
                 name: "AI-assisted evidence is not a Pangram 4 document classification",

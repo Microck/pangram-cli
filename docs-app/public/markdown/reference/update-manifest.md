@@ -1,0 +1,17 @@
+# Update manifest
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+The detached Ed25519 signature covers the exact downloaded manifest bytes.
+
+| Field | Contract |
+| --- | --- |
+| `schema_version` | 1 |
+| `channel` | stable |
+| `version` | string |
+| `published_at` | #/$defs/UtcTimestamp |
+| `notes_url` | string |
+| `minimum_updater_version` | string |
+| `artifacts` | array |
+
+[Open the complete update-manifest JSON Schema](/schemas/update-manifest.schema.json).

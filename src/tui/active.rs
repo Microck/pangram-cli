@@ -97,6 +97,14 @@ impl ActiveState {
         &self.rows[start..end]
     }
 
+    pub(super) fn select_visible(&mut self, index: usize) -> bool {
+        let Some(row) = self.visible_rows().get(index) else {
+            return false;
+        };
+        self.selected_id = Some(row.id);
+        true
+    }
+
     #[cfg(test)]
     pub(super) fn status(&self, analysis_id: AnalysisId) -> Option<AnalysisStatus> {
         self.rows

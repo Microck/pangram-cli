@@ -5,6 +5,7 @@
 //! trait or duplicating shared navigation rules.
 
 use super::*;
+use crate::analysis::TextAnalysisMode;
 
 pub(crate) fn reduce_in_place(state: &mut AppState, event: AppEvent) -> Vec<Effect> {
     let mut effects = Vec::new();
@@ -118,6 +119,11 @@ pub(crate) fn reduce_in_place(state: &mut AppState, event: AppEvent) -> Vec<Effe
                 Err(error) => state.notice = Some(error.message().to_owned()),
             }
         }
+        AppEvent::Pointer(intent) => {
+            if state.layout() != ResponsiveLayout::ResizeRequired {
+                reduce_pointer(state, intent, &mut effects);
+            }
+        }
         AppEvent::Key(KeyInput::CtrlC) => effects.push(Effect::Exit(130)),
         AppEvent::Key(key) => {
             if state.layout() != ResponsiveLayout::ResizeRequired {
@@ -126,6 +132,51 @@ pub(crate) fn reduce_in_place(state: &mut AppState, event: AppEvent) -> Vec<Effe
         }
     }
     effects
+}
+
+fn reduce_pointer(state: &mut AppState, intent: PointerIntent, effects: &mut Vec<Effect>) {
+    match intent {
+        PointerIntent::Route(route) => {
+            state.route = route;
+            state.focus = Focus::Routes;
+        }
+        PointerIntent::Focus(focus) => state.focus = focus,
+        PointerIntent::Activate(focus) => {
+            state.focus = focus;
+            reduce_key(state, KeyInput::Enter, effects);
+        }
+        PointerIntent::ActiveRow(index) => {
+            state.route = Route::Active;
+            state.focus = Focus::ActiveList;
+            state.active.select_visible(index);
+        }
+        PointerIntent::HistoryRow(index) => {
+            state.route = Route::History;
+            state.focus = Focus::HistoryList;
+            let selection_changed = state.history.select_visible(index);
+            if selection_changed || state.history.selected_detail().is_none() {
+                crate::tui::history_reducer::load_selected_detail(state, effects);
+            }
+        }
+        PointerIntent::HistoryExportField(field) => {
+            if let Some(Overlay::HistoryExport { field: active }) = state.overlay.as_mut() {
+                *active = field;
+                reduce_key(state, KeyInput::Enter, effects);
+            }
+        }
+        PointerIntent::Scroll { focus, direction } => {
+            state.focus = focus;
+            reduce_key(
+                state,
+                match direction {
+                    PointerDirection::Previous => KeyInput::Up,
+                    PointerDirection::Next => KeyInput::Down,
+                },
+                effects,
+            );
+        }
+        PointerIntent::Key(key) => reduce_key(state, key, effects),
+    }
 }
 
 fn reduce_key(state: &mut AppState, key: KeyInput, effects: &mut Vec<Effect>) {
@@ -300,12 +351,17 @@ fn reduce_text_field(state: &mut AppState, key: KeyInput) -> bool {
 
 fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
     match state.focus {
-        Focus::CheckAi
-        | Focus::CheckPlagiarism
-        | Focus::CheckBoth
-        | Focus::InputText
-        | Focus::InputFiles => {}
-        Focus::PublicLink => state.public_link = !state.public_link,
+        Focus::CheckAi => state.text_mode = TextAnalysisMode::Detection,
+        Focus::CheckPlagiarism => {
+            state.text_mode = TextAnalysisMode::Plagiarism;
+            state.public_link = false;
+        }
+        Focus::CheckBoth => state.text_mode = TextAnalysisMode::Combined,
+        Focus::InputText | Focus::InputFiles => {}
+        Focus::PublicLink if state.public_link_available() => {
+            state.public_link = !state.public_link;
+        }
+        Focus::PublicLink => {}
         Focus::ManualSave => state.manual_save = !state.manual_save,
         Focus::Submit => {
             if state.analysis.submitting || state.active.has_session() {
@@ -326,6 +382,7 @@ fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
                 state.analysis.submitting = true;
                 effects.push(Effect::SubmitText {
                     text: state.composer.value().to_owned(),
+                    mode: state.text_mode,
                     public_link: state.public_link,
                     save: state.manual_save,
                     automatic_save: state.settings.history_enabled,
@@ -386,6 +443,10 @@ fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
             effects,
             Effect::StoreUpdatePreference(!state.settings.update_preference.unwrap_or(false)),
         ),
+        Focus::ActiveList if state.active.is_empty() => {
+            state.route = Route::Analyze;
+            state.focus = Focus::Composer;
+        }
         Focus::Quit => effects.push(Effect::Exit(0)),
         Focus::Routes
         | Focus::Composer
@@ -431,6 +492,18 @@ fn focus_order(state: &AppState) -> &'static [Focus] {
         Focus::Submit,
         Focus::Quit,
     ];
+    const ANALYZE_PLAGIARISM: &[Focus] = &[
+        Focus::Routes,
+        Focus::CheckAi,
+        Focus::CheckPlagiarism,
+        Focus::CheckBoth,
+        Focus::InputText,
+        Focus::InputFiles,
+        Focus::Composer,
+        Focus::ManualSave,
+        Focus::Submit,
+        Focus::Quit,
+    ];
     const ANALYZE_RESULT: &[Focus] = &[Focus::Routes, Focus::Result, Focus::Submit, Focus::Quit];
     const ACTIVE: &[Focus] = &[Focus::Routes, Focus::ActiveList, Focus::Quit];
     const SETTINGS: &[Focus] = &[
@@ -445,6 +518,7 @@ fn focus_order(state: &AppState) -> &'static [Focus] {
     ];
     match state.route {
         Route::Analyze if state.analysis.current.is_some() => ANALYZE_RESULT,
+        Route::Analyze if !state.public_link_available() => ANALYZE_PLAGIARISM,
         Route::Analyze => ANALYZE,
         Route::Active => ACTIVE,
         Route::History => {

@@ -1,0 +1,39 @@
+# Error catalog
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+| Code | Category | Retry by default | Contextual retry |
+| --- | --- | --- | --- |
+| `input_required` | usage | no | no |
+| `input_conflict` | usage | no | no |
+| `unsupported_input` | usage | no | no |
+| `unsupported_combination` | usage | no | no |
+| `bulk_limit_exceeded` | usage | no | no |
+| `missing_api_key` | authentication | no | no |
+| `invalid_api_key` | authentication | no | no |
+| `permission_denied` | permission | no | no |
+| `payment_required` | payment | no | no |
+| `rate_limited` | rate_limit | yes | no |
+| `network_unavailable` | network | yes | no |
+| `network_timeout` | network | no | yes |
+| `wait_timeout` | network | yes | no |
+| `submission_outcome_unknown` | network | no | no |
+| `upstream_error` | upstream | no | yes |
+| `upstream_analysis_failed` | upstream | no | yes |
+| `upstream_not_found` | upstream | no | no |
+| `upstream_contract_changed` | upstream_contract | no | no |
+| `invalid_config` | local_config | no | no |
+| `insecure_config_permissions` | local_config | no | no |
+| `insecure_history_permissions` | local_history | no | no |
+| `history_disabled` | local_history | no | no |
+| `history_unavailable` | local_history | no | yes |
+| `history_corrupt` | local_history | no | no |
+| `history_write_failed` | local_history | no | yes |
+| `local_task_unresolvable` | local_history | no | no |
+| `mcp_capability_required` | permission | no | no |
+| `mcp_root_required` | permission | no | no |
+| `mcp_path_outside_root` | permission | no | no |
+| `update_unavailable` | update | no | no |
+| `update_not_owned` | update | no | no |
+| `update_verification_failed` | update | no | no |
+| `update_replace_failed` | update | no | yes |

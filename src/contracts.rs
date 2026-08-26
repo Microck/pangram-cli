@@ -336,7 +336,7 @@ fn tui_state_schema() -> Value {
 }
 
 fn update_manifest_schema() -> Value {
-    let mut schema = root_schema::<schema_types::UpdateManifest>(
+    let mut schema = root_schema::<crate::update::UpdateManifest>(
         "https://pangram.micr.dev/schemas/update-manifest-v1.json",
         "Pangram CLI signed update manifest v1",
     );
@@ -347,7 +347,7 @@ fn update_manifest_schema() -> Value {
 }
 
 fn manifest_signature_schema() -> Value {
-    let mut schema = root_schema::<schema_types::ManifestSignature>(
+    let mut schema = root_schema::<crate::update::ManifestSignature>(
         "https://pangram.micr.dev/schemas/manifest-signature-v1.json",
         "Pangram update manifest detached signature v1",
     );
@@ -358,7 +358,7 @@ fn manifest_signature_schema() -> Value {
 }
 
 fn update_state_schema() -> Value {
-    let mut schema = root_schema::<schema_types::UpdateState>(
+    let mut schema = root_schema::<crate::update::UpdateState>(
         "https://pangram.micr.dev/schemas/update-state-v1.json",
         "Pangram local update-check state v1",
     );
@@ -368,7 +368,7 @@ fn update_state_schema() -> Value {
 }
 
 fn install_receipt_schema() -> Value {
-    let mut schema = root_schema::<schema_types::InstallReceipt>(
+    let mut schema = root_schema::<crate::update::InstallReceipt>(
         "https://pangram.micr.dev/schemas/install-receipt-v1.json",
         "Pangram direct-install receipt v1",
     );

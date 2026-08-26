@@ -1,0 +1,8 @@
+{
+  "title": "Reference",
+  "pages": [
+    "commands", "authentication", "configuration", "environment", "output-schema",
+    "errors", "exit-codes", "progress", "mcp-tools", "mcp-resources", "tui-shortcuts",
+    "history-storage", "update-manifest", "platforms-packages"
+  ]
+}

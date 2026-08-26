@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crossterm::cursor;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -181,6 +183,7 @@ impl TerminalSession {
             stdout,
             EnterAlternateScreen,
             EnableBracketedPaste,
+            EnableMouseCapture,
             cursor::Hide
         ) {
             return Err(clean_up_failed_entry(
@@ -281,6 +284,10 @@ where
     record_first_error(
         &mut first_error,
         execute!(&mut *writer, DisableBracketedPaste),
+    );
+    record_first_error(
+        &mut first_error,
+        execute!(&mut *writer, DisableMouseCapture),
     );
     record_first_error(&mut first_error, disable_raw_mode());
     record_first_error(&mut first_error, execute!(&mut *writer, cursor::Show));

@@ -85,13 +85,21 @@ pub(crate) fn summary_page(
 /// Persists one canonical analysis with its ordered checks and observation
 /// evidence in the store's single atomic write. Adapters decide the retention
 /// policy; this history-owned seam decides the exact durable projection.
+pub(crate) enum RetainedInput {
+    Text(String),
+    File {
+        path: String,
+        extracted_text: Option<String>,
+    },
+}
+
 pub(crate) fn save_complete_analysis(
     store: &mut HistoryStore,
     analysis: &crate::domain::Analysis<crate::output::CanonicalError>,
     save_state: crate::domain::SaveState,
-    retained_text: Option<&str>,
+    retained_input: Option<&RetainedInput>,
 ) -> Result<(), HistoryError> {
-    let record = save::stored_analysis_with_retained_text(analysis, save_state, retained_text)?;
+    let record = save::stored_analysis_with_retained_input(analysis, save_state, retained_input)?;
     store.save_analysis_complete(
         &record,
         &save::stored_checks(analysis)?,

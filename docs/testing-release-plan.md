@@ -516,8 +516,8 @@ One SemVer value is shared by:
 - release manifest
 - GitHub Release
 
-Private development uses `0.x`. Public v1 follows all gates in the product
-specification.
+Stable `0.x` releases use the same exact-version authorization and public gates
+as later releases. Their built-in updater remains network-free until `1.0.0`.
 
 ## 16. Tegami workflow
 
@@ -567,7 +567,8 @@ Assemble npm platform packages and installers
 Verify hashes, manifest signature, SBOM, and smoke tests
                  |
                  v
-Create the immutable tag and private draft GitHub Release
+Create the immutable tag at the built workflow commit
+and the private draft GitHub Release
                  |
                  v
 Upload every artifact, manifest, signature, and provenance file
@@ -597,6 +598,12 @@ Run public clean-install and update smoke tests
 The GitHub Release and matching documentation form the first coherent public
 availability point. No registry publication begins until their URLs are public
 and every required build artifact passes.
+
+The release job extracts the exact requested-version section from Tegami's
+root `CHANGELOG.md` into a temporary notes file. It fails before tag or release
+creation when the changelog or version section is absent. `gh release create`
+receives the workflow commit through `--target`, so a concurrent default-branch
+advance cannot move the release tag away from the source used for every build.
 
 Production publication requires one explicit authorization that names the
 exact version and the complete destination set: repository visibility, GitHub
@@ -698,7 +705,8 @@ The release workflow MUST require:
 - accepted generated intro frame art
 - hashed source geometry, provenance, and written redistribution terms for
   derived intro frames
-- public docs ready at `pangram.micr.dev`
+- public landing page ready at `pangram.micr.dev/` and Fumadocs ready at
+  `pangram.micr.dev/docs`
 - unofficial-project disclosure on the README, documentation site, and package
   metadata
 - every required check passing

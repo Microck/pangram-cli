@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use crate::fixture::{ProtocolFixture, Step, TASK_ID, pangram4_success};
+use crate::fixture::{ProtocolFixture, Step, TASK_ID, pangram4_success, plagiarism_success};
 use crate::mcp_stdio::{McpProcess, result};
 
 fn call(server: &mut McpProcess, name: &str, arguments: Value) -> Value {
@@ -208,6 +208,114 @@ async fn public_links_require_the_explicit_server_capability() {
         "mcp_capability_required"
     );
     assert_eq!(fixture.post_count(), 0);
+    assert_eq!(server.shutdown(), "");
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plagiarism_tool_uses_fixed_ceiling_and_returns_canonical_analysis() {
+    let fixture = ProtocolFixture::start().await;
+    let mut server = McpProcess::spawn_loopback(fixture.base_url(), &[]);
+    result(&server.discover());
+
+    let rejected = call(
+        &mut server,
+        "check_plagiarism",
+        json!({"text": "synthetic words", "max_billable_units": 4}),
+    );
+    assert_eq!(
+        result(&rejected)["structuredContent"]["error"]["code"],
+        "unsupported_input"
+    );
+    assert_eq!(fixture.post_count(), 0);
+
+    fixture.on_plagiarism(Step::Json(plagiarism_success()));
+    let response = call(
+        &mut server,
+        "check_plagiarism",
+        json!({"text": "synthetic words", "max_billable_units": 5}),
+    );
+    let tool = result(&response);
+    assert_eq!(tool["isError"], false);
+    assert_eq!(tool["structuredContent"]["command"], "plagiarism");
+    assert_eq!(
+        tool["structuredContent"]["data"]["checks"][0]["kind"],
+        "plagiarism"
+    );
+    assert_eq!(fixture.post_count(), 1);
+    assert_eq!(server.shutdown(), "");
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn analyze_text_returns_partial_success_when_plagiarism_fails() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Json(pangram4_success("synthetic words")));
+    fixture.on_plagiarism(Step::Status(402, None, None));
+    let mut server = McpProcess::spawn_loopback(fixture.base_url(), &[]);
+    result(&server.discover());
+
+    let response = call(
+        &mut server,
+        "analyze_text",
+        json!({"text": "synthetic words", "max_billable_units": 6}),
+    );
+
+    let tool = result(&response);
+    assert_eq!(tool["isError"], false);
+    assert_eq!(tool["structuredContent"]["command"], "analyze");
+    assert_eq!(tool["structuredContent"]["data"]["status"], "partial");
+    assert_eq!(
+        tool["structuredContent"]["data"]["checks"][0]["status"],
+        "succeeded"
+    );
+    assert_eq!(
+        tool["structuredContent"]["data"]["checks"][1]["error"]["code"],
+        "payment_required"
+    );
+    assert_eq!(server.shutdown(), "");
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_combined_analysis_stops_its_shared_observation_token() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(json!({"task_id": TASK_ID})));
+    fixture.on_poll(Step::Hang);
+    fixture.on_plagiarism(Step::Json(plagiarism_success()));
+    let mut server = McpProcess::spawn_loopback(fixture.base_url(), &[]);
+    result(&server.discover());
+
+    let cancelled_id = server.start_request(
+        "tools/call",
+        json!({
+            "name": "analyze_text",
+            "arguments": {"text": "synthetic words", "max_billable_units": 6}
+        }),
+        true,
+    );
+    fixture.wait_for_posts(2).await;
+    fixture.wait_for_gets(1).await;
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {
+            "requestId": cancelled_id,
+            "reason": "contract test cancellation"
+        }
+    }));
+
+    let live_response = server.request("tools/list", json!({}), true);
+    assert_eq!(result(&live_response)["resultType"], "complete");
+    assert!(
+        server
+            .response_within(std::time::Duration::from_secs(1))
+            .is_none(),
+        "the cancelled combined request must never produce a JSON-RPC response"
+    );
+    assert_eq!(fixture.post_count(), 2);
+    assert_eq!(fixture.get_count(), 1);
     assert_eq!(server.shutdown(), "");
     fixture.shutdown().await;
 }

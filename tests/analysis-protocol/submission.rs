@@ -62,7 +62,7 @@ async fn submits_exact_pangram_4_document_and_reads_terminal_result() {
         microck_pangram_cli::domain::AiClassification::Human
     );
     assert_eq!(result.segments.len(), 1);
-    assert!(!result.segments[0].is_humanized);
+    assert_eq!(result.segments[0].is_humanized, Some(false));
     assert_eq!(
         outcome.provenance().upstream_version.as_deref(),
         Some("4.0")

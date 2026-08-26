@@ -1,0 +1,398 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version from the merged Tegami version change
+        required: true
+        type: string
+      publish:
+        description: Create the authorized private draft release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Validate release plan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.97.1"
+      - name: Install cargo-dist
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
+        with:
+          tool: cargo-dist@0.32.0
+          fallback: none
+      - name: Match the merged version and release policy
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          PUBLISH: ${{ inputs.publish }}
+          RELEASE_AUTHORIZED: ${{ vars.PANGRAM_PUBLIC_RELEASE_AUTHORIZED }}
+          PANGRAM_PERMISSION_SHA256: ${{ vars.PANGRAM_PERMISSION_EVIDENCE_SHA256 }}
+          INTRO_APPROVED: ${{ vars.PANGRAM_INTRO_APPROVED }}
+          REGISTRIES_OWNED: ${{ vars.PANGRAM_REGISTRIES_OWNED }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+
+          with open("Cargo.toml", "rb") as file:
+              package_version = tomllib.load(file)["package"]["version"]
+          requested = os.environ["REQUESTED_VERSION"]
+          if package_version != requested:
+              raise SystemExit(f"Cargo version {package_version} does not match {requested}")
+          if os.environ["PUBLISH"] == "true":
+              required = {
+                  "PANGRAM_PUBLIC_RELEASE_AUTHORIZED": os.environ["RELEASE_AUTHORIZED"],
+                  "PANGRAM_PERMISSION_EVIDENCE_SHA256": os.environ["PANGRAM_PERMISSION_SHA256"],
+                  "PANGRAM_INTRO_APPROVED": os.environ["INTRO_APPROVED"],
+                  "PANGRAM_REGISTRIES_OWNED": os.environ["REGISTRIES_OWNED"],
+              }
+              missing = [name for name, value in required.items() if not value or value != "true" and name != "PANGRAM_PERMISSION_EVIDENCE_SHA256"]
+              if missing:
+                  raise SystemExit(f"release authority gate is closed: {', '.join(missing)}")
+          PY
+          # cargo-dist owns version and target planning. The custom packager
+          # owns archives because cargo-dist includes feature-gated developer
+          # binaries from a single Cargo package in its default archive plan.
+          cargo dist plan --tag="v${REQUESTED_VERSION}"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            executable: pangram
+            packager: package-release
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            executable: pangram
+            packager: package-release
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            executable: pangram
+            packager: package-release
+          - target: aarch64-apple-darwin
+            os: macos-15
+            executable: pangram
+            packager: package-release
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            executable: pangram.exe
+            packager: package-release.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.97.1"
+          targets: ${{ matrix.target }}
+      - name: Build and test the native release binary
+        shell: bash
+        run: |
+          cargo build --locked --release --target "${{ matrix.target }}" --bin pangram
+          "target/${{ matrix.target }}/release/${{ matrix.executable }}" --version
+          cargo build --locked --release --target "${{ matrix.target }}" \
+            --features dev-tools --bin package-release
+          "target/${{ matrix.target }}/release/${{ matrix.packager }}" \
+            --target "${{ matrix.target }}" \
+            --executable "target/${{ matrix.target }}/release/${{ matrix.executable }}" \
+            --out-dir release-artifacts
+      - name: Upload target archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-${{ matrix.target }}
+          path: release-artifacts/
+          if-no-files-found: error
+
+  assemble:
+    name: Sign and audit release artifacts
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    environment: pangram-public-release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download target archives
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.97.1"
+      - name: Install cargo-about
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
+        with:
+          tool: cargo-about@0.9.2
+          fallback: none
+      - name: Sign the exact update manifest
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.PANGRAM_UPDATE_SIGNING_KEY_BASE64 }}
+          SIGNING_KEY_ID: ${{ vars.PANGRAM_UPDATE_SIGNING_KEY_ID }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          test -n "$SIGNING_KEY_BASE64"
+          test -n "$SIGNING_KEY_ID"
+          key_file="$RUNNER_TEMP/update-signing-key"
+          trap 'shred -u "$key_file" 2>/dev/null || rm -f "$key_file"' EXIT
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode >"$key_file"
+          chmod 600 "$key_file"
+          cargo run --locked --features dev-tools --bin sign-update-manifest -- \
+            --artifacts-dir release-artifacts \
+            --out-dir release-artifacts \
+            --key-file "$key_file" \
+            --key-id "$SIGNING_KEY_ID" \
+            --version "$VERSION" \
+            --published-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --minimum-updater-version "1.0.0"
+          node scripts/render-package-manifests.mjs release-artifacts "$VERSION"
+          rm release-artifacts/*.artifact.json
+      - name: Generate third-party license notices
+        run: >-
+          cargo about generate about.hbs
+          --config about.toml
+          --output-file release-artifacts/THIRD-PARTY-LICENSES.txt
+      - name: Generate SPDX SBOMs
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: release-artifacts
+          format: spdx-json
+          output-file: release-artifacts/pangram-release.spdx.json
+          upload-artifact: false
+      - name: Bind every public asset to the checksum file
+        run: >-
+          cd release-artifacts &&
+          sha256sum pangram-* pangram.rb THIRD-PARTY-LICENSES.txt >SHA256SUMS
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-path: release-artifacts/*
+      - name: Upload assembled private artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pangram-v${{ inputs.version }}
+          path: release-artifacts/
+          if-no-files-found: error
+      - name: Upload signed native-smoke inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pangram-release-verification
+          path: |
+            release-artifacts/pangram-update-manifest.json
+            release-artifacts/pangram-update-manifest.json.sig
+            release-artifacts/pangram-installer.sh
+            release-artifacts/pangram-installer.ps1
+          if-no-files-found: error
+
+  smoke:
+    name: Install ${{ matrix.target }}
+    needs: assemble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download target archive
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: release-${{ matrix.target }}
+          path: release-artifacts
+      - name: Download signed verification inputs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: pangram-release-verification
+          path: release-artifacts
+      - name: Run the signed direct-install and receipt-owned replacement smoke test
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          sh -n release-artifacts/pangram-installer.sh
+          root="$(mktemp -d)"
+          trap 'rm -rf "$root"' EXIT
+          archive="release-artifacts/pangram-v${VERSION}-${TARGET}.tar.xz"
+          tar -xJf "$archive" -C "$root" pangram
+          chmod 755 "$root/pangram"
+          export HOME="$root/home"
+          export XDG_DATA_HOME="$root/data"
+          destination="$root/install/pangram"
+          "$root/pangram" __pangram-direct-install \
+            --manifest release-artifacts/pangram-update-manifest.json \
+            --signature release-artifacts/pangram-update-manifest.json.sig \
+            --archive "$archive" \
+            --destination "$destination"
+          test "$("$destination" --version)" = "pangram ${VERSION}"
+          mapfile -t receipts < <(find "$root" -name install-receipt.json -type f)
+          test "${#receipts[@]}" = 1
+          receipt="${receipts[0]}"
+          cp "$receipt" "$root/initial-receipt.json"
+
+          # A second run must enter the receipt-owned replacement path and
+          # publish a new receipt only after the installed binary passes smoke.
+          sleep 1
+          "$root/pangram" __pangram-direct-install \
+            --manifest release-artifacts/pangram-update-manifest.json \
+            --signature release-artifacts/pangram-update-manifest.json.sig \
+            --archive "$archive" \
+            --destination "$destination"
+          test "$("$destination" --version)" = "pangram ${VERSION}"
+          ! cmp -s "$root/initial-receipt.json" "$receipt"
+          test "$(find "$root" -name '.install-receipt.json.pending' -type f | wc -l | tr -d ' ')" = 0
+      - name: Run the signed direct-install and receipt-owned replacement smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "release-artifacts/pangram-installer.ps1"),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -ne 0) { throw $parseErrors[0] }
+          $root = Join-Path $env:RUNNER_TEMP ("pangram-smoke-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          try {
+            $archive = "release-artifacts/pangram-v$env:VERSION-$env:TARGET.zip"
+            Expand-Archive -LiteralPath $archive -DestinationPath $root
+            $env:LOCALAPPDATA = Join-Path $root "data"
+            $destination = Join-Path $root "install\pangram.exe"
+            & (Join-Path $root "pangram.exe") __pangram-direct-install `
+              --manifest release-artifacts/pangram-update-manifest.json `
+              --signature release-artifacts/pangram-update-manifest.json.sig `
+              --archive $archive `
+              --destination $destination
+            if ($LASTEXITCODE -ne 0) { throw "direct installer refused the signed archive" }
+            if ((& $destination --version) -ne "pangram $env:VERSION") {
+              throw "installed binary version mismatch"
+            }
+            $receipts = @(Get-ChildItem -Path $root -Filter install-receipt.json -Recurse -File)
+            if ($receipts.Count -ne 1) { throw "direct install receipt missing" }
+            $receipt = $receipts[0].FullName
+            $initialReceipt = Get-Content -LiteralPath $receipt -Raw
+
+            # Windows replacement finishes in a child process after this
+            # candidate exits, so wait for its smoke-tested receipt publication.
+            Start-Sleep -Seconds 1
+            & (Join-Path $root "pangram.exe") __pangram-direct-install `
+              --manifest release-artifacts/pangram-update-manifest.json `
+              --signature release-artifacts/pangram-update-manifest.json.sig `
+              --archive $archive `
+              --destination $destination
+            if ($LASTEXITCODE -ne 0) { throw "direct installer refused receipt-owned replacement" }
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            do {
+              $replacementReceipt = Get-Content -LiteralPath $receipt -Raw
+              if ($replacementReceipt -ne $initialReceipt) { break }
+              Start-Sleep -Milliseconds 100
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($replacementReceipt -eq $initialReceipt) {
+              throw "receipt-owned replacement did not publish a new receipt"
+            }
+            if ((& $destination --version) -ne "pangram $env:VERSION") {
+              throw "replacement binary version mismatch"
+            }
+            $pendingReceipts = @(
+              Get-ChildItem -Path $root -Filter ".install-receipt.json.pending" -Recurse -File -Force
+            )
+            if ($pendingReceipts.Count -ne 0) { throw "replacement receipt was not finalized" }
+          } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force
+          }
+
+  publish-release:
+    name: Create authorized private draft release
+    if: inputs.publish
+    needs: smoke
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download assembled release artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: pangram-v${{ inputs.version }}
+          path: release-artifacts
+      - name: Create authorized private draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          with Path("Cargo.toml").open("rb") as file:
+              package = tomllib.load(file)["package"]
+          heading = f"## {package['name']}@{version}"
+          changelog = Path("CHANGELOG.md")
+          try:
+              content = changelog.read_text(encoding="utf-8")
+          except FileNotFoundError:
+              raise SystemExit("Tegami package changelog is missing")
+          start = content.find(f"{heading}\n")
+          if start < 0:
+              raise SystemExit(f"Tegami changelog section is missing: {heading}")
+          end = content.find("\n## ", start + len(heading))
+          notes = content[start:] if end < 0 else content[start:end]
+          Path(os.environ["RUNNER_TEMP"], "release-notes.md").write_text(
+              notes.rstrip() + "\n",
+              encoding="utf-8",
+          )
+          PY
+          gh release create "v${VERSION}" release-artifacts/* \
+            --draft --title "Pangram CLI v${VERSION}" \
+            --target "$GITHUB_SHA" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+:root,
+.dark {
+  --color-fd-background: #000;
+  --color-fd-foreground: #fff;
+  --color-fd-muted: #111;
+  --color-fd-muted-foreground: #b8b8b8;
+  --color-fd-border: #303030;
+  --color-fd-card: #000;
+  --color-fd-card-foreground: #fff;
+  --color-fd-primary: #fff;
+  --color-fd-primary-foreground: #000;
+}
+
+html,
+body {
+  background: #000;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+/*
+ * The docs surface is deliberately instant: no animation, no transitions. This
+ * stays an !important sledgehammer because it has to beat whatever fumadocs and
+ * Tailwind ship.
+ *
+ * The landing route is excluded because it owns a motion system in landing.css,
+ * where every animation is already gated behind prefers-reduced-motion. Without
+ * the exclusion this rule silently wins on specificity and every reveal there
+ * computes to a 0ms step, which looks identical to no animation at all.
+ */
+*:not([data-pangram-landing], [data-pangram-landing] *) {
+  animation-duration: 0ms !important;
+  transition-duration: 0ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,30 @@
+---
+title: MCP tools
+description: Generated MCP protocol version, tool inventory, and annotations.
+---
+
+Generated from Pangram CLI 0.1.0 and schema major 1.
+
+Protocol: `2026-07-28`.
+
+| Tool | Purpose | Read only | Open world |
+| --- | --- | --- | --- |
+| `detect_text` | Detect AI-written text with Pangram 4. | no | yes |
+| `check_plagiarism` | Check text for plagiarism against online sources. | no | yes |
+| `analyze_text` | Run Pangram 4 AI detection and plagiarism checks on the same text. | no | yes |
+| `get_task` | Get one Pangram task without waiting. | yes | yes |
+| `wait_task` | Wait for one Pangram task to reach a terminal state. | yes | yes |
+| `submit_bulk` | Submit inline items or one approved JSONL file to Pangram 4. | no | yes |
+| `get_bulk` | Get one Pangram bulk job without waiting. | yes | yes |
+| `wait_bulk` | Wait for one Pangram bulk job to reach a terminal state. | yes | yes |
+| `get_bulk_results` | Get one explicit results page for a Pangram bulk job. | yes | yes |
+| `check_update` | Check for a Pangram CLI update without installing it. | yes | yes |
+| `history_list` | List saved local analysis summaries. | yes | no |
+| `history_search` | Search saved local analysis summaries with literal text. | yes | no |
+| `history_get` | Get one saved local analysis, redacted by default. | yes | no |
+| `history_rerun` | Submit the saved input from one local analysis again. | no | yes |
+| `history_delete` | Delete one saved local analysis. | no | no |
+| `history_clear` | Delete all saved local analyses. | no | no |
+| `update_config` | Set one supported non-secret Pangram CLI configuration key. | no | no |
+
+[Open the generated tool contracts](/schemas/mcp-tools.json).

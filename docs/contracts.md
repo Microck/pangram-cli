@@ -61,9 +61,16 @@ protocol path or the experimental Tasks extension. Request `_meta` requires
 the protocol version and client capabilities; client information is optional.
 Phase 6 exposes text detection, ordinary task get/wait, bulk
 submit/get/wait/results, and capability-gated history and configuration tools.
-File detection, plagiarism, and combined analysis remain absent until Phase 7;
-update checks remain absent until Phase 8. There are no compatibility aliases
-or rejection-only placeholders for later tools.
+Phase 7 adds inline-text plagiarism and combined analysis. Binary file
+detection remains CLI-only because MCP requires a pre-submission billable-unit
+ceiling and Pangram publishes no local file-billing estimator. The explicit
+nonbillable `check_update` tool remains planned Phase 8 surface
+that ships only with the updater implementation and its real-stdio contract
+coverage, at which point `0.x` builds advertise it while performing zero
+update-network activity and returning typed `update_unavailable`. Public
+distribution of a stable `0.x` release does not enable self-update before
+`1.0.0`. There are no compatibility aliases or rejection-only
+placeholders for later tools.
 
 File-backed MCP input requires an explicit repeatable `--allow-file-root PATH`
 and handle-relative no-follow opening. Inline bulk items do not require a root;
@@ -516,13 +523,42 @@ not used as a state discriminator.
 
 `humanizer_score` is Pangram 4's estimate from 0.0 through 1.0 that a humanizer
 modified the segment. `is_humanized` preserves Pangram's thresholded decision.
-The client MUST NOT derive it from a local threshold. `start_index` and
-`end_index` preserve zero-based, half-open upstream character offsets. Pangram
-does not define the character unit precisely enough to use them as UTF-8 byte
-indices.
+The client MUST NOT derive it from a local threshold. Both fields are required
+for Pangram 4 text and bulk results and absent from the verified file endpoint
+response; canonical file segments therefore omit them rather than inventing
+values. `start_index` and `end_index` preserve zero-based, half-open upstream
+character offsets. Pangram does not define the character unit precisely enough
+to use them as UTF-8 byte indices.
 
 `dashboard_link` appears only when the request explicitly asked Pangram to
 create one.
+
+### 5.1 Binary file detection wire contract
+
+Binary detection sends one or more PDF, DOCX, or RTF documents to
+`POST https://file-external.api.pangram.com/` as `multipart/form-data` with one
+ordered `files` part per document and `public_dashboard_link=false`. Each part
+uses the local basename and its exact media type: `application/pdf`,
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`, or
+`application/rtf`. Authentication is the same `x-api-key` header as other
+Pangram APIs. The adapter never adds a `model` part and never creates a public
+link in schema major 1.
+
+The successful response is an array in request order. Each item requires
+`filename`, extracted `text`, `version`, `headline`, `prediction`,
+`prediction_short`, the three fractions, the three segment counts, and ordered
+`windows`. File windows require `text`, `label`, `ai_assistance_score`,
+`confidence`, `start_index`, `end_index`, `word_count`, and `token_length`; they
+do not carry Pangram 4's `is_humanized` or `humanizer_score`. The live RTF, PDF,
+and DOCX scenarios returned this rich shape. A dashboard-link-only array,
+missing item, extra item, reordered filename, or any malformed required field
+is `upstream_contract_changed`.
+
+The file endpoint is synchronous. A successful item becomes a terminal
+AI-detection check with no upstream task ID. A transport failure after the POST
+is issued has `acceptance_unknown` and is never retried automatically. The
+response's extracted text may populate `FileInput.extracted_text` only when the
+caller explicitly requests input content.
 
 ## 6. Plagiarism result
 
@@ -542,11 +578,16 @@ create one.
 }
 ```
 
-The canonical field is `plagiarized_sentence_count`. The initial response
-normalizer accepts the numeric upstream `plagiarized_sentences` documented by
-the current official API reference. A list or missing value triggers
-`upstream_contract_changed`. Live conformance must confirm the numeric shape
-before public support.
+The canonical field is `plagiarized_sentence_count`. The response normalizer
+requires the numeric upstream `plagiarized_sentences` documented by the current
+official API reference and confirmed by the 2026-08-24 live scenario. A list or
+missing value triggers `upstream_contract_changed`. The live response also
+carried an extensible `metadata` object; schema major 1 does not project it.
+
+Plagiarism sends exactly `{"text":"..."}` as JSON to
+`POST https://plagiarism.api.pangram.com/` with `x-api-key` authentication. It
+is synchronous, has no upstream task ID, and is never automatically retried
+after the POST is issued.
 
 Source URLs preserve the raw provider string and are not required to validate as
 a URI. The runtime MUST NOT fetch them automatically. It offers an open action
@@ -1124,10 +1165,15 @@ interactive surface has these observable boundaries:
   regular keymap with `Analyze` selected first. The Vim keymap adds its
   documented navigation keys without stealing printable input from the text
   composer.
-- text AI detection is the first positive analysis capability and must enter
-  the shared `Analyzer`. File input, plagiarism, and combined analysis remain
-  visible but unavailable until their owning implementation phases; activating
-  an unavailable control makes no request and spends no Pangram credit.
+- text AI detection, plagiarism, and combined analysis enter the shared
+  `Analyzer`. The selected check owns the inspector estimate: AI detection uses
+  the started-100-word estimate, plagiarism uses 5 units, and both sums those
+  values. Selecting plagiarism turns off public-link consent because that
+  upstream route has no public-link field. The control then reads `n/a`
+  and leaves the focus order until AI detection or combined mode is selected.
+  File input remains visible but unavailable because the TUI has no contracted
+  file-selection interaction; activating it makes no request and spends no
+  Pangram credit.
 - While the text composer owns focus and no overlay covers it, the terminal
   cursor is visible at the canonical edit position. The composer derives
   horizontal and vertical scroll to keep that position on-screen. Leaving the
@@ -1138,9 +1184,103 @@ interactive surface has these observable boundaries:
   navigation, toggle, help, or submit commands. A covered composer, another
   focus, or the resize-required surface ignores the paste.
 - terminals at least 120 columns wide render route rail, center workspace, and
-  inspector as three stable areas. Widths 80 through 119 render top tabs and
-  place inspector content below the center content. Any viewport below 80x24
-  renders a resize overlay without changing application state.
+  inspector as three stable areas. Widths 80 through 119 render a one-row
+  header with the Pangram name and top tabs. Before submission, Analyze places
+  its selectors, composer, privacy controls, estimate, and primary action in
+  one bottom-aligned dock instead of creating a detached inspector band.
+  Result and history inspector content may still join the center flow. Any
+  viewport below 80x24 renders a resize overlay without changing application
+  state.
+- The interactive palette uses Pangram orange `#FF6106` as its primary brand,
+  focus, action, heading, and active-border color on a dark neutral background.
+  The default truecolor background is `#111111`; the interface does not require
+  or depend on pure black. The ANSI palette uses indexed dark neutrals instead
+  of terminal black for the same reason. Pangram pink `#FECAB9` marks selected
+  result evidence and white supports ordinary body text. Muted text uses accessible gray
+  `#8A8A8A`; dark gray is reserved for separators. Charcoal `#1C1C1C` surfaces
+  are limited to navigation, the text composer, compact controls, and modal
+  overlays. The workspace, inspector, and command bar remain on the base
+  canvas. Selected selector values use orange fill with dark text from the
+  first rendered frame, even when another control owns keyboard focus.
+  Inactive peers use compact `#2A2A2A` targets, and unavailable peers stay
+  visibly muted. Filled controls use one terminal cell of horizontal padding on both
+  sides of their label. The focus marker occupies its own unfilled cell, so it
+  never creates asymmetric button padding. Toggle labels and values form one
+  compact target. The primary action remains orange even when it does not own
+  focus; focus adds a marker rather than a second competing color. The TUI
+  never uses terminal underlining; focus and selection use markers, weight,
+  foreground color, or fill instead. A non-empty `NO_COLOR` or
+  `TERM=dumb` disables all foreground
+  and background colors; terminals without declared truecolor support receive
+  fixed ANSI approximations. Focus, selection, availability, and destructive
+  intent always retain text or ASCII-symbol cues, so color is never the only
+  state signal.
+- The wide layout uses one sparse separator after its compact route rail and
+  leaves an unboxed gutter before the inspector. Workspace content uses a
+  stable two-column horizontal inset and starts after one blank breathing row.
+  Vertical rhythm is structural rather than decorative: related text or
+  controls have one blank terminal row between them, unrelated sections have
+  two blank rows between them, and bordered or ruled content keeps one blank
+  inner row between its text and the nearest horizontal rule. Lists may keep
+  one item per row when the viewport is too short to preserve selection
+  reachability, but headings, controls, explanatory text, and primary actions
+  retain their group separation at every supported size. Modal content keeps
+  one row of vertical and two columns of horizontal inner padding.
+  Wrapped result text breaks at whitespace when the next word fits on a fresh
+  row. Only a token wider than the available row may hard-wrap.
+  The wide route rail leaves one blank row between route targets, and wide
+  inspector and workspace sections use blank rows between unrelated groups
+  instead of additional borders. The narrow layout uses one header row with a
+  compact Pangram wordmark and route tabs, plus the same two-column workspace
+  inset. Narrow workspaces do not repeat the selected route name because the
+  tab already owns that state. Before submission, Analyze bottom-aligns one
+  15-row dock. The dock renders each selector group on one row, leaves one
+  blank row between those groups, leaves two blank rows before the composer
+  label, and ends with one aligned row for privacy controls, estimate, and
+  Submit. Its composer uses a compact charcoal surface with a single top rule
+  and one blank inner row before text. The canvas above the dock contains a
+  centered, actionable empty state when height permits. Full rectangular
+  borders remain reserved for modal overlays.
+- The selected route uses Pangram orange fill with dark text from the first
+  rendered frame. Route focus adds only the separate marker and never changes
+  the selected target's colors. Inactive route options use compact `#2A2A2A`
+  targets with one cell of horizontal padding on both sides. Narrow tabs have one unfilled cell
+  between targets, while the wide rail keeps its focus marker in a separate
+  unfilled gutter. The no-color route marker remains the non-color state cue.
+- Non-focusable workspace and inspector rows reserve the same two-column focus
+  marker gutter as focusable rows. Empty input shows `Estimate -`; a positive
+  unit estimate appears only after the composer contains at least one word.
+- Each focusable action has one visible owner. The Analyze inspector owns the
+  `Submit` action before a result and changes it to `New analysis` after a
+  result; the result workspace does not render a second copy of that action.
+- Result viewport capacity is derived from the rows already rendered above the
+  result. Headings, filters, pending state, and wrapped preamble text must not
+  reduce or obscure the visible result page.
+- From 26 rows high, Active, History, and Settings reserve one blank row above
+  and below the bottom command-bar controls. Analyze keeps a compact one-row
+  bar because its 15-row bottom-aligned input dock owns that vertical space.
+  At shorter supported heights every route uses the compact bar. The bar has
+  no decorative border and shows at most one action for the current focus in
+  addition to navigation and help. Compact key targets use separators between
+  commands. The contextual key target uses the orange action treatment, and
+  the bar never advertises two different Enter actions at the same time. In
+  wide mode, the route-rail surface and its separator continue through the
+  terminal's bottom row. The command band begins at the center workspace edge,
+  and its controls start at the workspace's two-column content inset instead
+  of extending beneath the route rail. Narrow mode keeps the two-column
+  terminal inset. Only the rendered control row accepts command-bar mouse
+  clicks.
+- The full-screen session enables SGR mouse capture and disables it through the
+  same idempotent restoration path as raw mode and bracketed paste. Left click
+  switches routes, focuses text fields and result viewports, activates visible
+  selectors, toggles, settings, inspector actions, and the focused command-bar
+  action, and selects visible Active or History rows. A History row click uses
+  the same certified detail-load path as keyboard Enter. Wheel input over
+  Active, History, or result content moves that exact selection or viewport by
+  one row. Mouse intent enters the same reducer and operation gates as keyboard
+  intent, so it cannot bypass confirmation, duplicate pending work, spend
+  credits through an unavailable action, or make mouse input required. Clicks
+  outside a visible target and unsupported mouse buttons are no-ops.
 - normal keyboard exit is the focusable `Quit` command-bar action. Ctrl+C is
   always an interruption. No unlisted single-key quit shortcut is implied by
   this contract.
@@ -1148,23 +1288,59 @@ interactive surface has these observable boundaries:
   the CLI and become visible only after persistence succeeds. Enabling local
   history requires an explicit plaintext-retention warning and confirmation;
   cancelling that overlay leaves the disabled default unchanged.
+  Settings groups its rows under plain `Account`, `Preferences`, and
+  `Diagnostics` headings. Labels and values use stable aligned columns. An
+  inactive row has no filled surface; its current value is muted text. The
+  focused row keeps its marker in an unfilled gutter and applies the orange
+  action treatment only to the padded value, not the label or full row. One
+  blank row separates related settings and two blank rows separate sections,
+  without surrounding cards or borders. The diagnostic command remains
+  explanatory text because it has no in-place mutation action.
 - Update-preference onboarding advertises an Escape Back action only when the
   credential setup overlay is reachable. With a configured credential, the
   preference remains required and no inert Back action is shown.
-- eligible intro playback remains unconsumed while the viewport is below
-  80x24. Missing approved source geometry or logo rights suppresses generated
-  intro frames but does not block the reducer, Analyze workflow, layout, or
-  terminal restoration.
+- The approved intro source is the 1772x709, nine-frame Pangram fox GIF with
+  SHA-256 `fa806f95e5775e9bc4ffda599a540910edd2042115eae80729308b02d89a542e`.
+  A generator converts one 630 ms source cycle into 14 embedded 72x16 terminal
+  frames. Full-motion playback repeats that cycle four times at 20 frames per
+  second, for exactly 56 frames and 2.8 seconds, and dissolves during the final
+  eight frames. During the first 900 ms, the backdrop moves linearly from the
+  terminal canvas to the TUI base surface. After the fox is fully dissolved,
+  the real Analyze screen fades from that base surface to its final semantic
+  colors over six 50 ms steps using the `cubic-bezier(0.23, 1, 0.32, 1)`
+  ease-out curve. The complete presentation is 3.1 seconds. The runtime does
+  not decode or read the source asset.
+- The intro is eligible only at 100x28 or larger. A smaller viewport opens
+  Analyze immediately and leaves first-run playback unconsumed. Resizing below
+  that floor during playback ends the intro without marking it seen. Reduced
+  motion and motion `off` suppress the intro and Analyze fade rather than
+  substituting another timed or blocking presentation. Missing or invalid
+  generated art suppresses only the intro and never blocks the reducer,
+  Analyze workflow, layout, or terminal restoration.
+- The fox is centered and uses Pangram orange as its dominant color, with pink,
+  cream, and dark-orange detail. ANSI terminals receive fixed indexed-color
+  equivalents. `NO_COLOR` preserves the silhouette with density glyphs and no
+  color escapes. Escape, Enter, or Space skips playback and is consumed; other
+  input remains available to the normal reducer. A resize below 100x28 or a
+  skip during either the fox or Analyze fade reveals the final TUI immediately.
+  Completed or explicitly skipped full-motion playback marks the intro seen
+  only after the terminal has entered its full-screen session successfully.
 
 The TUI Active route is an ID-keyed union of in-session operations and every
 saved unfinished analysis. A dedicated certified SQLite read loads the complete
 queued/running union independently of the filtered, newest-50 History display
 page. Queued and running summaries merge into Active without duplicating an
 in-session entry.
+When that union is empty, Active centers one calm empty state and one real
+`Analyze` action. Enter while the empty Active list owns focus and a click on
+that action both switch to Analyze and focus the composer. The action remains
+orange while idle and keeps its focus marker outside the filled target.
 A newly accepted in-session entry precedes saved entries and becomes the
 ID-owned selection. Up, Down, Home, End, and Vim `j`/`k` traverse every entry;
 the derived six-row window follows that selection without a separate mutable
-scroll position.
+scroll position. Combined analysis publishes its accepted AI task to this
+list before any matching progress event, then advances that same ID as status
+polls arrive.
 A matching progress event advances only that analysis to running. A returned
 terminal summary, successful deletion, or matching terminal analysis event
 removes only that exact ID. Omission from a later History page does not remove
@@ -1176,6 +1352,12 @@ as the noninteractive history commands. Disabling automatic history does not
 hide records already stored. It shows at most the newest 50 matching records,
 labels that value as `Showing N` rather than a total count, and includes each
 record's status, ordered checks, save state, display name, and timestamp.
+Search owns one compact filled target. Status and check filters share the next
+control row as separate compact filled targets. The three contextual actions
+use the same target treatment, with one stable marker gutter per action; they
+never render as ungrouped plain words. An empty result set centers its recovery
+copy in the remaining list canvas instead of leaving it attached to the filter
+rows.
 Each summary occupies exactly one terminal row. The display name is clipped at
 an extended-grapheme boundary to the remaining terminal-cell width, so wide
 Unicode cannot wrap into another record.
@@ -1211,8 +1393,15 @@ Rerun is a focused action labeled as billable; activating it is the explicit
 request and does not add a second confirmation. It reconstructs and validates
 the retained text inside the shared history/analysis module before credential
 resolution, creates a fresh analysis with `rerun_of`, always requests no public
-dashboard link, and never implies manual save. The current automatic-history setting
-still determines whether a successful rerun is saved automatically.
+dashboard link, and repeats the original ordered check set. An AI-only,
+plagiarism-only, or combined text record can be rerun; any other check shape or
+input remains unresolvable. A rerun never implies manual save. The current
+automatic-history setting still determines whether a successful rerun is saved
+automatically.
+Local cancellation of a rerun exits 130. If cancelling a combined rerun makes
+an issued billable request ambiguous, the response keeps the canonical
+`submission_outcome_unknown` reconciliation error instead of replacing it
+with a generic interruption error.
 
 Delete exists only in the selected record's contextual action menu. Enter on
 Delete opens a confirmation whose default is Cancel, a second Enter therefore
@@ -1241,11 +1430,12 @@ Source-category and content rules:
   stdin are the canonical `input_required` usage error: no content was
   supplied to detect. An executable stdin (TTY, or a pipe that decodes to
   nothing) is also `input_required`.
-- `--file` reads UTF-8 text files only in schema major 1. A path that cannot
-  be read is `input_required`; a file whose bytes are not UTF-8, or whose
-  decoded text carries no detectable words, is `unsupported_input`, both
-  before any submission. Binary document (PDF, DOCX, RTF) detection is a
-  later-phase workflow and is not inferred client side.
+- `--file` selects PDF, DOCX, and RTF by a case-insensitive final extension for
+  `detect`; every other file is read as UTF-8 text. A path that cannot be read
+  is `input_required`; an unsupported binary spelling, a text file whose bytes
+  are not UTF-8, or decoded text with no detectable words is
+  `unsupported_input`, before any submission. The client does not extract
+  binary document text locally.
 
 Defaults:
 
@@ -1363,8 +1553,8 @@ Its observable semantics are locked:
   only the terminal observation it returns. Manual `detect --save` semantics
   are unchanged.
 
-`--save` exists only where the normative grammar lists it: the analysis
-commands (`detect`, and the planned `plagiarism`/`analyze` on their phase).
+`--save` exists only where the normative grammar lists it: `detect`,
+`plagiarism`, and `analyze`.
 The bulk and task surfaces carry no `--save`; their completed work persists
 only under the `history.enabled = true` automatic gate. There is no
 `history save` command: the section 14.5 grammar is closed, so that spelling
@@ -1567,16 +1757,43 @@ Rules:
 - `--detach` is an explicit `detect` flag and is invalid for other analysis
   commands
 - `--public-link` is invalid for plagiarism-only work
+- `--public-link` is invalid for binary file detection because the private live
+  contract did not create or verify a link-bearing file response
 - `detect --detach` is allowed for UTF-8 text only
 - `analyze --detach` does not exist
 - plagiarism does not detach
 - binary file plagiarism and combined analysis fail before submission
-- timeout stops waiting, not upstream work
-- `--max-billable-units` rejects a locally estimated request above the ceiling
-  before submission; MCP billable tools require the same field. Each analyzed
-  text contributes its own started-100-word estimate, so repeated `--file`
-  inputs are summed and compared against the single ceiling before any
-  submission.
+- combined text analysis submits AI detection and plagiarism concurrently,
+  exactly once per check, after local validation. It always returns checks in
+  canonical AI-detection-then-plagiarism order regardless of response order.
+  If either check reaches a canonical success while the other concludes with
+  an error, the parent analysis is `partial` and retains both the successful
+  result and the failed check. Local cancellation interrupts the combined
+  result instead of assembling it unless cancelling an issued billable request
+  makes its submission outcome ambiguous. In that case,
+  `submission_outcome_unknown` takes precedence over the generic interruption
+  and retains the request hash and reconciliation status, while the CLI still
+  exits 130.
+- timeout stops waiting, not upstream work. One supplied deadline starts when
+  the analysis operation begins and bounds the complete local wait, including
+  a synchronous plagiarism response, a synchronous binary file response, and
+  both concurrent members of combined analysis. Combined members share that
+  one deadline; neither member resets the budget. If the deadline passes
+  before a billable request is issued, the operation reports `wait_timeout`.
+  If it passes after issue without a response, the outcome is ambiguous and
+  reports `submission_outcome_unknown` under section 12.1.
+- `--max-billable-units` rejects a locally estimated text request above the
+  ceiling before submission; MCP billable tools require the same field. Each
+  AI-detected text contributes its own started-100-word estimate. A
+  plagiarism check contributes the currently published fixed 5-credit charge;
+  combined analysis sums that 5-unit plagiarism charge with the AI-detection
+  estimate. Repeated text-file inputs are summed and compared against the
+  single ceiling before any submission. Pangram publishes no pre-submission estimator for binary
+  files because their word count exists only after server extraction. Passing
+  `--max-billable-units` with any binary file is therefore a usage error before
+  credentials or network work; the client neither guesses from byte size nor
+  extracts content locally. This is also why MCP binary file detection remains
+  unavailable while the required MCP ceiling is in force.
 - text detection estimates one billable unit per started 100-word block, with
   a minimum of one
 
@@ -1590,9 +1807,10 @@ Wait and completion:
   must not be negative, and a count of `0` (or any value that truncates to
   zero) is rejected as a usage error because it would not bound any wait. The
   scaled value must fit the supported duration range.
-- when `--timeout` is not supplied, `detect` waits for the analysis to reach a
-  terminal state without a local wait deadline; there is no hidden wait
-  ceiling. A caller bounds an observation only by passing `--timeout`.
+- when `--timeout` is not supplied, an analysis command waits for every
+  selected check to reach a terminal state without a local wait deadline;
+  there is no hidden wait ceiling. A caller bounds the complete local wait
+  only by passing `--timeout`.
 
 Pangram 4 is the only production text model. The CLI has no model-selection
 flag. The analysis module MUST send Pangram's documented Pangram 4 selector,
@@ -1704,6 +1922,9 @@ validated once on read; malformed input, check, result, or error values fail
 closed as `history_corrupt`. The parent row retains the expected check
 cardinality, so deleting one row from a two-check analysis is corruption
 rather than a valid one-check projection.
+An explicit or automatic save of locally submitted binary detection retains
+the original path and provider-extracted text even when primary output omitted
+them. No ephemeral result or default projection gains those fields.
 An absent optional input descriptor is omitted from canonical output; it is
 never encoded as JSON `null`. The typed input discriminator and hash columns
 must agree with the canonical input JSON, and retained text must reproduce its
@@ -1915,7 +2136,43 @@ pangram update
 pangram update --yes
 ```
 
-Completions emit only the completion script.
+Completions emit only the completion script. The `completions` command is
+compiled and available.
+
+Phase 8 exposes the three `update` forms in `0.x` builds behind the outermost
+no-network policy from `docs/update-contract.md`: each form returns
+`update_unavailable` before prompting, reading updater state, or mutating the
+installation. Stable `0.x` releases may be distributed only with exact-version
+release authority, but this does not enable self-update. Builds at `1.0.0` or
+newer keep the final interaction contract:
+`pangram update --check` never prompts or installs; bare `pangram update`
+prompts only when stdin, stdout, and stderr are all TTYs and `CI` is unset, a
+decline or interruption performs no mutation and exits 130, CI or any
+redirected stream fails with `input_required` and exit 2, and `pangram update
+--yes` is the sole noninteractive install form.
+
+Every versioned direct installer fetches its manifest, detached signature, and
+native archive from the same immutable `vVERSION` GitHub Release. It never
+mixes `latest` metadata with a version-pinned candidate. The npm Linux platform
+packages declare `glibc` as their required libc because both Linux release
+targets are GNU builds; npm must skip them on musl hosts rather than install an
+incompatible executable. The updater recognizes manager ownership from the
+native executable paths in exactly these npm platform packages:
+`@microck/pangram-cli-darwin-arm64`, `@microck/pangram-cli-darwin-x64`,
+`@microck/pangram-cli-linux-arm64`, `@microck/pangram-cli-linux-x64`, and
+`@microck/pangram-cli-win32-x64`. It returns the main-package command
+`npm update --global @microck/pangram-cli` as advice and never claims direct
+update ownership. Candidate smoke tests retry only transient operating-system
+spawn contention with a small fixed bound. A started process that fails or
+reports the wrong version is rejected immediately.
+
+The POSIX direct installer accepts the two GNU Linux targets only when
+`getconf GNU_LIBC_VERSION` proves glibc before any release download; musl and
+unknown libc environments fail with an explicit unsupported-platform error.
+An authorized draft release is created from the workflow commit SHA, never the
+then-current default branch head. Its notes file is generated at runtime from
+the exact version section in the Tegami-owned root `CHANGELOG.md`; a missing or
+mismatched section fails before tag or release creation.
 
 ## 15. Local setup contract
 
@@ -1971,6 +2228,13 @@ run MCP conformance
 
 The generated artifacts MUST point back to their owner and MUST NOT be edited
 by hand.
+
+The production web application reserves `/` for the Pangram CLI landing page.
+Fumadocs owns `/docs` and every human-facing documentation page below it. Its
+source loader uses `/docs` as the base URL, and landing-page documentation
+links, documentation navigation, and documentation search results remain
+under that prefix. Root-level machine-readable files such as `llms.txt`,
+schemas, and generated references do not change this route ownership.
 
 Phase 6 adds `generated/mcp-tools.json` as the one ordered immutable inventory
 of tool descriptors, closed input schemas, and command-specialized output

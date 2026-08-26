@@ -5,9 +5,8 @@
 //! protocol fixture; it refuses any non-loopback URL at construction so no
 //! path from a test or adapter can aim the client elsewhere.
 //!
-//! Method inventory stays intentionally narrow: one billable text POST and
-//! one safe GET poll. Bulk, file, and plagiarism paths are Phase 3/7 work
-//! and have no protocol surface here yet.
+//! Method inventory stays intentionally narrow: the documented text, bulk,
+//! file, and plagiarism routes only.
 
 use std::fmt;
 
@@ -27,7 +26,9 @@ use super::pacemaker::{Gate as PaceGate, Pacemaker, PacingSchedule};
 use super::task::TaskError;
 
 mod bulk;
+mod synchronous;
 pub use bulk::{AcceptedBulk, BulkPageFetch};
+pub use synchronous::{FileFormat, FileUpload};
 
 /// The fixed production submit URL. Never construct it from configuration.
 const PRODUCTION_SUBMIT_URL: &str = "https://text.external-api.pangram.com/task";
@@ -36,6 +37,10 @@ const PRODUCTION_POLL_PREFIX: &str = "https://text.external-api.pangram.com/task
 /// The fixed production bulk base URL; the four documented bulk routes join
 /// beneath it (contracts section 9.1). Never construct it from configuration.
 const PRODUCTION_BULK_BASE: &str = crate::domain::PRODUCTION_BULK_URL;
+/// The fixed synchronous file-analysis URL.
+const PRODUCTION_FILE_URL: &str = "https://file-external.api.pangram.com/";
+/// The fixed synchronous plagiarism-analysis URL.
+const PRODUCTION_PLAGIARISM_URL: &str = "https://plagiarism.api.pangram.com/";
 
 /// The endpoint set for one client. Production values are compile-time
 /// constants; only the loopback-gated constructor accepts alternates.
@@ -44,6 +49,8 @@ pub struct UpstreamEndpoints {
     submit: String,
     poll_prefix: String,
     bulk_base: String,
+    file: String,
+    plagiarism: String,
 }
 
 impl UpstreamEndpoints {
@@ -54,6 +61,8 @@ impl UpstreamEndpoints {
             submit: PRODUCTION_SUBMIT_URL.to_owned(),
             poll_prefix: PRODUCTION_POLL_PREFIX.to_owned(),
             bulk_base: PRODUCTION_BULK_BASE.to_owned(),
+            file: PRODUCTION_FILE_URL.to_owned(),
+            plagiarism: PRODUCTION_PLAGIARISM_URL.to_owned(),
         }
     }
 
@@ -95,10 +104,14 @@ impl UpstreamEndpoints {
         let submit = format!("{base}/task");
         let poll_prefix = submit.clone();
         let bulk_base = format!("{base}/bulk");
+        let file = format!("{base}/file");
+        let plagiarism = format!("{base}/plagiarism");
         Ok(Self {
             submit,
             poll_prefix,
             bulk_base,
+            file,
+            plagiarism,
         })
     }
 
@@ -402,33 +415,7 @@ impl<C: Clock> UpstreamClient<C> {
             .http
             .post_json(&self.endpoints.submit, &self.api_key, body, cancel)
             .await;
-        match outcome {
-            SendOutcome::Responded(response) => classify_submit(response),
-            // Cancellation before the send is issued completes no remote
-            // action (pre-issue, F3). Cancellation after the request is issued
-            // is ambiguous: the body may have reached Pangram, so the outcome
-            // must be `Ambiguous` (submission_outcome_unknown), never a
-            // definite no-remote-action claim, and never replayed.
-            SendOutcome::Cancelled { issued } => {
-                if issued {
-                    Err(SubmitOutcome::Ambiguous(AnalysisError::Cancelled))
-                } else {
-                    Err(SubmitOutcome::Cancelled)
-                }
-            }
-            SendOutcome::Failed {
-                delivered_may_have_occurred,
-                error,
-            } => {
-                if delivered_may_have_occurred {
-                    Err(SubmitOutcome::Ambiguous(error))
-                } else {
-                    Err(SubmitOutcome::Failed(Box::new(map_transport_failure(
-                        &error,
-                    ))))
-                }
-            }
-        }
+        synchronous::classify_synchronous_send(outcome).and_then(classify_submit)
     }
 
     /// The one shared safe-GET retry chain used by task polling and bulk page
@@ -960,6 +947,8 @@ mod tests {
             endpoints.submit,
             "https://text.external-api.pangram.com/task"
         );
+        assert_eq!(endpoints.file, PRODUCTION_FILE_URL);
+        assert_eq!(endpoints.plagiarism, PRODUCTION_PLAGIARISM_URL);
     }
 
     #[test]

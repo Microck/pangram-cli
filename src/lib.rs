@@ -8,6 +8,11 @@ pub mod history;
 pub(crate) mod mcp;
 pub mod output;
 pub(crate) mod tui;
+#[cfg(feature = "dev-tools")]
+#[doc(hidden)]
+pub mod update;
+#[cfg(not(feature = "dev-tools"))]
+pub(crate) mod update;
 
 /// Development-only compiled adapter entry points. These are not a stable
 /// Rust interface and are absent from normal builds and release artifacts.

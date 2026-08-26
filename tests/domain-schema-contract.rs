@@ -25,7 +25,7 @@ fn bulk_json_schemas_expose_runtime_numeric_bounds() {
 }
 
 #[test]
-fn pangram_4_detection_schema_exposes_current_result_fields() {
+fn detection_schema_keeps_file_only_humanizer_evidence_optional() {
     let schema = serde_json::to_value(schema_for!(AiDetectionResult)).unwrap();
 
     assert_eq!(
@@ -42,10 +42,18 @@ fn pangram_4_detection_schema_exposes_current_result_fields() {
             "start_index",
             "end_index",
             "word_count",
-            "token_length",
-            "humanizer_score",
-            "is_humanized"
+            "token_length"
         ])
+    );
+    assert!(
+        schema["$defs"]["Segment"]["properties"]
+            .get("humanizer_score")
+            .is_some()
+    );
+    assert!(
+        schema["$defs"]["Segment"]["properties"]
+            .get("is_humanized")
+            .is_some()
     );
 }
 

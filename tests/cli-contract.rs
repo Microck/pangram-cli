@@ -199,6 +199,79 @@ fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
     }
 }
 
+#[test]
+fn private_update_forms_fail_typed_before_prompt_network_or_mutation() {
+    let update = command(&["update"]);
+    assert_eq!(update.availability, Availability::Available);
+    assert!(
+        update
+            .arguments
+            .iter()
+            .all(|argument| argument.availability == Availability::Available)
+    );
+
+    for (arguments, resolved_command) in [
+        (&["update", "--check"][..], "update_check"),
+        (&["update"][..], "update_install"),
+        (&["update", "--yes"][..], "update_install"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let sentinel = root.path().join("must-not-change");
+        fs::write(&sentinel, b"unchanged").unwrap();
+
+        let output = pangram()
+            .args(arguments)
+            .env("PANGRAM_DATA_DIR", root.path())
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(7), "{arguments:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope["command"], resolved_command, "{arguments:?}");
+        assert_eq!(
+            envelope["error"]["code"], "update_unavailable",
+            "{arguments:?}"
+        );
+        assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    let conflict = pangram()
+        .args(["update", "--check", "--yes"])
+        .output()
+        .unwrap();
+    assert_eq!(conflict.status.code(), Some(2));
+    assert!(conflict.stdout.is_empty());
+    assert!(
+        String::from_utf8(conflict.stderr)
+            .unwrap()
+            .contains("cannot be used with")
+    );
+}
+
+#[test]
+fn completions_are_available_raw_stdout_for_every_contracted_shell() {
+    let completions = command(&["completions"]);
+    assert_eq!(completions.availability, Availability::Available);
+    assert!(
+        completions
+            .arguments
+            .iter()
+            .all(|argument| argument.availability == Availability::Available)
+    );
+
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let output = pangram().args(["completions", shell]).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{shell}");
+        assert!(output.stderr.is_empty(), "{shell}");
+        assert!(!output.stdout.is_empty(), "{shell}");
+        let script = String::from_utf8(output.stdout).unwrap();
+        assert!(script.contains("pangram"), "{shell}: {script}");
+        assert!(!script.trim_start().starts_with('{'), "{shell}");
+    }
+}
+
 /// The README "Available today" table lists exactly the compiled binary's
 /// available top-level command names. This pins the advertised surface to the
 /// Rust-owned grammar so a README claim can never drift from the compiled
@@ -261,30 +334,38 @@ fn readme_available_table_matches_the_available_top_level_grammar() {
     );
 }
 
-/// N4 (Phase 4 Packet C): `--save` graduated on `detect` only. It is
-/// available in the Rust-owned grammar and accepted by the compiled parser
-/// (the loopback suite owns its end-to-end persistence semantics); the
-/// planned `plagiarism`/`analyze` rows keep it planned, and the bulk/task
-/// surfaces still reject the flag as unknown.
+/// Phase 7 keeps manual history save on every single-analysis command while
+/// bulk/task surfaces still reject the flag as unknown.
 #[test]
-fn save_is_available_on_detect_and_nowhere_else() {
-    let save = argument(command(&["detect"]), "--save");
-    assert_eq!(save.availability, Availability::Available);
-
-    // The compiled detect parser accepts the flag (no usage error). The
-    // hermetic root has no credentials, so the run reaches the canonical
-    // missing-key failure instead, proving the parse succeeded.
-    let output = pangram()
-        .args(["detect", "--save", "some text"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(4));
-    let envelope: Value = serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
-    assert_eq!(envelope["error"]["code"], "missing_api_key");
-
-    for path in [&["plagiarism"][..], &["analyze"][..]] {
+fn save_is_available_on_analysis_commands_and_nowhere_else() {
+    for path in [&["detect"][..], &["plagiarism"][..], &["analyze"][..]] {
         let save = argument(command(path), "--save");
-        assert_eq!(save.availability, Availability::Planned);
+        assert_eq!(save.availability, Availability::Available);
+    }
+
+    // Each compiled parser accepts the flag and reaches credential resolution
+    // rather than a usage error. Loopback suites own persistence semantics.
+    for arguments in [
+        &["detect", "--save", "some text"][..],
+        &[
+            "plagiarism",
+            "--save",
+            "--max-billable-units",
+            "5",
+            "some text",
+        ][..],
+        &[
+            "analyze",
+            "--save",
+            "--max-billable-units",
+            "6",
+            "some text",
+        ][..],
+    ] {
+        let output = pangram().args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(4), "{arguments:?}");
+        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope["error"]["code"], "missing_api_key");
     }
     // The bulk and task surfaces carry no `--save`: unknown-argument usage
     // errors before any source read or network access.
@@ -428,7 +509,7 @@ fn bulk_submit_requires_a_path_or_implicit_stdin() {
 /// public-dashboard-link field: Pangram's Bulk API documents no
 /// public-dashboard-link request or response field. The Rust-owned grammar
 /// must not carry a bulk `--public-link`, while the contracted analysis flags
-/// (detect now, analyze when Phase 7 arrives) stay untouched.
+/// (detect and combined analysis) stay untouched.
 #[test]
 fn bulk_submit_has_no_public_link_in_the_rust_owned_grammar() {
     let bulk = command(&["bulk", "submit"]);
@@ -443,7 +524,7 @@ fn bulk_submit_has_no_public_link_in_the_rust_owned_grammar() {
     let detect = argument(command(&["detect"]), "--public-link");
     assert_eq!(detect.availability, Availability::Available);
     let analyze = argument(command(&["analyze"]), "--public-link");
-    assert_eq!(analyze.availability, Availability::Planned);
+    assert_eq!(analyze.availability, Availability::Available);
 
     // No bulk or task command accepts the flag.
     for path in [
@@ -552,23 +633,37 @@ fn cargo_metadata_reports_the_exact_runtime_dependencies() {
 
     let runtime_dependencies: BTreeSet<_> = dependencies
         .iter()
-        .filter(|dependency| dependency["kind"].is_null())
+        .filter(|dependency| dependency["kind"].is_null() && dependency["optional"] == false)
         .map(|dependency| dependency["name"].as_str().unwrap())
         .collect();
     let expected: BTreeSet<_> = RUNTIME_DEPENDENCIES.iter().copied().collect();
     assert_eq!(runtime_dependencies, expected);
+
+    // The GIF decoder belongs only to the source-art generator. Pin both its
+    // optional dependency status and the one feature that can enable it so a
+    // normal Pangram build never gains runtime media decoding by accident.
+    let optional_dependencies: BTreeSet<_> = dependencies
+        .iter()
+        .filter(|dependency| dependency["kind"].is_null() && dependency["optional"] == true)
+        .map(|dependency| dependency["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(optional_dependencies, BTreeSet::from(["gif"]));
+    assert_eq!(
+        packages[0]["features"]["dev-tools"],
+        serde_json::json!(["dep:gif"])
+    );
 }
 
-/// HTTP client construction is allowed only inside the analysis module, the
-/// sole owner of Pangram protocol behavior.
+/// HTTP client construction is allowed only inside the deep analysis and
+/// updater modules. Adapters never own either protocol.
 #[test]
-fn http_client_paths_live_in_the_analysis_module_only() {
+fn http_client_paths_live_in_deep_protocol_modules_only() {
     let mut violations = Vec::new();
 
     for path in rust_source_paths() {
         if path
             .components()
-            .any(|component| component.as_os_str() == "analysis")
+            .any(|component| matches!(component.as_os_str().to_str(), Some("analysis" | "update")))
         {
             continue;
         }
@@ -589,7 +684,7 @@ fn http_client_paths_live_in_the_analysis_module_only() {
 
     assert!(
         violations.is_empty(),
-        "HTTP client paths outside src/analysis:\n{}",
+        "HTTP client paths outside src/analysis and src/update:\n{}",
         violations.join("\n")
     );
 }

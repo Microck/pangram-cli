@@ -1,12 +1,21 @@
 use ratatui::Terminal;
 use ratatui::backend::{Backend, TestBackend};
+use ratatui::style::{Color, Modifier};
 
 use super::render;
 use crate::tui::model::{AppState, SettingsDraft, StartupState, TerminalSize};
 
 pub(super) struct Screen {
     pub(super) cells: Vec<Vec<String>>,
+    pub(super) styles: Vec<Vec<CellStyle>>,
     pub(super) cursor: Option<(u16, u16)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CellStyle {
+    pub(super) foreground: Color,
+    pub(super) background: Color,
+    pub(super) modifier: Modifier,
 }
 
 impl Screen {
@@ -20,6 +29,10 @@ impl Screen {
             .map(|row| row.concat())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    pub(super) fn style(&self, x: usize, y: usize) -> CellStyle {
+        self.styles[y][x]
     }
 }
 
@@ -47,13 +60,23 @@ pub(super) fn draw(width: u16, height: u16, state: &AppState) -> Screen {
         .draw(|frame| render(frame, state))
         .expect("render TUI frame");
     let buffer = terminal.backend().buffer();
-    let cells = (0..height)
+    let (cells, styles): (Vec<Vec<String>>, Vec<Vec<CellStyle>>) = (0..height)
         .map(|y| {
             (0..width)
-                .map(|x| buffer[(x, y)].symbol().to_owned())
-                .collect()
+                .map(|x| {
+                    let cell = &buffer[(x, y)];
+                    (
+                        cell.symbol().to_owned(),
+                        CellStyle {
+                            foreground: cell.fg,
+                            background: cell.bg,
+                            modifier: cell.modifier,
+                        },
+                    )
+                })
+                .unzip()
         })
-        .collect();
+        .unzip();
     let position = terminal
         .get_cursor_position()
         .expect("read test cursor position");
@@ -61,5 +84,9 @@ pub(super) fn draw(width: u16, height: u16, state: &AppState) -> Screen {
     let mut hidden = backend.clone();
     hidden.hide_cursor().expect("hide cloned test cursor");
     let cursor = (*backend != hidden).then_some((position.x, position.y));
-    Screen { cells, cursor }
+    Screen {
+        cells,
+        styles,
+        cursor,
+    }
 }

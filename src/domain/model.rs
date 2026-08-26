@@ -161,9 +161,13 @@ pub struct Segment {
     pub word_count: u64,
     pub token_length: u64,
     /// Pangram's per-segment estimate that a humanizer modified the text.
-    pub humanizer_score: Fraction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    pub humanizer_score: Option<Fraction>,
     /// Pangram's thresholded humanizer decision, preserved without local derivation.
-    pub is_humanized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "deserialize_missing_only")]
+    pub is_humanized: Option<bool>,
 }
 
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]

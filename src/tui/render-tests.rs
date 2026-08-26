@@ -14,7 +14,7 @@ use crate::history::HistoryExportFormat;
 use crate::output::{CanonicalError, ErrorCode};
 use crate::tui::history::{ExportRequest, HistoryLoadResult, RedactedAnalysis, SelectionMove};
 use crate::tui::model::{
-    AnalysisFailure, AppEvent, HistoryExportField, KeyInput, SettingsDraft, StartupState,
+    AnalysisFailure, AppEvent, HistoryExportField, KeyInput, Overlay, SettingsDraft, StartupState,
     TerminalSize, reduce,
 };
 
@@ -46,8 +46,8 @@ fn update_onboarding_only_advertises_back_when_credential_setup_is_reachable() {
         },
     );
     let configured_text = draw(120, 40, &configured).text();
-    assert!(configured_text.contains("[Enter] Continue"));
-    assert!(!configured_text.contains("[Esc] Back"));
+    assert!(configured_text.contains("enter continue"));
+    assert!(!configured_text.contains("esc back"));
 
     let missing = AppState::new(
         TerminalSize {
@@ -58,7 +58,7 @@ fn update_onboarding_only_advertises_back_when_credential_setup_is_reachable() {
     );
     let update_overlay = reduce(missing, AppEvent::Key(KeyInput::Escape)).state;
     let missing_text = draw(120, 40, &update_overlay).text();
-    assert!(missing_text.contains("[Esc] Back"));
+    assert!(missing_text.contains("esc back"));
 }
 
 fn canonical_error(code: ErrorCode, message: &str) -> CanonicalError {
@@ -296,8 +296,8 @@ fn hostile_history_analysis() -> Analysis<CanonicalError> {
                 end_index: index * 10,
                 word_count: 1,
                 token_length: 1,
-                humanizer_score: Fraction::new(0.0).expect("valid fraction"),
-                is_humanized: false,
+                humanizer_score: Some(Fraction::new(0.0).expect("valid fraction")),
+                is_humanized: Some(false),
             })
             .collect(),
         dashboard_link: Some("https://example.test/result\u{1b}[0mreset".to_owned()),
@@ -348,62 +348,6 @@ fn hostile_history_analysis() -> Analysis<CanonicalError> {
         checks,
         SaveState::SavedHistory,
     )
-}
-
-#[test]
-fn wide_layout_has_stable_rail_workspace_inspector_and_command_bar() {
-    let mut state = ready_state(120, 40);
-    state.focus = Focus::Quit;
-    let screen = draw(120, 40, &state);
-
-    assert!(screen.row(1).starts_with(" Pangram"));
-    assert!(screen.row(0)[18..].starts_with(" Analyze"));
-    assert_eq!(screen.cells[0][17], "|");
-    assert_eq!(screen.cells[0][89], "|");
-    assert!(screen.row(1)[90..].starts_with(" Inspector"));
-    assert!(screen.row(2).contains("[x] AI detection - available"));
-    assert!(screen.row(3).contains("[ ] Plagiarism - unavailable"));
-    assert!(screen.row(6).contains("[x] Text - available"));
-    assert!(screen.row(7).contains("[ ] Files - unavailable"));
-    assert!(screen.row(2).contains("Public link: off"));
-    assert!(screen.row(3).contains("Manual save: off"));
-    assert!(screen.row(39).contains("> [Enter] Quit <"));
-}
-
-#[test]
-fn hundred_column_layout_uses_tabs_and_flows_settings_below_workspace() {
-    let mut state = ready_state(100, 30);
-    state.route = Route::Settings;
-    state.focus = Focus::SettingsKeymap;
-    let screen = draw(100, 30, &state);
-
-    for route in ["Analyze", "Active", "History", "[Settings]"] {
-        assert!(screen.row(0).contains(route), "missing route {route}");
-    }
-    assert!(screen.row(2).starts_with(" Settings"));
-    assert!(screen.row(4).contains("Authentication: configured"));
-    assert!(screen.row(8).contains("Motion: full"));
-    assert!(screen.row(22).starts_with(" Configuration"));
-    assert!(screen.row(29).contains("[Enter] Quit"));
-}
-
-#[test]
-fn minimum_layout_keeps_local_history_and_inspector_in_the_center_flow() {
-    let mut state = ready_state(80, 24);
-    state.route = Route::History;
-    state.focus = Focus::HistorySearch;
-    let screen = draw(80, 24, &state);
-
-    assert!(screen.row(0).contains("[History]"));
-    assert!(
-        screen
-            .row(2)
-            .starts_with(" History - Local Pangram CLI history")
-    );
-    assert!(screen.row(3).contains("> Search literal: [empty]"));
-    assert!(screen.row(16).starts_with(" Local history - Showing 0"));
-    assert!(screen.row(23).contains("[/] Search"));
-    assert!(screen.row(23).contains("[Enter] Quit"));
 }
 
 #[test]
@@ -611,6 +555,8 @@ fn succeeded_terminal_result_renders_classification_and_sanitized_dashboard_link
     assert!(text.contains("Public dashboard: https://d.test/r [31mforged second-line"));
     assert!(text.contains("second-line"));
     assert!(!text.contains('\u{1b}'));
+    assert_eq!(text.matches("New analysis").count(), 1);
+    assert!(!text.contains("Submit"));
 }
 
 #[test]
@@ -632,6 +578,7 @@ fn failed_submission_and_terminal_check_failures_have_distinct_results() {
     assert!(failed_text.contains("Analysis failed"));
     assert!(failed_text.contains(FIXED_ANALYSIS_ID));
     assert!(failed_text.contains("Error: The Pangram service is unavailable."));
+    assert_eq!(failed_text.matches("New analysis").count(), 1);
 
     let terminal_state = reduce(
         ready_state(120, 40),
@@ -727,7 +674,10 @@ fn save_failure_notice_is_visible_and_terminal_safe() {
     let text = draw(120, 40, &state).text();
 
     assert!(text.contains("Notice: History write"));
-    assert!(text.contains("failed. [31m Try again."));
+    assert!(text.contains("failed."));
+    assert!(text.contains("[31m"));
+    assert!(text.contains("Try"));
+    assert!(text.contains("again."));
     assert!(!text.contains('\u{1b}'));
 }
 
@@ -752,8 +702,10 @@ fn wide_history_shows_six_complete_summaries_and_every_save_state() {
     assert!(text.contains("manual 2026-08-09T12:00 manual record"));
     assert!(text.contains("history 2026-08-09T12:00 history record"));
     assert!(text.contains("sixth record"));
-    assert!(text.contains("Rerun is billable."));
-    assert!(text.contains("[Rerun] [Export] [Delete]"));
+    assert!(text.contains("Rerun costs credits."));
+    assert!(text.contains("Rerun"));
+    assert!(text.contains("Export"));
+    assert!(text.contains("Delete"));
 }
 
 #[test]
@@ -775,16 +727,15 @@ fn narrow_history_keeps_six_one_line_summaries_and_context_actions_visible() {
     let screen = draw(80, 24, &state);
     let text = screen.text();
 
-    assert!(
-        screen
-            .row(2)
-            .starts_with(" History - Local Pangram CLI history")
-    );
+    assert!(screen.row(2).starts_with("    Search  empty"));
+    assert_eq!(text.matches("History").count(), 1);
     assert!(text.contains("narrow record 0"));
     assert!(text.contains("narrow record 5"));
     assert!(text.contains("Local history - Showing 6"));
-    assert!(text.contains("Rerun is billable."));
-    assert!(text.contains("[Rerun] >Export< [Delete]"));
+    assert!(text.contains("Rerun costs credits."));
+    assert!(text.contains("Rerun"));
+    assert!(text.contains("> Export"));
+    assert!(text.contains("Delete"));
 }
 
 #[test]
@@ -893,12 +844,12 @@ fn hostile_history_summary_names_are_sanitized_and_clipped_to_one_row() {
     let screen = draw(80, 24, &state);
     let text = screen.text();
 
-    assert!(text.contains("safe [31mowned forged-r"));
+    assert!(text.contains("safe [31mowned forg"));
     assert!(!text.contains('\u{1b}'));
     assert!(!text.contains("\nforged-row"));
     assert_eq!(
         (1..16)
-            .filter(|row| screen.row(*row).contains("forged-r"))
+            .filter(|row| screen.row(*row).contains("forg"))
             .count(),
         1
     );
@@ -916,16 +867,28 @@ fn history_summary_names_clip_by_terminal_cells_without_splitting_graphemes() {
 
     let screen = draw(80, 24, &state);
 
+    let han_row = screen
+        .cells
+        .iter()
+        .position(|row| row.iter().any(|symbol| symbol.as_str() == "\u{6f22}"))
+        .expect("the clipped Han summary remains visible");
     assert_eq!(
-        screen.cells[7]
+        screen.cells[han_row]
             .iter()
             .filter(|symbol| symbol.as_str() == "\u{6f22}")
             .count(),
-        12
+        10
     );
-    assert!(screen.row(7).ends_with("..."));
+    assert!(screen.row(han_row).trim_end().ends_with("..."));
+
+    let family_rows = screen
+        .cells
+        .iter()
+        .filter(|row| row.iter().any(|symbol| symbol.as_str() == family))
+        .collect::<Vec<_>>();
+    assert_eq!(family_rows.len(), 1);
     assert_eq!(
-        screen.cells[8]
+        family_rows[0]
             .iter()
             .filter(|symbol| symbol.as_str() == family)
             .count(),
@@ -948,18 +911,18 @@ fn destructive_and_export_overlays_start_on_cancel_and_name_safe_escape_paths() 
     });
     let delete = draw(120, 40, &state).text();
     assert!(delete.contains("Delete local history record"));
-    assert!(delete.contains("> [Enter] Cancel <   [Right] Delete"));
-    assert!(delete.contains("[Esc] Cancel"));
+    assert!(delete.contains("> Cancel   right Delete"));
+    assert!(delete.contains("esc cancel"));
 
     state.overlay = Some(Overlay::HistoryExport {
         field: HistoryExportField::Action,
     });
     let export = draw(120, 40, &state).text();
     assert!(export.contains("Export local history"));
-    assert!(export.contains("Format: JSONL"));
-    assert!(export.contains("Content: redacted"));
-    assert!(export.contains("> Action: cancel <"));
-    assert!(export.contains("[Enter] Choose   [Esc] Cancel"));
+    assert!(export.contains("Format  JSONL"));
+    assert!(export.contains("Content  redacted"));
+    assert!(export.contains("> Action  cancel <"));
+    assert!(export.contains("enter choose   esc cancel"));
 
     state.overlay = Some(Overlay::ConfirmFullHistoryExport {
         request: ExportRequest {
@@ -971,6 +934,6 @@ fn destructive_and_export_overlays_start_on_cancel_and_name_safe_escape_paths() 
     let full = draw(120, 40, &state).text();
     assert!(full.contains("Export full retained content"));
     assert!(full.contains("Format: Markdown"));
-    assert!(full.contains("> [Enter] Cancel <   [Right] Export full content"));
-    assert!(full.contains("[Esc] Cancel"));
+    assert!(full.contains("> Cancel   right Export full content"));
+    assert!(full.contains("esc cancel"));
 }

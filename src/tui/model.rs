@@ -7,7 +7,7 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
-use crate::analysis::AnalysisProgress;
+use crate::analysis::{AnalysisProgress, TextAnalysisMode};
 use crate::domain::{Analysis, AnalysisId, text_billable_units};
 use crate::output::CanonicalError;
 
@@ -108,6 +108,18 @@ pub enum ResponsiveLayout {
     ResizeRequired,
     Narrow,
     Wide,
+}
+
+/// Color capability resolved once at the terminal boundary.
+///
+/// Keeping this in state makes rendering deterministic and lets `NO_COLOR`
+/// use the same projection as truecolor and ANSI terminals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorMode {
+    None,
+    Ansi,
+    #[default]
+    TrueColor,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -225,6 +237,7 @@ pub struct AnalysisView {
 pub struct StartupState {
     pub settings: SettingsDraft,
     pub keymap: Keymap,
+    pub color_mode: ColorMode,
 }
 
 #[derive(Clone)]
@@ -232,6 +245,8 @@ pub struct AppState {
     pub route: Route,
     pub focus: Focus,
     pub composer: TextField,
+    pub text_mode: TextAnalysisMode,
+    pub color_mode: ColorMode,
     pub public_link: bool,
     pub manual_save: bool,
     pub terminal: TerminalSize,
@@ -266,6 +281,8 @@ impl AppState {
             route: Route::Analyze,
             focus: Focus::Composer,
             composer: TextField::default(),
+            text_mode: TextAnalysisMode::Detection,
+            color_mode: startup.color_mode,
             public_link: false,
             manual_save: false,
             terminal,
@@ -292,12 +309,17 @@ impl AppState {
         }
     }
 
-    pub fn word_count(&self) -> u64 {
-        u64::try_from(self.composer.value().split_whitespace().count()).unwrap_or(u64::MAX)
+    pub fn billing_estimate(&self) -> (u64, u64) {
+        let word_count =
+            u64::try_from(self.composer.value().split_whitespace().count()).unwrap_or(u64::MAX);
+        let units = self
+            .text_mode
+            .billable_units(text_billable_units(word_count));
+        (word_count, units)
     }
 
-    pub fn billable_units(&self) -> u64 {
-        text_billable_units(self.word_count())
+    pub const fn public_link_available(&self) -> bool {
+        !matches!(self.text_mode, TextAnalysisMode::Plagiarism)
     }
 }
 
@@ -323,8 +345,32 @@ pub enum KeyInput {
     CtrlD,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerDirection {
+    Previous,
+    Next,
+}
+
+/// A terminal coordinate resolved into an application action at the adapter
+/// boundary. Raw mouse positions never enter the reducer or persistent state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerIntent {
+    Route(Route),
+    Focus(Focus),
+    Activate(Focus),
+    ActiveRow(usize),
+    HistoryRow(usize),
+    HistoryExportField(HistoryExportField),
+    Scroll {
+        focus: Focus,
+        direction: PointerDirection,
+    },
+    Key(KeyInput),
+}
+
 pub enum AppEvent {
     Key(KeyInput),
+    Pointer(PointerIntent),
     Paste(String),
     Resize(TerminalSize),
     AnalysisAccepted(Analysis<CanonicalError>),
@@ -368,6 +414,7 @@ pub enum StoredSetting {
 pub enum Effect {
     SubmitText {
         text: String,
+        mode: TextAnalysisMode,
         public_link: bool,
         save: bool,
         automatic_save: bool,
@@ -418,3 +465,7 @@ mod paste_tests;
 #[cfg(test)]
 #[path = "model-tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "model-rerun-tests.rs"]
+mod rerun_tests;

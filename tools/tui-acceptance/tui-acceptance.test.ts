@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url"
 import {
   TerminalControl,
   type ArtifactManifest,
-  type Frame,
   type Session,
 } from "@kitlangton/terminal-control"
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
@@ -18,14 +17,11 @@ import {
   type LoopbackFixture,
   type LoopbackMode,
 } from "./loopback-fixture"
+import { normalizeScreenText, projectSettledScreen } from "./screen-projection"
 
 const START_TIMEOUT_MS = 5_000
 const EXIT_TIMEOUT_MS = 5_000
 const SYNTHETIC_API_KEY = "synthetic-api-key-not-a-secret"
-const ANALYSIS_ID_PATTERN = /anl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gu
-const STABLE_ANALYSIS_ID = "anl_00000000-0000-0000-0000-000000000000"
-const RFC3339_SUBSECOND_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,9}Z/gu
-const STABLE_TIMESTAMP = "[timestamp]"
 const SUPPORTED_PLATFORM = process.platform === "linux" || process.platform === "darwin"
 const ACCEPTANCE_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const ARTIFACT_DIRECTORY = join(ACCEPTANCE_DIRECTORY, ".artifacts")
@@ -51,14 +47,6 @@ type SanitizedArtifactManifest = Pick<
   ArtifactManifest,
   "screenText" | "screenFrame" | "screenSvg" | "metadata" | "logsText"
 >
-
-type ProjectedRun = {
-  x: number
-  y: number
-  width: number
-  text: string
-  style: string
-}
 
 let harness: AcceptanceHarness | undefined
 
@@ -151,7 +139,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
           { timeoutMs: START_TIMEOUT_MS },
         )
         await session.keyboard.press("ArrowRight")
-        await session.screen.waitForText("No unfinished analyses.", {
+        await session.screen.waitForText("Nothing running", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.press("ArrowRight")
@@ -159,7 +147,10 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.press("ArrowRight")
-        await session.screen.waitForText("Keymap: Regular", { timeoutMs: START_TIMEOUT_MS })
+        await session.screen.waitUntil(
+          ({ text }) => hasSettingValue(text, "Keymap", "Regular"),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
 
         await session.resize({ cols: 79, rows: 23 })
         await session.screen.waitUntil(
@@ -171,21 +162,30 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
 
         await session.resize({ cols: 80, rows: 24 })
         await session.screen.waitUntil(
-          ({ text }) => text.includes("Keymap: Regular") && !text.includes("Terminal too small"),
+          ({ text }) =>
+            hasSettingValue(text, "Keymap", "Regular") &&
+            commandBarReachedRow(text, 23) &&
+            !text.includes("Terminal too small"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "settings-minimum")
 
         await session.resize({ cols: 100, rows: 30 })
         await session.screen.waitUntil(
-          ({ text }) => text.includes("Keymap: Regular") && !text.includes("Terminal too small"),
+          ({ text }) =>
+            hasSettingValue(text, "Keymap", "Regular") &&
+            commandBarReachedRow(text, 28) &&
+            !text.includes("Terminal too small"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "settings-narrow")
 
         await session.resize({ cols: 120, rows: 40 })
         await session.screen.waitUntil(
-          ({ text }) => text.includes("Keymap: Regular") && !text.includes("Terminal too small"),
+          ({ text }) =>
+            hasSettingValue(text, "Keymap", "Regular") &&
+            commandBarReachedRow(text, 38) &&
+            !text.includes("Terminal too small"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "settings-wide-restored")
@@ -205,7 +205,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         const regularInput = "regular hjkl ? /"
         await session.keyboard.type(regularInput)
         await session.screen.waitUntil(
-          ({ text }) => text.includes(regularInput) && text.includes("Words: 4"),
+          ({ text }) => text.includes(regularInput) && text.includes("Words 4"),
           { timeoutMs: START_TIMEOUT_MS },
         )
 
@@ -213,18 +213,27 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         // uses. Vim route keys must only take effect after focus leaves a text
         // field.
         await session.keyboard.press("Escape")
-        await session.screen.waitForText("> [Analyze]", {
+        await session.screen.waitForText("> Analyze", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await pressMany(session, "ArrowRight", 3)
-        await session.screen.waitForText("Keymap: Regular", { timeoutMs: START_TIMEOUT_MS })
+        await session.screen.waitUntil(
+          ({ text }) => hasSettingValue(text, "Keymap", "Regular"),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
         await pressMany(session, "ArrowDown", 4)
-        await session.screen.waitForText("> Keymap: Regular", { timeoutMs: START_TIMEOUT_MS })
+        await session.screen.waitUntil(
+          ({ text }) => hasSettingValue(text, "Keymap", "Regular", true),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
         await session.keyboard.press("Enter")
-        await session.screen.waitForText("> Keymap: Vim", { timeoutMs: START_TIMEOUT_MS })
+        await session.screen.waitUntil(
+          ({ text }) => hasSettingValue(text, "Keymap", "Vim", true),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
 
         await session.keyboard.press("Escape")
-        await session.screen.waitForText("> [Settings]", {
+        await session.screen.waitForText("> Settings", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.type("hhh")
@@ -238,7 +247,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.keyboard.type(vimInput)
         await session.screen.waitUntil(
           ({ text }) =>
-            text.includes(`${regularInput}${vimInput}`) && text.includes("Words: 12"),
+            text.includes(`${regularInput}${vimInput}`) && text.includes("Words 12"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "vim-printable-composer")
@@ -248,7 +257,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.keyboard.press("Escape")
         // Wait for Escape to leave the text field before sending `?`. If the
         // bytes arrive together, a terminal parser may treat them as Alt+?.
-        await session.screen.waitForText("> [Analyze]", {
+        await session.screen.waitForText("> Analyze", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.type("?")
@@ -263,7 +272,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         )
 
         await session.keyboard.type("l")
-        await session.screen.waitForText("No unfinished analyses.", {
+        await session.screen.waitForText("Nothing running", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.type("h")
@@ -322,13 +331,15 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         async (session, fixture) => {
           await session.screen.waitForText("Text composer", { timeoutMs: START_TIMEOUT_MS })
           await session.keyboard.press("Escape")
-          await session.screen.waitForText("> [Analyze]", {
+          await session.screen.waitForText("> Analyze", {
             timeoutMs: START_TIMEOUT_MS,
           })
           await pressMany(session, "ArrowRight", 2)
-          await session.screen.waitForText("History unavailable:", {
-            timeoutMs: START_TIMEOUT_MS,
-          })
+          await session.screen.waitUntil(
+            ({ text }) =>
+              text.includes("Notice: History") && text.includes("history database could"),
+            { timeoutMs: START_TIMEOUT_MS },
+          )
           await expectSettledScreen(session, "history-corrupt-fail-closed")
           expect(await readFile(historyDatabasePath(fixture), "utf8")).toBe(corruptBytes)
           await quitNormally(session)
@@ -359,20 +370,22 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
       await runIsolatedScenario("history-consent", async (session) => {
         await finishCredentialFreeOnboarding(session)
         await session.keyboard.press("Escape")
-        await session.screen.waitForText("> [Analyze]", {
+        await session.screen.waitForText("> Analyze", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await pressMany(session, "ArrowRight", 3)
         await pressMany(session, "ArrowDown", 2)
-        await session.screen.waitForText("> History: disabled", {
-          timeoutMs: START_TIMEOUT_MS,
-        })
+        await session.screen.waitUntil(
+          ({ text }) => hasSettingValue(text, "History", "disabled", true),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
 
         await session.keyboard.press("Enter")
         await session.screen.waitUntil(
           ({ text }) =>
             text.includes("Enable local history") &&
-            text.includes("History stores full input and results in plaintext."),
+            text.includes("History stores full input and results in") &&
+            text.includes("plaintext."),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "history-consent-warning")
@@ -380,23 +393,26 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.keyboard.press("Escape")
         await session.screen.waitUntil(
           ({ text }) =>
-            text.includes("> History: disabled") && !text.includes("Enable local history"),
+            hasSettingValue(text, "History", "disabled", true) &&
+            !text.includes("Enable local history"),
           { timeoutMs: START_TIMEOUT_MS },
         )
 
         await session.keyboard.press("Enter")
         await session.screen.waitForText("Enable local history", { timeoutMs: START_TIMEOUT_MS })
         await session.keyboard.type("y")
-        await session.screen.waitForText("> History: enabled", {
-          timeoutMs: START_TIMEOUT_MS,
-        })
+        await session.screen.waitUntil(
+          ({ text }) => hasSettingValue(text, "History", "enabled", true),
+          { timeoutMs: START_TIMEOUT_MS },
+        )
 
         // Disabling is not destructive and must not show the retention
         // warning again.
         await session.keyboard.press("Enter")
         await session.screen.waitUntil(
           ({ text }) =>
-            text.includes("> History: disabled") && !text.includes("Enable local history"),
+            hasSettingValue(text, "History", "disabled", true) &&
+            !text.includes("Enable local history"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await quitNormally(session)
@@ -411,28 +427,28 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
       await runIsolatedScenario("history-export-confirmations", async (session) => {
         await finishCredentialFreeOnboarding(session)
         await session.keyboard.press("Escape")
-        await session.screen.waitForText("> [Analyze]", {
+        await session.screen.waitForText("> Analyze", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await pressMany(session, "ArrowRight", 2)
-        await session.screen.waitForText("No saved analyses match these criteria.", {
+        await session.screen.waitForText("No saved analyses", {
           timeoutMs: START_TIMEOUT_MS,
         })
 
         await session.keyboard.press("ArrowDown")
         await session.keyboard.type("needle hjkl")
-        await session.screen.waitForText("> Search literal: needle hjkl", {
+        await session.screen.waitForText("> Search  needle hjkl", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.press("Enter")
         await session.keyboard.press("ArrowDown")
         await session.keyboard.press("Enter")
-        await session.screen.waitForText("> Status filter: queued", {
+        await session.screen.waitForText("> Status  queued", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.press("ArrowDown")
         await session.keyboard.press("Enter")
-        await session.screen.waitForText("> Check filter: AI detection", {
+        await session.screen.waitForText("> Check  AI detection", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await expectSettledScreen(session, "history-filtered-empty")
@@ -440,14 +456,14 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         // Down moves selection while the list owns focus. Tab traverses the
         // focus order and therefore reaches the contextual Export action.
         await pressMany(session, "Tab", 3)
-        await session.screen.waitForText(">Export<", { timeoutMs: START_TIMEOUT_MS })
+        await session.screen.waitForText("> Export", { timeoutMs: START_TIMEOUT_MS })
         await session.keyboard.press("Enter")
         await session.screen.waitUntil(
           ({ text }) =>
             text.includes("Export local history") &&
-            text.includes("Format: JSONL") &&
-            text.includes("Content: redacted") &&
-            text.includes("> Action: cancel <"),
+            text.includes("Format  JSONL") &&
+            text.includes("Content  redacted") &&
+            text.includes("> Action  cancel <"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "history-export-default-cancel")
@@ -455,7 +471,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         // Enter on the default action cancels and writes no stdout document.
         await session.keyboard.press("Enter")
         await session.screen.waitUntil(
-          ({ text }) => text.includes(">Export<") && !text.includes("Export local history"),
+          ({ text }) => text.includes("> Export") && !text.includes("Export local history"),
           { timeoutMs: START_TIMEOUT_MS },
         )
 
@@ -464,7 +480,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.keyboard.press("Enter")
         await session.keyboard.press("ArrowUp")
         await session.keyboard.press("ArrowRight")
-        await session.screen.waitForText("> Content: full retained content <", {
+        await session.screen.waitForText("> Content  full retained content <", {
           timeoutMs: START_TIMEOUT_MS,
         })
         await session.keyboard.press("ArrowDown")
@@ -473,14 +489,14 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         await session.screen.waitUntil(
           ({ text }) =>
             text.includes("Export full retained content") &&
-            text.includes("> [Enter] Cancel <") &&
-            text.includes("[Right] Export full content"),
+            text.includes("> Cancel") && text.includes("right Export full content"),
           { timeoutMs: START_TIMEOUT_MS },
         )
         await expectSettledScreen(session, "history-full-export-confirmation")
         await session.keyboard.press("Enter")
         await session.screen.waitUntil(
-          ({ text }) => text.includes(">Export<") && !text.includes("Export full retained content"),
+          ({ text }) =>
+            text.includes("> Export") && !text.includes("Export full retained content"),
           { timeoutMs: START_TIMEOUT_MS },
         )
 
@@ -519,15 +535,15 @@ async function runPollingExitJourney(exit: "ctrl-c" | "quit"): Promise<void> {
       return
     }
     await session.keyboard.press("Escape")
-    await session.screen.waitForText("> [Analyze]", {
+    await session.screen.waitForText("> Analyze", {
       timeoutMs: START_TIMEOUT_MS,
     })
     await session.keyboard.press("ArrowRight")
     await session.screen.waitUntil(
       ({ text: visible }) =>
-        visible.includes("1 unfinished analysis(es)") &&
+        visible.includes("1 unfinished") &&
         visible.includes("running - this session") &&
-        visible.includes("Active: 1"),
+        visible.includes("1 active"),
       { timeoutMs: START_TIMEOUT_MS },
     )
     await expectSettledScreen(session, "active-analysis-polling")
@@ -618,6 +634,18 @@ test("failure artifacts redact fixture and binary paths", async () => {
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test("screen text normalization ignores subsecond timestamp precision", () => {
+  const platformTimestamps = [
+    "Completed at: 2026-08-26T17:31:28.435539Z       Estimate",
+    "Completed at: 2026-08-26T17:31:28.435539000Z    Estimate",
+  ]
+
+  expect(platformTimestamps.map(normalizeScreenText)).toEqual([
+    "Completed at: [timestamp] Estimate",
+    "Completed at: [timestamp] Estimate",
+  ])
 })
 
 async function runIsolatedScenario(
@@ -737,7 +765,7 @@ async function finishUpdateOnboarding(session: Session): Promise<void> {
   await session.screen.waitUntil(
     ({ text }) =>
       text.includes("Type or paste text here") &&
-      text.includes("[Analyze]") &&
+      text.includes("* Analyze") &&
       !text.includes("Update checks"),
     { timeoutMs: START_TIMEOUT_MS },
   )
@@ -746,7 +774,7 @@ async function finishUpdateOnboarding(session: Session): Promise<void> {
 async function submitAnalysis(session: Session, text: string): Promise<void> {
   await session.keyboard.type(text)
   await pressMany(session, "Tab", 3)
-  await session.screen.waitForText("> [Enter] Submit <", { timeoutMs: START_TIMEOUT_MS })
+  await session.screen.waitForText("> Submit", { timeoutMs: START_TIMEOUT_MS })
   await session.keyboard.press("Enter")
 }
 
@@ -764,7 +792,7 @@ async function quitNormally(session: Session, sensitiveValues: readonly string[]
   const capture = await session.screen.capture({ settleMs: 50, deadlineMs: START_TIMEOUT_MS })
   expect(capture.reason).toBe("idle")
   await session.keyboard.press("End")
-  await session.screen.waitForText("> [Enter] Quit <", { timeoutMs: START_TIMEOUT_MS })
+  await session.screen.waitForText("enter  quit", { timeoutMs: START_TIMEOUT_MS })
   await session.keyboard.press("Enter")
   await expectCleanExit(session, 0, sensitiveValues)
 }
@@ -772,100 +800,23 @@ async function quitNormally(session: Session, sensitiveValues: readonly string[]
 async function expectSettledScreen(session: Session, snapshotName: string): Promise<void> {
   const capture = await session.screen.capture({ settleMs: 30, deadlineMs: START_TIMEOUT_MS })
   expect(capture.reason).toBe("idle")
-  expect(projectSettledScreen(capture.text, capture.frame)).toMatchSnapshot(
-    `${snapshotName} screen`,
-  )
+  expect(projectSettledScreen(capture.frame)).toMatchSnapshot(`${snapshotName} screen`)
 }
 
-function projectSettledScreen(screenText: string, frame: Frame): string {
-  const { cells, ...geometry } = frame
-  const visibleCells = cells.filter((cell) => isVisibleCell(cell, frame))
-  const runs: ProjectedRun[] = []
-
-  // Adjacent cells with the same style carry one visual fact. Folding them
-  // into exact-position runs keeps cell-level coverage while leaving a
-  // snapshot a reviewer can inspect instead of tens of thousands of lines.
-  for (const cell of visibleCells) {
-    const projected = projectCell(cell)
-    const previous = runs.at(-1)
-    if (
-      previous &&
-      previous.y === projected.y &&
-      previous.x + previous.width === projected.x &&
-      previous.style === projected.style
-    ) {
-      previous.text += projected.text
-      previous.width += projected.width
-    } else {
-      runs.push(projected)
-    }
-  }
-
-  for (const run of runs) {
-    const normalizedText = normalizeDynamicText(run.text)
-    if (normalizedText !== run.text) {
-      run.text = normalizedText
-      run.width = normalizedText.length
-    }
-  }
-
-  // Analysis IDs and timestamps are generated at runtime. Normalizing their
-  // visible runs keeps fixed positions and styles reviewable without making
-  // snapshots depend on one process clock.
-  const textRows = screenText.split("\n").map(normalizeScreenText)
-  const rows = [JSON.stringify(geometry)]
-  for (let y = 0; y < frame.rows; y += 1) {
-    const rowRuns = runs
-      .filter((run) => run.y === y)
-      .map(({ x, width, text, style }) => [x, width, text, style])
-    rows.push(
-      `${y.toString().padStart(2, "0")} text=${JSON.stringify(textRows[y] ?? "")} cells=${JSON.stringify(rowRuns)}`,
-    )
-  }
-  return rows.join("\n")
+function commandBarReachedRow(screenText: string, row: number): boolean {
+  return screenText.split("\n")[row]?.includes("tab  next") ?? false
 }
 
-function isVisibleCell(cell: Frame["cells"][number], frame: Frame): boolean {
-  return (
-    cell.text.trim() !== "" ||
-    cell.background.r !== frame.background.r ||
-    cell.background.g !== frame.background.g ||
-    cell.background.b !== frame.background.b ||
-    cell.attributes.bold ||
-    cell.attributes.italic ||
-    cell.attributes.faint ||
-    cell.attributes.invisible ||
-    cell.attributes.strikethrough ||
-    cell.attributes.overline ||
-    cell.attributes.underline !== null
-  )
-}
-
-function projectCell(cell: Frame["cells"][number]): ProjectedRun {
-  const attributes = Object.entries(cell.attributes)
-    .filter(([, value]) => value !== false && value !== null)
-    .map(([name, value]) => (value === true ? name : `${name}:${JSON.stringify(value)}`))
-    .join(",")
-  const style = [rgb(cell.foreground), rgb(cell.background), attributes]
-    .filter((value) => value !== "")
-    .join(" ")
-  return { x: cell.x, y: cell.y, width: cell.width, text: cell.text, style }
-}
-
-function normalizeDynamicText(value: string): string {
-  return value
-    .replaceAll(ANALYSIS_ID_PATTERN, STABLE_ANALYSIS_ID)
-    .replaceAll(RFC3339_SUBSECOND_PATTERN, STABLE_TIMESTAMP)
-}
-
-function normalizeScreenText(value: string): string {
-  return normalizeDynamicText(value).replace(/(\[timestamp\]) +\|/gu, "$1 |")
-}
-
-function rgb(color: { r: number; g: number; b: number }): string {
-  return `#${[color.r, color.g, color.b]
-    .map((channel) => channel.toString(16).padStart(2, "0"))
-    .join("")}`
+function hasSettingValue(
+  screenText: string,
+  label: string,
+  value: string,
+  focused = false,
+): boolean {
+  const prefix = focused ? `> ${label}` : label
+  return screenText
+    .split("\n")
+    .some((line) => line.includes(prefix) && line.trimEnd().endsWith(value))
 }
 
 async function expectCleanExit(

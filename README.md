@@ -8,16 +8,20 @@ and AI agents that need stable JSON and MCP contracts.
 > The runtime is mid-build: the compiled binary currently ships working
 > `auth` (persistent API-key setup and status), `config` (list/get/set/path),
 > `doctor` (local diagnostics), `detect` (Pangram 4 text AI detection,
-> including bare literal text, `-`, and piped stdin), `bulk` (submit, status,
+> including text, PDF, DOCX, and RTF input), `plagiarism` (text plagiarism),
+> `analyze` (combined text detection and plagiarism), `bulk` (submit, status,
 > wait, and results for asynchronous bulk detection), `task`
-> (status and wait for one Pangram text task), and `history` (list, show,
-> literal-text search, delete, clear, export, and rerun) are compiled and available.
-> Plagiarism and combined analysis remain planned and are not available yet.
-> The TUI and typed stdio MCP server are compiled and available. Official MCP
-> conformance and live Pangram conformance are pending, and public release support
-> (including live file and plagiarism
-> conformance) is still gated; compiled contract and loopback protocol tests
-> are the current correctness gates.
+> (status and wait for one Pangram text task), `history` (list, show,
+> literal-text search, delete, clear, export, and rerun), and `update` (typed
+> private-build status with no release-network access) are compiled and available.
+> Shell completion generation is also available for Bash, Zsh, Fish,
+> PowerShell, and Elvish.
+> The TUI and typed stdio MCP server are compiled and available. The official
+> MCP suite cannot yet drive the selected stdio surface, so compiled product
+> protocol tests are the correctness gate. Minimum live file and plagiarism
+> conformance is complete. Pangram permission, intro art, and production
+> signing are recorded. Public release validation still requires native
+> install proof and the authorized package and documentation publication.
 
 The project uses Pangram's documented API-key-authenticated REST endpoints. It
 does not use browser sessions, private dashboard routes, or scraping.
@@ -33,8 +37,8 @@ agent workflows need a different interface:
 - typed MCP tools with billing, filesystem, and mutation safeguards
 - signed native releases with package-manager-aware updates
 
-AI detection is the primary workflow. Plagiarism remains planned as an
-independent check and as an explicit combined analysis.
+AI detection is the primary workflow. Plagiarism is available as an
+independent text check and as an explicit combined text analysis.
 
 ## Quickstart
 
@@ -104,6 +108,8 @@ Available today:
 | --- | --- |
 | `pangram` | Bare literal text or piped stdin runs AI detection; an all-TTY launch opens the TUI |
 | `pangram detect` | Run Pangram 4 AI text detection |
+| `pangram plagiarism` | Run plagiarism checking on text |
+| `pangram analyze` | Run AI detection and plagiarism together on text |
 | `pangram auth` | Configure and inspect API-key authentication |
 | `pangram config` | Inspect and update non-secret configuration |
 | `pangram doctor` | Run local, non-billable diagnostics |
@@ -113,15 +119,8 @@ Available today:
 | `pangram mcp` | Run or install the typed stdio MCP server |
 | `pangram agent` | Print the embedded agent usage guide |
 | `pangram skills` | List and load version-matched embedded skills |
-
-Planned:
-
-| Command | Purpose |
-| --- | --- |
-| `pangram plagiarism` | Run plagiarism checking |
-| `pangram analyze` | Run AI detection and plagiarism together |
-| `pangram completions` | Generate shell completions |
-| `pangram update` | Check for or install an eligible direct update |
+| `pangram completions` | Generate a completion script for Bash, Zsh, Fish, PowerShell, or Elvish |
+| `pangram update` | Report that signed updates are unavailable in `0.x` builds without network or installation work |
 
 See [the CLI contract](docs/contracts.md) for the approved grammar, formats,
 errors, and exit codes.
@@ -136,7 +135,7 @@ text or parse terminal decoration:
 - errors include stable codes, categories, retryability, and recovery actions.
 - the stdio MCP server targets protocol version `2026-07-28`.
 - MCP tools map directly to analysis operations rather than spawning the CLI.
-- billable MCP tools are marked non-idempotent and require explicit bulk limits.
+- billable MCP tools are marked non-idempotent and require explicit ceilings.
 - filesystem-path inputs use only directories approved through repeated
   `--allow-file-root PATH` startup options.
 - history, public links, configuration changes, and destructive operations are
@@ -163,7 +162,7 @@ The runtime uses Rust. A single deep analysis module owns Pangram HTTP
 behavior, polling, normalization, retries, and task state. The CLI, TUI, and
 MCP server are adapters over that module.
 
-Fumadocs will live in a separate TypeScript workspace and consume generated
+Fumadocs lives in a separate TypeScript workspace and consumes generated
 schemas and reference material rather than duplicating runtime contracts.
 
 See [the architecture specification](docs/architecture-spec.md).
@@ -196,8 +195,9 @@ Use of Pangram services remains subject to Pangram's terms, billing, retention,
 and acceptable-use policies. Detection results are probabilistic evidence and
 should be one signal among many, not a verdict.
 
-Public distribution is blocked until Pangram confirms in writing that a
-third-party CLI and MCP server may use its documented APIs.
+The project owner has recorded Pangram's authorization for this third-party
+CLI and MCP server. Public distribution still waits for the native release,
+package, and documentation gates described in the release plan.
 
 ## License
 

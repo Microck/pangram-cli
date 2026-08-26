@@ -1,0 +1,8 @@
+{
+  "title": "How-to guides",
+  "pages": [
+    "install", "authenticate", "detect-text", "check-plagiarism", "combined-analysis",
+    "analyze-files", "bulk", "local-history", "export-rerun", "output-formats",
+    "mcp-clients", "mcp-gates", "shell-completions", "updates", "uninstall-mcp"
+  ]
+}

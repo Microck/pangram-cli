@@ -143,22 +143,14 @@ pub(super) fn visible_analysis_result_lines(
 
 fn wrapped_row_count(lines: &[Line<'_>], paragraph_width: usize) -> usize {
     let width = paragraph_width.saturating_sub(2).max(1);
-    lines
-        .iter()
-        .map(|line| {
-            let mut rows = 1;
-            let mut used = 0_usize;
-            for grapheme in line.styled_graphemes(Style::default()) {
-                let grapheme_width = Span::raw(grapheme.symbol).width();
-                if used > 0 && used.saturating_add(grapheme_width) > width {
-                    rows += 1;
-                    used = 0;
-                }
-                used = used.saturating_add(grapheme_width);
-            }
-            rows
-        })
-        .sum()
+    let mut count = 0;
+    for line in lines {
+        visit_wrapped_rows(line, width, |_| {
+            count += 1;
+            true
+        });
+    }
+    count
 }
 
 fn visible_wrapped_rows(
@@ -171,42 +163,61 @@ fn visible_wrapped_rows(
     let mut row_index = 0;
 
     for line in lines {
-        let mut row = String::new();
-        let mut used = 0_usize;
-        for grapheme in line.styled_graphemes(Style::default()) {
-            let grapheme_width = Span::raw(grapheme.symbol).width();
-            if used > 0 && used.saturating_add(grapheme_width) > width {
-                if range.contains(&row_index) {
-                    visible.push((row_index, Line::raw(std::mem::take(&mut row))));
-                }
-                row_index += 1;
-                used = 0;
-            }
+        let completed = visit_wrapped_rows(line, width, |row| {
             if range.contains(&row_index) {
-                row.push_str(grapheme.symbol);
+                visible.push((row_index, Line::raw(row.concat())));
             }
-            used = used.saturating_add(grapheme_width);
-        }
-        if range.contains(&row_index) {
-            visible.push((row_index, Line::raw(row)));
-        }
-        row_index += 1;
-        if row_index >= range.end {
-            break;
+            row_index += 1;
+            row_index < range.end
+        });
+        if !completed {
+            return visible;
         }
     }
     visible
 }
 
-fn result_width(state: &AppState) -> usize {
-    let columns = usize::from(state.terminal.columns);
-    match (state.layout(), state.route) {
-        (super::model::ResponsiveLayout::Wide, Route::Analyze) => columns.saturating_sub(51),
-        (super::model::ResponsiveLayout::Wide, Route::History) => columns.saturating_sub(50),
-        (_, Route::Analyze) => columns.saturating_sub(2),
-        (_, Route::History) => columns.saturating_sub(1),
-        (_, Route::Active | Route::Settings) => columns,
+fn visit_wrapped_rows<'a>(
+    line: &'a Line<'_>,
+    width: usize,
+    mut visit: impl FnMut(&[&'a str]) -> bool,
+) -> bool {
+    let mut row = Vec::new();
+    let mut used = 0_usize;
+    let mut last_whitespace = None;
+
+    for grapheme in line.styled_graphemes(Style::default()) {
+        let symbol = grapheme.symbol;
+        let symbol_width = Span::raw(symbol).width();
+        while !row.is_empty() && used.saturating_add(symbol_width) > width {
+            let split = last_whitespace.map_or(row.len(), |index| index + 1);
+            if !visit(&row[..split]) {
+                return false;
+            }
+            row.drain(..split);
+            used = row.iter().map(|symbol| Span::raw(*symbol).width()).sum();
+            last_whitespace = row
+                .iter()
+                .rposition(|symbol| symbol.chars().all(char::is_whitespace));
+        }
+        row.push(symbol);
+        used = used.saturating_add(symbol_width);
+        if symbol.chars().all(char::is_whitespace) {
+            last_whitespace = Some(row.len() - 1);
+        }
     }
+
+    if row.is_empty() {
+        visit(&[])
+    } else {
+        visit(&row)
+    }
+}
+
+fn result_width(state: &AppState) -> usize {
+    let frame = ratatui::layout::Rect::new(0, 0, state.terminal.columns, state.terminal.rows);
+    let workspace = super::render::screen_areas(frame, 0, state.route).workspace;
+    usize::from(super::render::workspace_content_area(workspace).width)
 }
 
 #[cfg(test)]
@@ -235,5 +246,16 @@ mod tests {
         assert_eq!(text(&rows), original);
         assert!(rows.iter().all(|line| line.width() <= 5));
         assert_eq!(text(&rows).matches(family).count(), 2);
+    }
+
+    #[test]
+    fn wrapping_keeps_a_word_whole_when_it_fits_on_the_next_row() {
+        let mut rows = Vec::new();
+        visit_wrapped_rows(&Line::raw("evidence TAIL_SENTINEL"), 16, |row| {
+            rows.push(row.concat());
+            true
+        });
+
+        assert_eq!(rows, ["evidence ", "TAIL_SENTINEL"]);
     }
 }
