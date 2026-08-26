@@ -443,10 +443,19 @@ async fn combined_analysis_submits_plagiarism_while_ai_observation_is_stalled() 
         }
     );
 
-    assert!(
-        outcome.is_err(),
-        "local cancellation stops the stalled wait"
-    );
+    // The fixture records a POST before its response reaches the client. The
+    // stop can therefore win either before or after the plagiarism response
+    // is acknowledged. Both outcomes must stop the combined analysis, and an
+    // unacknowledged issued request must keep its reconciliation error.
+    match outcome {
+        Err(_) => {}
+        Ok(Err(error)) => assert_eq!(
+            error.error().code(),
+            ErrorCode::SubmissionOutcomeUnknown,
+            "only an ambiguous issued submission may outrank interruption"
+        ),
+        Ok(Ok(_)) => panic!("local cancellation must not assemble a completed analysis"),
+    }
     let requests = fixture.requests();
     assert_eq!(
         requests
