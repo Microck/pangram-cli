@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +6,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const contentRoot = join(root, 'docs-app/content/docs');
 const referenceRoot = join(contentRoot, 'reference');
 const publicRoot = join(root, 'docs-app/public');
+const markdownRoot = join(publicRoot, 'markdown');
 const schemasRoot = join(publicRoot, 'schemas');
 const cargoManifest = await readFile(join(root, 'Cargo.toml'), 'utf8');
 const packageVersion = cargoManifest.match(/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/m)?.[1];
@@ -134,16 +135,27 @@ async function markdownFiles(directory) {
 }
 
 const pages = await markdownFiles(contentRoot);
+const markdownPaths = new Map(
+  pages.map((page) => {
+    const pagePath = relative(contentRoot, page).replace(/\\/g, '/').replace(/\.mdx?$/, '');
+    return [page, { pagePath, markdownPath: join(markdownRoot, `${pagePath}.md`) }];
+  }),
+);
+const expectedMarkdown = new Set(
+  [...markdownPaths.values()].map(({ markdownPath }) => markdownPath),
+);
+for (const generated of await markdownFiles(markdownRoot)) {
+  if (!expectedMarkdown.has(generated)) await unlink(generated);
+}
 const navigation = [];
 const full = [];
 for (const page of pages) {
-  const pagePath = relative(contentRoot, page).replace(/\\/g, '/').replace(/\.mdx?$/, '');
+  const { pagePath, markdownPath } = markdownPaths.get(page);
   const text = await readFile(page, 'utf8');
   const body = text.replace(/^---\n[\s\S]*?\n---\n+/, '');
   const title = text.match(/^title: (.+)$/m)?.[1] ?? pagePath;
   navigation.push(`- [${title}](https://pangram.micr.dev/docs/${pagePath === 'index' ? '' : pagePath})`);
   full.push(`# ${title}\n\nSource: https://pangram.micr.dev/docs/${pagePath}\n\n${body.trim()}\n`);
-  const markdownPath = join(publicRoot, 'markdown', `${pagePath}.md`);
   await mkdir(dirname(markdownPath), { recursive: true });
   await writeIfChanged(markdownPath, `# ${title}\n\n${body.trim()}\n`);
 }

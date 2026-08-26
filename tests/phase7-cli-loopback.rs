@@ -124,6 +124,40 @@ async fn combined_analysis_keeps_ai_success_and_exits_partial_on_plagiarism_fail
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn combined_analysis_interruption_keeps_ambiguity_and_exits_130() {
+    use std::process::Stdio;
+
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Hang);
+    fixture.on_plagiarism(Step::Hang);
+    let text = "Synthetic combined input interrupted after both submissions";
+    let isolated = Isolated::new();
+
+    let mut child = isolated
+        .command(fixture.base_url())
+        .args(["analyze", text, "--max-billable-units", "6"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn combined analysis");
+    fixture.wait_for_posts(2).await;
+    interrupt(&mut child);
+    let output = child
+        .wait_with_output()
+        .expect("wait for interrupted analysis");
+
+    assert_eq!(output.status.code(), Some(130));
+    let value = envelope(&output);
+    assert_eq!(value["command"], "analyze");
+    assert_eq!(value["error"]["code"], "submission_outcome_unknown");
+    assert!(value["error"]["details"]["request_sha256"].is_string());
+    assert_eq!(fixture.post_count(), 2, "neither billable POST is replayed");
+    fixture.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn combined_history_rerun_interruption_keeps_ambiguity_and_exits_130() {
     use std::process::Stdio;
 

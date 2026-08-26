@@ -1,8 +1,9 @@
 import { access, readFile, readdir } from 'node:fs/promises';
-import { dirname, extname, join, normalize, relative } from 'node:path';
+import { dirname, extname, join, normalize, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const docsRoot = join(root, 'docs-app');
 const contentRoot = join(root, 'docs-app/content/docs');
 const cli = JSON.parse(await readFile(join(root, 'generated/cli-reference.json'), 'utf8'));
 const commands = new Set(cli.commands.map(({ path }) => path[0]).filter(Boolean));
@@ -20,7 +21,8 @@ async function files(directory) {
   return found;
 }
 
-for (const path of await files(join(root, 'docs-app'))) {
+const docsFiles = await files(docsRoot);
+for (const path of docsFiles) {
   const text = await readFile(path, 'utf8');
   if (/[^\x00-\x7F]/.test(text)) failures.push(`${relative(root, path)} contains non-ASCII text`);
   if (/sk-pg-[A-Za-z0-9]+/.test(text)) failures.push(`${relative(root, path)} contains an API key`);
@@ -38,6 +40,26 @@ for (const path of await files(join(root, 'docs-app'))) {
 
 for (const output of ['llms.txt', 'llms-full.txt']) {
   await access(join(root, 'docs-app/public', output)).catch(() => failures.push(`missing ${output}`));
+}
+
+const pagePaths = docsFiles
+  .filter((path) => path.startsWith(`${contentRoot}${sep}`))
+  .filter((path) => ['.md', '.mdx'].includes(extname(path)))
+  .map((path) => relative(contentRoot, path).replaceAll('\\', '/').replace(/\.mdx?$/, '.md'))
+  .sort();
+const markdownRoot = join(root, 'docs-app/public/markdown');
+const markdownPaths = docsFiles
+  .filter((path) => path.startsWith(`${markdownRoot}${sep}`))
+  .filter((path) => extname(path) === '.md')
+  .map((path) => relative(markdownRoot, path).replaceAll('\\', '/'))
+  .sort();
+const expectedMarkdown = new Set(pagePaths);
+const actualMarkdown = new Set(markdownPaths);
+for (const stale of markdownPaths.filter((path) => !expectedMarkdown.has(path))) {
+  failures.push(`stale generated Markdown ${stale}`);
+}
+for (const missing of pagePaths.filter((path) => !actualMarkdown.has(path))) {
+  failures.push(`missing generated Markdown ${missing}`);
 }
 
 for (const route of ['app/page.tsx', 'app/docs/layout.tsx', 'app/docs/[[...slug]]/page.tsx']) {

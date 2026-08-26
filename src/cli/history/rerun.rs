@@ -115,7 +115,7 @@ pub(super) fn execute(
                 Ok(Ok(analysis)) => RerunFlow::Completed(analysis),
                 Ok(Err(error)) if stop.token().is_cancelled() => RerunFlow::Interrupted(
                     error.into_error(),
-                    "interrupted; reconcile using the canonical error identity".to_owned(),
+                    detect::AMBIGUOUS_INTERRUPTION_NOTE.to_owned(),
                 ),
                 Ok(Err(error)) => RerunFlow::Failed(error.into_error()),
                 Err(interrupted) => RerunFlow::Interrupted(
@@ -190,10 +190,7 @@ async fn run_detection_rerun(
             } = failure;
             let error = task_error.into_error();
             if stop.token().is_cancelled() {
-                RerunFlow::Interrupted(
-                    error,
-                    "interrupted; reconcile using the canonical error identity".to_owned(),
-                )
+                RerunFlow::Interrupted(error, detect::AMBIGUOUS_INTERRUPTION_NOTE.to_owned())
             } else if matches!(error.code(), ErrorCode::SubmissionOutcomeUnknown) {
                 RerunFlow::Completed(detect::failed_member(
                     &request.expect("an ambiguous submission retains its request"),

@@ -1772,7 +1772,8 @@ Rules:
   result instead of assembling it unless cancelling an issued billable request
   makes its submission outcome ambiguous. In that case,
   `submission_outcome_unknown` takes precedence over the generic interruption
-  and retains the request hash and reconciliation status.
+  and retains the request hash and reconciliation status, while the CLI still
+  exits 130.
 - timeout stops waiting, not upstream work. One supplied deadline starts when
   the analysis operation begins and bounds the complete local wait, including
   a synchronous plagiarism response, a synchronous binary file response, and

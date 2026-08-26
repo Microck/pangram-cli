@@ -368,6 +368,10 @@ async fn execute_one(
                         .await
                     {
                         Ok(Ok(analysis)) => Ok((analysis, retained)),
+                        Ok(Err(error)) if stop.token().is_cancelled() => Err(Flow::Interrupted(
+                            error.into_error(),
+                            detect::AMBIGUOUS_INTERRUPTION_NOTE.to_owned(),
+                        )),
                         Ok(Err(error)) => Err(Flow::Failed(error.into_error())),
                         Err(interrupted) => Err(Flow::Interrupted(
                             detect::internal_error("combined analysis was interrupted locally"),

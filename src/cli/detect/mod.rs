@@ -46,6 +46,9 @@ use super::StreamTty;
 use inputs::{ResolvedInput, enforce_billable_ceiling, resolve_inputs};
 use render::{DETACH_NOTE, success_outcome};
 
+pub(crate) const AMBIGUOUS_INTERRUPTION_NOTE: &str =
+    "interrupted; reconcile using the canonical error identity";
+
 // The submodules hold the cohesive halves of the adapter:
 // - `inputs`: source resolution, word counting, and billing preflight
 // - `render`: envelope assembly, exit mapping, and projection handoff

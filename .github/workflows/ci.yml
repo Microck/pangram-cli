@@ -131,13 +131,11 @@ jobs:
         run: npm audit --audit-level=critical
       - name: Check package metadata and templates
         run: npm run packages:check
-      - name: Check generated documentation drift
+      - name: Validate and build documentation
         run: |
-          npm run docs:generate
+          npm run docs:check
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=all)"
-      - name: Type-check and build documentation
-        run: npm run check -w docs-app
 
   tui-acceptance:
     name: TUI acceptance (${{ matrix.os }})
