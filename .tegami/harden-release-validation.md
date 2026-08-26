@@ -13,4 +13,5 @@ pin their tag to the built commit and use the exact Tegami changelog section.
 Interrupted combined history reruns now retain that reconciliation error while
 returning the documented exit 130. Fresh combined analysis now does the same.
 Documentation CI runs the complete validator, and regeneration removes stale
-public Markdown when a source page moves or disappears.
+public Markdown when a source page moves or disappears. Registry publication
+checks out the exact public release tag before validating or staging packages.
