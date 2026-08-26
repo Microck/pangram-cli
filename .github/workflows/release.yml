@@ -31,10 +31,7 @@ jobs:
         with:
           toolchain: "1.97.1"
       - name: Install cargo-dist
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
-        with:
-          tool: cargo-dist@0.32.0
-          fallback: none
+        run: cargo install cargo-dist --version 0.32.0 --locked
       - name: Match the merged version and release policy
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
@@ -67,7 +64,7 @@ jobs:
           # cargo-dist owns version and target planning. The custom packager
           # owns archives because cargo-dist includes feature-gated developer
           # binaries from a single Cargo package in its default archive plan.
-          cargo dist plan --tag="v${REQUESTED_VERSION}"
+          dist plan --tag="v${REQUESTED_VERSION}"
 
   build:
     name: Build ${{ matrix.target }}
