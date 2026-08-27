@@ -2,22 +2,120 @@
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
 
-:root,
+@font-face {
+  font-family: 'Pangram PP Eiko';
+  src: url('/landing/fonts/ppeiko-medium.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Sans';
+  src: url('/landing/fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Sans';
+  src: url('/landing/fonts/IBMPlexSans-Medium.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Sans';
+  src: url('/landing/fonts/IBMPlexSans-Bold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Mono';
+  src: url('/landing/fonts/IBMPlexMono-Regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Mono';
+  src: url('/landing/fonts/IBMPlexMono-Medium.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Mono';
+  src: url('/landing/fonts/IBMPlexMono-SemiBold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pangram IBM Plex Mono';
+  src: url('/landing/fonts/IBMPlexMono-Bold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --font-heading: 'Pangram PP Eiko', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Pangram IBM Plex Sans', Arial, sans-serif;
+  --font-mono: 'Pangram IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  --color-fd-background: oklch(0.985 0.004 45);
+  --color-fd-foreground: oklch(0.225 0.02 165);
+  --color-fd-muted: oklch(0.955 0.006 45);
+  --color-fd-muted-foreground: oklch(0.47 0.02 165);
+  --color-fd-border: oklch(0.87 0.012 45);
+  --color-fd-card: oklch(0.995 0.002 45);
+  --color-fd-card-foreground: oklch(0.225 0.02 165);
+  --color-fd-primary: oklch(0.55 0.19 42);
+  --color-fd-primary-foreground: oklch(0.99 0.002 45);
+}
+
 .dark {
-  --color-fd-background: #000;
-  --color-fd-foreground: #fff;
-  --color-fd-muted: #111;
-  --color-fd-muted-foreground: #b8b8b8;
-  --color-fd-border: #303030;
-  --color-fd-card: #000;
-  --color-fd-card-foreground: #fff;
-  --color-fd-primary: #fff;
-  --color-fd-primary-foreground: #000;
+  --color-fd-background: oklch(0 0 0);
+  --color-fd-foreground: oklch(0.985 0 0);
+  --color-fd-muted: oklch(0.17 0 0);
+  --color-fd-muted-foreground: oklch(0.76 0 0);
+  --color-fd-border: oklch(0.32 0 0);
+  --color-fd-card: oklch(0 0 0);
+  --color-fd-card-foreground: oklch(0.985 0 0);
+  --color-fd-primary: oklch(0.75 0.18 48);
+  --color-fd-primary-foreground: oklch(0.12 0 0);
 }
 
 html,
 body {
-  background: #000;
+  background: var(--color-fd-background);
+  color: var(--color-fd-foreground);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  font-kerning: normal;
+  text-wrap: balance;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
 }
 
 html {
@@ -27,21 +125,11 @@ html {
 a:focus-visible,
 button:focus-visible,
 input:focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid;
   outline-offset: 3px;
 }
 
-/*
- * The docs surface is deliberately instant: no animation, no transitions. This
- * stays an !important sledgehammer because it has to beat whatever fumadocs and
- * Tailwind ship.
- *
- * The landing route is excluded because it owns a motion system in landing.css,
- * where every animation is already gated behind prefers-reduced-motion. Without
- * the exclusion this rule silently wins on specificity and every reveal there
- * computes to a 0ms step, which looks identical to no animation at all.
- */
-*:not([data-pangram-landing], [data-pangram-landing] *) {
+* {
   animation-duration: 0ms !important;
   transition-duration: 0ms !important;
 }

@@ -1,8 +1,5 @@
 # Install Pangram CLI
 
-These commands become live when the first public release is published. Until
-then, clone the repository and build the locked Rust package for development.
-
 ## macOS or Linux
 
 Download the versioned installer, inspect it, and run it:

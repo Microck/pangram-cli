@@ -61,6 +61,24 @@ function htmlDestinations(html) {
   return destinations;
 }
 
+/** Returns only text shown inside HTML code and pre elements. */
+export function htmlCodeText(html) {
+  const blocks = [];
+  const textContent = (node) => {
+    if (node.nodeName === "#text") return node.value;
+    return (node.childNodes ?? []).map(textContent).join("");
+  };
+  const visitHtml = (node) => {
+    if (codeContainerNames.has(node.tagName)) {
+      blocks.push(textContent(node));
+      return;
+    }
+    for (const child of node.childNodes ?? []) visitHtml(child);
+  };
+  visitHtml(parseFragment(html));
+  return blocks.join("\n");
+}
+
 function codeContainerDelta(html) {
   const tag = html.trim();
   const match = /^<(\/)?(?:code|pre)\b[^>]*>$/i.exec(tag);

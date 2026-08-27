@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
-import { checkDocumentationLinks } from "./check-external-links.mjs";
+import { checkDocumentationLinks, htmlCodeText } from "./check-external-links.mjs";
 
 let server;
 let origin;
@@ -91,6 +91,19 @@ test("documentation link checks cover repository-relative, HTML, and MDX links",
   assert.ok(failures.some((failure) => failure.includes("unresolved link missing.md")));
   assert.ok(failures.some((failure) => failure.includes("/missing returned HTTP 404")));
   assert.ok(failures.some((failure) => failure.includes("/missing-expression returned HTTP 404")));
+});
+
+test("HTML command extraction reads code blocks without prose", () => {
+  const html = [
+    "<p>pangram prose is not a command example.</p>",
+    "<code>pangram detect --format pretty</code>",
+    "<pre><span>$</span> pangram bulk status</pre>",
+  ].join("\n");
+
+  assert.equal(
+    htmlCodeText(html),
+    "pangram detect --format pretty\n$ pangram bulk status",
+  );
 });
 
 test("documentation link checks reject broken site-root and malformed HTTP links", async () => {
