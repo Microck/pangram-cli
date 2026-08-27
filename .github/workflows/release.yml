@@ -183,6 +183,8 @@ jobs:
             release-artifacts/pangram-installer.ps1 \
             release-artifacts/pangram.rb \
             release-artifacts/pangram-scoop.json \
+            scripts/smoke-homebrew-release.sh \
+            scripts/smoke-scoop-release.ps1 \
             release-verification/
           node scripts/stage-npm-packages.mjs release-artifacts "$VERSION"
           npm run packages:check
@@ -462,90 +464,17 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-          fi
-          root="$(mktemp -d)"
-          formula="$root/pangram.rb"
-          cp release-artifacts/pangram.rb "$formula"
-          python3 - "$formula" "$VERSION" "$PWD/release-artifacts" <<'PY'
-          import sys
-          from pathlib import Path
-
-          formula = Path(sys.argv[1])
-          version = sys.argv[2]
-          artifacts = Path(sys.argv[3]).resolve().as_uri()
-          production = f"https://github.com/Microck/pangram-cli/releases/download/v{version}"
-          contents = formula.read_text(encoding="utf-8")
-          if contents.count(production) != 4:
-              raise SystemExit("generated Homebrew formula has an unexpected release URL set")
-          formula.write_text(contents.replace(production, artifacts), encoding="utf-8")
-          PY
-          export HOMEBREW_CACHE="$root/cache"
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          export HOMEBREW_NO_ENV_HINTS=1
-          export HOMEBREW_NO_INSTALL_CLEANUP=1
-          export HOMEBREW_NO_INSTALL_FROM_API=1
-          trap 'brew uninstall --force pangram >/dev/null 2>&1 || true; rm -rf "$root"' EXIT
-          brew install --formula "$formula"
-          brew test pangram
-          test "$("$(brew --prefix pangram)/bin/pangram" --version)" = "pangram ${VERSION}"
+        run: bash release-artifacts/smoke-homebrew-release.sh release-artifacts "$VERSION"
       - name: Install the generated Scoop manifest
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           VERSION: ${{ inputs.version }}
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP ("pangram-scoop-" + [Guid]::NewGuid().ToString("N"))
-          New-Item -ItemType Directory -Path $root | Out-Null
-          $manifest = Join-Path $root "pangram.json"
-          $archiveName = "pangram-v$env:VERSION-x86_64-pc-windows-msvc.zip"
-          $productionUrl = "https://github.com/Microck/pangram-cli/releases/download/v$env:VERSION/$archiveName"
-          $serverOrigin = "http://127.0.0.1:18765"
-          $contents = Get-Content -LiteralPath "release-artifacts/pangram-scoop.json" -Raw
-          if ([regex]::Matches($contents, [regex]::Escape($productionUrl)).Count -ne 1) {
-            throw "generated Scoop manifest has an unexpected release URL set"
-          }
-          $contents.Replace($productionUrl, "$serverOrigin/$archiveName") |
-            Set-Content -LiteralPath $manifest -Encoding utf8
-          $server = $null
-          try {
-            $server = Start-Process -FilePath (Get-Command python).Source -ArgumentList @(
-              "-m", "http.server", "18765", "--bind", "127.0.0.1",
-              "--directory", (Resolve-Path "release-artifacts").Path
-            ) -RedirectStandardOutput (Join-Path $root "http.stdout.log") `
-              -RedirectStandardError (Join-Path $root "http.stderr.log") -PassThru
-            $ready = $false
-            for ($attempt = 0; $attempt -lt 50; $attempt++) {
-              try {
-                Microsoft.PowerShell.Utility\Invoke-WebRequest -UseBasicParsing `
-                  -Method Head -Uri "$serverOrigin/$archiveName" | Out-Null
-                $ready = $true
-                break
-              } catch {
-                Start-Sleep -Milliseconds 100
-              }
-            }
-            if (-not $ready) { throw "local release server did not start" }
-            $env:SCOOP = (Resolve-Path ".scoop").Path
-            $env:SCOOP_GLOBAL = Join-Path $root "global"
-            & ".scoop/bin/scoop.ps1" config aria2-enabled false | Out-Null
-            & ".scoop/bin/scoop.ps1" install $manifest
-            if ($LASTEXITCODE -ne 0) { throw "Scoop refused the generated manifest" }
-            $installed = & ".scoop/shims/pangram.exe" --version
-            if ($installed -ne "pangram $env:VERSION") {
-              throw "Scoop-installed binary version mismatch"
-            }
-            & ".scoop/bin/scoop.ps1" uninstall pangram | Out-Null
-          } finally {
-            if ($null -ne $server -and -not $server.HasExited) {
-              Stop-Process -Id $server.Id -Force
-              $server.WaitForExit()
-            }
-            Remove-Item -LiteralPath $root -Recurse -Force
-          }
+        run: >-
+          & "release-artifacts/smoke-scoop-release.ps1"
+          -Artifacts "release-artifacts"
+          -ScoopSource ".scoop"
+          -Version "$env:VERSION"
 
   publish-release:
     name: Create authorized private draft release
