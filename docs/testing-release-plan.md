@@ -433,6 +433,12 @@ Verify:
   transport to a loopback release server, then proves target selection,
   download, size and hash checks, the default destination, initial receipt
   ownership, and receipt-owned replacement
+- all six staged npm tarballs install offline on their native targets, and the
+  main wrapper reports the same version through each platform package
+- the generated Homebrew formula installs and tests the exact signed archive
+  on every supported POSIX target through a loopback-only URL rewrite
+- the generated Scoop manifest installs the exact signed Windows archive and
+  exposes its versioned shim through a pinned Scoop checkout
 - current binary preserved on every failure
 - no automatic check outside the TUI
 - 24-hour TUI check interval and ETag
@@ -698,6 +704,11 @@ These are Rust target baselines, not proof of Pangram CLI support. A target is
 publicly supported only after its native release evidence passes. If the
 required minimum-version environment is unavailable, narrow the published
 claim rather than substituting a cross-build.
+
+Linux release binaries target glibc 2.17 explicitly and then run unchanged on
+their native architecture inside a digest-pinned manylinux2014 container. The
+container MUST report `glibc 2.17` before its version smoke test. A symbol scan
+or successful run on a newer distribution does not replace this evidence.
 
 ## 21. Public release blockers
 
