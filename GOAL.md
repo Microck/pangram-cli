@@ -172,7 +172,7 @@ approved contracts.
 | 5 | Complete |
 | 6 | Complete |
 | 7 | Complete |
-| 8 | In progress |
+| 8 | Complete |
 | 9 | Blocked by release gates |
 
 The detailed work and phase exit criteria remain in the
@@ -536,6 +536,44 @@ Historical progress through Phase 4 is retained in the
   The pull-request CI now owns the five native archive build and clean-install
   smoke jobs. No Pangram request or billable unit was used. Phase 8 remains in
   progress until that native matrix supplies its target evidence.
+
+- 2026-08-27: Phase 8 is complete. The release candidate merged through
+  PRs [#22](https://github.com/Microck/pangram-cli/pull/22),
+  [#23](https://github.com/Microck/pangram-cli/pull/23),
+  [#24](https://github.com/Microck/pangram-cli/pull/24),
+  [#25](https://github.com/Microck/pangram-cli/pull/25),
+  [#26](https://github.com/Microck/pangram-cli/pull/26),
+  [#28](https://github.com/Microck/pangram-cli/pull/28),
+  [#29](https://github.com/Microck/pangram-cli/pull/29),
+  [#30](https://github.com/Microck/pangram-cli/pull/30),
+  [#31](https://github.com/Microck/pangram-cli/pull/31),
+  [#32](https://github.com/Microck/pangram-cli/pull/32),
+  [#33](https://github.com/Microck/pangram-cli/pull/33),
+  [#34](https://github.com/Microck/pangram-cli/pull/34),
+  [#35](https://github.com/Microck/pangram-cli/pull/35), and
+  [#36](https://github.com/Microck/pangram-cli/pull/36), ending at merged
+  commit `8aefdbd0279d21f631628c0aa9e4830382166291`. The documentation gate
+  now validates repository links, deployed Fumadocs routes, public files, and
+  external prose links before the site build. The final protected
+  [native CI matrix](https://github.com/Microck/pangram-cli/actions/runs/33079144873)
+  passed all 13 jobs. The non-publishing
+  [signed release workflow](https://github.com/Microck/pangram-cli/actions/runs/33080258523)
+  built all five native targets and proved an exact glibc 2.17 baseline for
+  both Linux archives before signing and auditing the artifacts. Native support
+  claims now match this evidence: Linux claims glibc 2.17 without an untested
+  kernel floor, both macOS targets require macOS 15, and Windows x64 requires
+  Windows Server 2025 on the pinned `windows-2025` runner. The workflow ran the
+  generated public installer end to end twice and installed the staged npm
+  packages offline on Linux x64, Linux ARM64, macOS x64, macOS ARM64, and
+  Windows x64. It also installed and tested the generated Homebrew formula on
+  all four POSIX targets and the generated Scoop manifest on Windows. Those
+  tests proved native target selection, download, size and hash checks, the
+  default destination, initial receipt ownership, receipt-owned replacement,
+  and package-manager execution. The workflow ran with `publish=false`; the
+  release-creation job was skipped, and no tag, GitHub Release, registry
+  publication, documentation deployment, or Pangram API request occurred.
+  Phase 9 remains blocked pending its separately authorized production
+  publication actions and final release gates.
 
 ## Out of scope
 
