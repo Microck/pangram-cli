@@ -1,6 +1,6 @@
 # Pangram CLI completion goal
 
-Status: implementation
+Status: complete
 Destination: public v1
 Created: 2026-07-23
 
@@ -173,7 +173,7 @@ approved contracts.
 | 6 | Complete |
 | 7 | Complete |
 | 8 | Complete |
-| 9 | Blocked by release gates |
+| 9 | Complete |
 
 The detailed work and phase exit criteria remain in the
 [implementation roadmap](docs/implementation-roadmap.md). This table records
@@ -574,6 +574,29 @@ Historical progress through Phase 4 is retained in the
   publication, documentation deployment, or Pangram API request occurred.
   Phase 9 remains blocked pending its separately authorized production
   publication actions and final release gates.
+
+- 2026-08-27: Phase 9 and the public v1 completion goal are complete. The
+  authorized `v0.1.0` release was built from merged commit
+  `28b131dc7b44f544179a10eefa38aed063ced20b`. The protected release workflow
+  [built, signed, audited, and smoke-tested all five native
+  targets](https://github.com/Microck/pangram-cli/actions/runs/33113399509)
+  before publishing the [GitHub Release with 14 checksum-bound
+  assets](https://github.com/Microck/pangram-cli/releases/tag/v0.1.0). The
+  production [site](https://pangram.micr.dev/) and
+  [Fumadocs](https://pangram.micr.dev/docs) are live, and the public installer
+  completed a fresh Linux ARM64 installation that reported `pangram 0.1.0`.
+  [Homebrew](https://github.com/Microck/homebrew-pangram-cli/commit/8c186db0ffbc4945ee9499b082cd9870bfd03734)
+  and [Scoop](https://github.com/Microck/scoop-pangram-cli/commit/2bb0dc82e7b453293401796081a647220c6ea28a)
+  publish the exact generated metadata that passed the release matrix. All six
+  [npm packages](https://www.npmjs.com/package/@microck/pangram-cli) use GitHub
+  OIDC trusted publishing through the protected `pangram-public-release`
+  environment, resolve `latest` to `0.1.0`, and pass a clean public install and
+  binary-version smoke test. The repository is public under MIT, the TUI and
+  fox intro are approved, live Pangram conformance is recorded, and no
+  unresolved P0 or P1 finding remains. The signed update manifest was validated
+  during the release workflow; the `0.x` binary correctly returns
+  `update_unavailable` without network access under the approved update
+  contract.
 
 ## Out of scope
 

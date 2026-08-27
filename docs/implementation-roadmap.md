@@ -548,7 +548,9 @@ Scoop publication.
 - the release checklist contains evidence links for every gate
 - the repository is public under MIT
 - no credential, private fixture, or proprietary Pangram material is present
-- `pangram update --check` sees the released manifest
+- the released update manifest and signature validate independently, while the
+  `0.x` `pangram update --check` command returns `update_unavailable` without a
+  network request as required by `docs/update-contract.md`
 
 ## 13. Issue disposition
 
