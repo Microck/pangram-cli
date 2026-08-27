@@ -131,10 +131,12 @@ for (const [script, contents, requiredProofs] of [
     scoopSmoke,
     [
       'New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "buckets")',
+      "New-Item -ItemType Junction -Path $scoopRuntime -Target $scoopSource",
+      '$scoop = Join-Path $scoopRuntime "bin/scoop.ps1"',
       "& $scoop install --no-update-scoop $manifest",
       '(Join-Path $env:SCOOP "shims/pangram.exe") --version',
       '$installed -ne "pangram $Version"',
-      "[IO.Directory]::Delete($current)",
+      "[IO.Directory]::Delete($junction)",
     ],
   ],
 ]) {
