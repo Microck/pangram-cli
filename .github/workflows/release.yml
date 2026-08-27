@@ -294,11 +294,17 @@ jobs:
           if ($parseErrors.Count -ne 0) { throw $parseErrors[0] }
           $root = Join-Path $env:RUNNER_TEMP ("pangram-smoke-" + [Guid]::NewGuid().ToString("N"))
           New-Item -ItemType Directory -Path $root | Out-Null
+          $receiptDirectory = Join-Path (
+            [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+          ) "micr\pangram\data"
+          $receipt = Join-Path $receiptDirectory "install-receipt.json"
+          $pendingReceipt = Join-Path $receiptDirectory ".install-receipt.json.pending"
+          if ((Test-Path -LiteralPath $receipt) -or (Test-Path -LiteralPath $pendingReceipt)) {
+            throw "ephemeral runner already has direct-install receipt state"
+          }
           try {
             $archive = "release-artifacts/pangram-v$env:VERSION-$env:TARGET.zip"
             Expand-Archive -LiteralPath $archive -DestinationPath $root
-            $env:APPDATA = Join-Path $root "data\roaming"
-            $env:LOCALAPPDATA = Join-Path $root "data\local"
             $destination = Join-Path $root "install\pangram.exe"
             & (Join-Path $root "pangram.exe") __pangram-direct-install `
               --manifest release-artifacts/pangram-update-manifest.json `
@@ -309,9 +315,9 @@ jobs:
             if ((& $destination --version) -ne "pangram $env:VERSION") {
               throw "installed binary version mismatch"
             }
-            $receipts = @(Get-ChildItem -Path $root -Filter install-receipt.json -Recurse -File)
-            if ($receipts.Count -ne 1) { throw "direct install receipt missing" }
-            $receipt = $receipts[0].FullName
+            if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+              throw "direct install receipt missing"
+            }
             $initialReceipt = Get-Content -LiteralPath $receipt -Raw
 
             # Windows replacement finishes in a child process after this
@@ -335,12 +341,12 @@ jobs:
             if ((& $destination --version) -ne "pangram $env:VERSION") {
               throw "replacement binary version mismatch"
             }
-            $pendingReceipts = @(
-              Get-ChildItem -Path $root -Filter ".install-receipt.json.pending" -Recurse -File -Force
-            )
-            if ($pendingReceipts.Count -ne 0) { throw "replacement receipt was not finalized" }
+            if (Test-Path -LiteralPath $pendingReceipt) {
+              throw "replacement receipt was not finalized"
+            }
           } finally {
             Remove-Item -LiteralPath $root -Recurse -Force
+            Remove-Item -LiteralPath $receipt, $pendingReceipt -Force -ErrorAction SilentlyContinue
           }
 
   publish-release:
