@@ -134,7 +134,7 @@ for (const [script, contents, requiredProofs] of [
       "& $scoop install --no-update-scoop $manifest",
       '(Join-Path $env:SCOOP "shims/pangram.exe") --version',
       '$installed -ne "pangram $Version"',
-      "& $scoop uninstall pangram",
+      "[IO.Directory]::Delete($current)",
     ],
   ],
 ]) {
