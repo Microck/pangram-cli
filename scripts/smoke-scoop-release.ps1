@@ -43,6 +43,7 @@ try {
 
   $env:SCOOP = Join-Path $root "scoop"
   $env:SCOOP_GLOBAL = Join-Path $root "global"
+  New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "buckets") | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "shims") | Out-Null
   $scoop = Join-Path $scoopSource "bin/scoop.ps1"
   & $scoop config aria2-enabled false | Out-Null
