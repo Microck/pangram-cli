@@ -23,6 +23,9 @@ use tar::EntryType;
 mod direct_installer;
 #[path = "update-contract/fixtures.rs"]
 mod fixtures;
+#[cfg(windows)]
+#[path = "update-contract/windows-direct-installer.rs"]
+mod windows_direct_installer;
 
 use fixtures::{KEY_ID, artifact_for, manifest, signed, tar_xz, zip};
 

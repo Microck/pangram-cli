@@ -233,6 +233,10 @@ jobs:
         run: "cargo test --locked --lib history::sidecars::"
       - name: Run Windows MCP filesystem and installer tests
         run: "cargo test --locked --all-features --lib mcp::"
+      - name: Run Windows direct installer replacement tests
+        run: >-
+          cargo test --locked --all-features --test update-contract
+          windows_direct_installer::
 
   native-release-archive:
     name: Native release archive (${{ matrix.target }})

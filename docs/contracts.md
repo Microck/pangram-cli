@@ -2166,6 +2166,12 @@ update ownership. Candidate smoke tests retry only transient operating-system
 spawn contention with a small fixed bound. A started process that fails or
 reports the wrong version is rejected immediately.
 
+A versioned installer archive candidate is distinct from the installed
+executable. It therefore completes destination replacement, installed-path
+smoke testing, and receipt publication before returning on every platform.
+Only a running installed Windows binary uses the deferred parent-exit helper
+required for self-replacement.
+
 The POSIX direct installer accepts the two GNU Linux targets only when
 `getconf GNU_LIBC_VERSION` proves glibc before any release download; musl and
 unknown libc environments fail with an explicit unsupported-platform error.

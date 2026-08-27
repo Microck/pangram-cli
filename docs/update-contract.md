@@ -210,10 +210,18 @@ The updater downloads to the executable's filesystem, validates before
 mutation, and preserves the running executable on every failure.
 
 On Unix, it atomically renames the verified executable into place. On Windows,
-the verified new executable runs a narrowly scoped replacement mode, waits for
+an installed binary replacing its own running executable launches the verified
+new executable in a narrowly scoped replacement mode. That process waits for
 the parent PID to exit, replaces the recorded path, and runs the version smoke
 test. The replacement mode accepts only the exact current path and manifest
 identity already recorded in the receipt.
+
+A versioned installer runs from the extracted archive candidate, not from the
+installed destination. Its candidate mode therefore replaces the distinct
+destination synchronously on Windows, runs the installed-path smoke test, and
+publishes the new receipt before it returns. It does not start the deferred
+self-replacement mode or depend on the short-lived archive process remaining
+open long enough for a child process to acquire its PID.
 
 The new receipt is written only after replacement and the version smoke test
 succeed. A failed receipt write reports `update_replace_failed` and preserves
