@@ -427,6 +427,12 @@ Verify:
 - atomic replacement
 - executable permission
 - Windows replacement behavior
+- each generated POSIX and PowerShell installer runs end to end against the
+  exact signed release inputs on its native targets
+- the installer smoke harness redirects only the fixed production download
+  transport to a loopback release server, then proves target selection,
+  download, size and hash checks, the default destination, initial receipt
+  ownership, and receipt-owned replacement
 - current binary preserved on every failure
 - no automatic check outside the TUI
 - 24-hour TUI check interval and ETag

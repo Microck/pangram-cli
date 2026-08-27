@@ -239,28 +239,62 @@ jobs:
         with:
           name: pangram-release-verification
           path: release-artifacts
-      - name: Run the signed direct-install and receipt-owned replacement smoke test
+      - name: Run the public signed installer and receipt-owned replacement smoke test
         if: runner.os != 'Windows'
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           sh -n release-artifacts/pangram-installer.sh
           root="$(mktemp -d)"
-          trap 'rm -rf "$root"' EXIT
-          archive="release-artifacts/pangram-v${VERSION}-${TARGET}.tar.xz"
-          tar -xJf "$archive" -C "$root" pangram
-          chmod 755 "$root/pangram"
+          real_curl="$(command -v curl)"
+          server_origin=http://127.0.0.1:18765
+          python3 -m http.server 18765 --bind 127.0.0.1 \
+            --directory release-artifacts >"$root/http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; rm -rf "$root"' EXIT
+          attempt=0
+          until "$real_curl" --fail --silent \
+            "$server_origin/pangram-update-manifest.json" --output /dev/null; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -eq 50 ]; then
+              printf '%s\n' "local release server did not start" >&2
+              exit 1
+            fi
+            sleep 0.1
+          done
+
+          # The generated installer keeps its fixed production URL. This
+          # transport shim verifies that URL and redirects only its downloads
+          # to the loopback server holding the exact signed workflow inputs.
+          mkdir -p "$root/commands"
+          cat >"$root/commands/curl" <<'SH'
+          #!/bin/sh
+          set -eu
+          [ "$#" -eq 7 ] || exit 64
+          [ "$1" = --fail ] && [ "$2" = --location ] &&
+            [ "$3" = --silent ] && [ "$4" = --show-error ] &&
+            [ "$6" = --output ] || exit 64
+          case "$5" in
+            "$PANGRAM_INSTALLER_SMOKE_RELEASE_URL"/*) ;;
+            *) printf '%s\n' "unexpected installer URL: $5" >&2; exit 64 ;;
+          esac
+          asset=${5##*/}
+          exec "$PANGRAM_INSTALLER_SMOKE_CURL" \
+            --fail --location --silent --show-error \
+            "$PANGRAM_INSTALLER_SMOKE_ORIGIN/$asset" --output "$7"
+          SH
+          chmod 755 "$root/commands/curl"
           export HOME="$root/home"
           export XDG_DATA_HOME="$root/data"
-          destination="$root/install/pangram"
-          "$root/pangram" __pangram-direct-install \
-            --manifest release-artifacts/pangram-update-manifest.json \
-            --signature release-artifacts/pangram-update-manifest.json.sig \
-            --archive "$archive" \
-            --destination "$destination"
+          export PANGRAM_INSTALLER_SMOKE_CURL="$real_curl"
+          export PANGRAM_INSTALLER_SMOKE_ORIGIN="$server_origin"
+          export PANGRAM_INSTALLER_SMOKE_RELEASE_URL="https://github.com/Microck/pangram-cli/releases/download/v${VERSION}"
+          export PATH="$root/commands:$PATH"
+          mkdir -p "$HOME"
+          destination="$HOME/.local/bin/pangram"
+          sh release-artifacts/pangram-installer.sh
           test "$("$destination" --version)" = "pangram ${VERSION}"
           test "$(find "$root" -name install-receipt.json -type f | wc -l | tr -d ' ')" = 1
           receipt="$(find "$root" -name install-receipt.json -type f)"
@@ -269,20 +303,15 @@ jobs:
           # A second run must enter the receipt-owned replacement path and
           # publish a new receipt only after the installed binary passes smoke.
           sleep 1
-          "$root/pangram" __pangram-direct-install \
-            --manifest release-artifacts/pangram-update-manifest.json \
-            --signature release-artifacts/pangram-update-manifest.json.sig \
-            --archive "$archive" \
-            --destination "$destination"
+          sh release-artifacts/pangram-installer.sh
           test "$("$destination" --version)" = "pangram ${VERSION}"
           ! cmp -s "$root/initial-receipt.json" "$receipt"
           test "$(find "$root" -name '.install-receipt.json.pending' -type f | wc -l | tr -d ' ')" = 0
-      - name: Run the signed direct-install and receipt-owned replacement smoke test
+      - name: Run the public signed installer and receipt-owned replacement smoke test
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           VERSION: ${{ inputs.version }}
-          TARGET: ${{ matrix.target }}
         run: |
           $tokens = $null
           $parseErrors = $null
@@ -302,16 +331,53 @@ jobs:
           if ((Test-Path -LiteralPath $receipt) -or (Test-Path -LiteralPath $pendingReceipt)) {
             throw "ephemeral runner already has direct-install receipt state"
           }
+          $server = $null
           try {
-            $archive = "release-artifacts/pangram-v$env:VERSION-$env:TARGET.zip"
-            Expand-Archive -LiteralPath $archive -DestinationPath $root
-            $destination = Join-Path $root "install\pangram.exe"
-            & (Join-Path $root "pangram.exe") __pangram-direct-install `
-              --manifest release-artifacts/pangram-update-manifest.json `
-              --signature release-artifacts/pangram-update-manifest.json.sig `
-              --archive $archive `
-              --destination $destination
-            if ($LASTEXITCODE -ne 0) { throw "direct installer refused the signed archive" }
+            $env:LOCALAPPDATA = Join-Path $root "local-app-data"
+            $serverOrigin = "http://127.0.0.1:18765"
+            $server = Start-Process -FilePath (Get-Command python).Source -ArgumentList @(
+              "-m", "http.server", "18765", "--bind", "127.0.0.1",
+              "--directory", (Resolve-Path "release-artifacts").Path
+            ) -RedirectStandardOutput (Join-Path $root "http.stdout.log") `
+              -RedirectStandardError (Join-Path $root "http.stderr.log") -PassThru
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 50; $attempt++) {
+              try {
+                Microsoft.PowerShell.Utility\Invoke-WebRequest -UseBasicParsing `
+                  -Uri "$serverOrigin/pangram-update-manifest.json" `
+                  -OutFile (Join-Path $root "ready-manifest.json")
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 100
+              }
+            }
+            if (-not $ready) { throw "local release server did not start" }
+
+            # Keep the generated production URL intact while redirecting only
+            # its downloads to the loopback server with the signed inputs.
+            $env:PANGRAM_INSTALLER_SMOKE_ORIGIN = $serverOrigin
+            $env:PANGRAM_INSTALLER_SMOKE_RELEASE_URL =
+              "https://github.com/Microck/pangram-cli/releases/download/v$env:VERSION/"
+            function Invoke-WebRequest {
+              param(
+                [switch]$UseBasicParsing,
+                [Parameter(Mandatory = $true)][Uri]$Uri,
+                [Parameter(Mandatory = $true)][string]$OutFile
+              )
+              if (-not $Uri.AbsoluteUri.StartsWith(
+                $env:PANGRAM_INSTALLER_SMOKE_RELEASE_URL,
+                [StringComparison]::Ordinal
+              )) {
+                throw "unexpected installer URL: $Uri"
+              }
+              $asset = [IO.Path]::GetFileName($Uri.AbsolutePath)
+              Microsoft.PowerShell.Utility\Invoke-WebRequest -UseBasicParsing `
+                -Uri "$env:PANGRAM_INSTALLER_SMOKE_ORIGIN/$asset" -OutFile $OutFile
+            }
+
+            $destination = Join-Path $env:LOCALAPPDATA "Programs\Pangram\bin\pangram.exe"
+            & "release-artifacts/pangram-installer.ps1"
             if ((& $destination --version) -ne "pangram $env:VERSION") {
               throw "installed binary version mismatch"
             }
@@ -323,12 +389,7 @@ jobs:
             # Windows replacement finishes in a child process after this
             # candidate exits, so wait for its smoke-tested receipt publication.
             Start-Sleep -Seconds 1
-            & (Join-Path $root "pangram.exe") __pangram-direct-install `
-              --manifest release-artifacts/pangram-update-manifest.json `
-              --signature release-artifacts/pangram-update-manifest.json.sig `
-              --archive $archive `
-              --destination $destination
-            if ($LASTEXITCODE -ne 0) { throw "direct installer refused receipt-owned replacement" }
+            & "release-artifacts/pangram-installer.ps1"
             $deadline = [DateTime]::UtcNow.AddSeconds(30)
             do {
               $replacementReceipt = Get-Content -LiteralPath $receipt -Raw
@@ -345,6 +406,11 @@ jobs:
               throw "replacement receipt was not finalized"
             }
           } finally {
+            Remove-Item Function:\Invoke-WebRequest -Force -ErrorAction SilentlyContinue
+            if ($null -ne $server -and -not $server.HasExited) {
+              Stop-Process -Id $server.Id -Force
+              $server.WaitForExit()
+            }
             Remove-Item -LiteralPath $root -Recurse -Force
             Remove-Item -LiteralPath $receipt, $pendingReceipt -Force -ErrorAction SilentlyContinue
           }

@@ -64,9 +64,16 @@ for (const template of [
 
 const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
 const signedReplacementSmoke =
-  "Run the signed direct-install and receipt-owned replacement smoke test";
+  "Run the public signed installer and receipt-owned replacement smoke test";
 if (releaseWorkflow.split(signedReplacementSmoke).length - 1 !== 2) {
-  throw new Error("release workflow must prove signed replacement on Unix and Windows");
+  throw new Error("release workflow must prove the public installers on Unix and Windows");
+}
+if (
+  !releaseWorkflow.includes("sh release-artifacts/pangram-installer.sh") ||
+  !releaseWorkflow.includes('& "release-artifacts/pangram-installer.ps1"') ||
+  releaseWorkflow.includes("__pangram-direct-install")
+) {
+  throw new Error("release workflow bypasses a generated public installer");
 }
 if (
   !releaseWorkflow.includes('! cmp -s "$root/initial-receipt.json" "$receipt"') ||
