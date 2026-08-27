@@ -11,6 +11,7 @@ $root = Join-Path $env:RUNNER_TEMP ("pangram-scoop-" + [Guid]::NewGuid().ToStrin
 New-Item -ItemType Directory -Path $root | Out-Null
 
 $server = $null
+$current = $null
 try {
   $manifest = Join-Path $root "pangram.json"
   $archiveName = "pangram-v$Version-x86_64-pc-windows-msvc.zip"
@@ -43,6 +44,7 @@ try {
 
   $env:SCOOP = Join-Path $root "scoop"
   $env:SCOOP_GLOBAL = Join-Path $root "global"
+  $current = Join-Path $env:SCOOP "apps\pangram\current"
   New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "buckets") | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "shims") | Out-Null
   $scoop = Join-Path $scoopSource "bin/scoop.ps1"
@@ -54,11 +56,17 @@ try {
   if ($installed -ne "pangram $Version") {
     throw "Scoop-installed binary version mismatch"
   }
-  & $scoop uninstall pangram | Out-Null
 } finally {
   if ($null -ne $server -and -not $server.HasExited) {
     Stop-Process -Id $server.Id -Force
     $server.WaitForExit()
+  }
+  # Scoop marks its current-version junction read-only. Remove that junction
+  # directly before deleting the isolated smoke root.
+  if ($null -ne $current -and (Test-Path -LiteralPath $current)) {
+    & attrib.exe -R $current /L
+    if ($LASTEXITCODE -ne 0) { throw "failed to make the Scoop junction removable" }
+    [IO.Directory]::Delete($current)
   }
   Remove-Item -LiteralPath $root -Recurse -Force
 }
