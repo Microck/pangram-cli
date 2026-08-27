@@ -130,6 +130,7 @@ for (const [script, contents, requiredProofs] of [
     "scripts/smoke-scoop-release.ps1",
     scoopSmoke,
     [
+      'New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "buckets")',
       "& $scoop install --no-update-scoop $manifest",
       '(Join-Path $env:SCOOP "shims/pangram.exe") --version',
       '$installed -ne "pangram $Version"',
