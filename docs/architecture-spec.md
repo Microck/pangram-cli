@@ -719,9 +719,12 @@ Download to the destination filesystem, verify, set executable permissions,
 and atomically replace. Platform-specific replacement behavior remains behind
 the updater module.
 
-Windows replacement uses the verified new executable as a narrowly scoped
-post-parent helper. Receipt state advances only after replacement and a version
-smoke test. There is no installed-version collection or automatic rollback.
+Windows self-replacement uses the verified new executable as a narrowly scoped
+post-parent helper because the running installed binary locks its own path. A
+versioned installer runs from a distinct extracted archive candidate, so it
+replaces the destination synchronously and publishes the receipt before it
+returns. Receipt state advances only after replacement and a version smoke
+test. There is no installed-version collection or automatic rollback.
 
 ## 16. Documentation and generated contracts
 

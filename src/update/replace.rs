@@ -25,6 +25,11 @@ pub enum DirectReplacement {
     ReplacementStarted(InstallReceipt),
 }
 
+enum ReplacementContext {
+    RunningExecutable,
+    ExternalCandidate,
+}
+
 impl<'a> DirectUpdateCandidate<'a> {
     #[must_use]
     pub const fn new(
@@ -58,7 +63,13 @@ pub fn replace_direct_install(
         return Err(replace_error());
     }
 
-    replace_owned_direct_install(current_executable, receipt_path, target, candidate)
+    replace_owned_direct_install(
+        current_executable,
+        receipt_path,
+        target,
+        candidate,
+        ReplacementContext::RunningExecutable,
+    )
 }
 
 /// Installs a verified candidate into an empty destination or replaces an
@@ -86,7 +97,13 @@ pub fn install_direct_candidate(
             if !smoke_version(destination, receipt.installed_version()) {
                 return Err(not_owned_error());
             }
-            replace_owned_direct_install(destination, receipt_path, target, candidate)
+            replace_owned_direct_install(
+                destination,
+                receipt_path,
+                target,
+                candidate,
+                ReplacementContext::ExternalCandidate,
+            )
         }
         _ => Err(not_owned_error()),
     }
@@ -97,6 +114,7 @@ fn replace_owned_direct_install(
     receipt_path: &Path,
     target: Target,
     candidate: DirectUpdateCandidate<'_>,
+    context: ReplacementContext,
 ) -> Result<DirectReplacement, UpdateError> {
     let staged_executable = stage_executable(current_executable, candidate.executable)?;
     if !smoke_version(&staged_executable, candidate.version) {
@@ -114,37 +132,36 @@ fn replace_owned_direct_install(
     let pending_receipt = pending_receipt_path(receipt_path)?;
     write_pending_receipt(&pending_receipt, &new_receipt)?;
 
+    #[cfg(windows)]
+    if matches!(context, ReplacementContext::RunningExecutable) {
+        if let Err(error) = spawn_windows_replacer(
+            &staged_executable,
+            current_executable,
+            receipt_path,
+            candidate.version,
+            target,
+        ) {
+            let _ = fs::remove_file(&staged_executable);
+            let _ = fs::remove_file(&pending_receipt);
+            return Err(error);
+        }
+        return Ok(DirectReplacement::ReplacementStarted(new_receipt));
+    }
     #[cfg(unix)]
+    let _ = context;
+
     if let Err(error) = replace_platform(current_executable, &staged_executable) {
         let _ = fs::remove_file(&staged_executable);
         let _ = fs::remove_file(&pending_receipt);
         return Err(error);
     }
-    #[cfg(windows)]
-    if let Err(error) = spawn_windows_replacer(
-        &staged_executable,
-        current_executable,
-        receipt_path,
-        candidate.version,
-        target,
-    ) {
-        let _ = fs::remove_file(&staged_executable);
-        let _ = fs::remove_file(&pending_receipt);
-        return Err(error);
+    if !smoke_version(current_executable, candidate.version) {
+        // The pending protected receipt is deliberate recovery state. A later
+        // finalization attempt needs no download or second replacement.
+        return Err(replace_error());
     }
-    #[cfg(unix)]
-    {
-        if !smoke_version(current_executable, candidate.version) {
-            // The pending protected receipt is deliberate recovery state. A later
-            // finalization attempt needs no download or second replacement.
-            return Err(replace_error());
-        }
-        publish_pending_receipt(&pending_receipt, receipt_path)?;
-    }
-    #[cfg(unix)]
-    return Ok(DirectReplacement::Completed(new_receipt));
-    #[cfg(windows)]
-    Ok(DirectReplacement::ReplacementStarted(new_receipt))
+    publish_pending_receipt(&pending_receipt, receipt_path)?;
+    Ok(DirectReplacement::Completed(new_receipt))
 }
 
 fn install_initial_direct(
@@ -338,6 +355,11 @@ fn replace_platform(destination: &Path, staged: &Path) -> Result<(), UpdateError
     fs::rename(staged, destination).map_err(|_| replace_error())?;
     sync_parent_directory(destination);
     Ok(())
+}
+
+#[cfg(windows)]
+fn replace_platform(destination: &Path, staged: &Path) -> Result<(), UpdateError> {
+    replace_file_windows(destination, staged)
 }
 
 #[cfg(windows)]
