@@ -130,7 +130,7 @@ for (const [script, contents, requiredProofs] of [
     "scripts/smoke-scoop-release.ps1",
     scoopSmoke,
     [
-      "& $scoop install $manifest",
+      "& $scoop install --no-update-scoop $manifest",
       '(Join-Path $env:SCOOP "shims/pangram.exe") --version',
       '$installed -ne "pangram $Version"',
       "& $scoop uninstall pangram",
@@ -142,6 +142,9 @@ for (const [script, contents, requiredProofs] of [
       throw new Error(`${script} is missing channel proof: ${requiredProof}`);
     }
   }
+}
+if (homebrewSmoke.includes("HOMEBREW_NO_INSTALL_FROM_API")) {
+  throw new Error("Homebrew smoke must allow API-backed core metadata");
 }
 if (
   !releaseWorkflow.includes('! cmp -s "$root/initial-receipt.json" "$receipt"') ||

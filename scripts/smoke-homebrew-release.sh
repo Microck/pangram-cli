@@ -23,7 +23,6 @@ export HOMEBREW_CACHE="$root/cache"
 export HOMEBREW_NO_AUTO_UPDATE=1
 export HOMEBREW_NO_ENV_HINTS=1
 export HOMEBREW_NO_INSTALL_CLEANUP=1
-export HOMEBREW_NO_INSTALL_FROM_API=1
 
 brew tap-new --no-git "$tap"
 formula="$(brew --repository "$tap")/Formula/pangram.rb"
