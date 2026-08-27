@@ -1,6 +1,7 @@
 import { access, readFile, readdir } from 'node:fs/promises';
-import { dirname, extname, join, normalize, relative, sep } from 'node:path';
+import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkDocumentationLinks } from './check-external-links.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const docsRoot = join(root, 'docs-app');
@@ -22,6 +23,24 @@ async function files(directory) {
 }
 
 const docsFiles = await files(docsRoot);
+const contentMarkdownFiles = docsFiles
+  .filter((path) => path.startsWith(`${contentRoot}${sep}`))
+  .filter((path) => ['.md', '.mdx'].includes(extname(path)));
+const externalLinkFiles = [
+  join(root, 'README.md'),
+  ...(await files(join(root, 'docs'))).filter((path) => extname(path) === '.md'),
+  ...contentMarkdownFiles,
+];
+failures.push(
+  ...(await checkDocumentationLinks(externalLinkFiles, {
+    displayRoot: root,
+    sitePages: [{ path: '/', file: join(docsRoot, 'app/page.tsx') }],
+    siteRoots: [
+      { prefix: '/docs', root: contentRoot, sourceExtensions: ['.md', '.mdx'] },
+      { prefix: '/', root: join(docsRoot, 'public') },
+    ],
+  })),
+);
 for (const path of docsFiles) {
   const text = await readFile(path, 'utf8');
   if (/[^\x00-\x7F]/.test(text)) failures.push(`${relative(root, path)} contains non-ASCII text`);
@@ -29,22 +48,13 @@ for (const path of docsFiles) {
   for (const match of text.matchAll(/^pangram ([a-z][a-z-]*)(?:\s|$)/gm)) {
     if (!commands.has(match[1])) failures.push(`${relative(root, path)} names unknown command ${match[1]}`);
   }
-  for (const match of text.matchAll(/\]\((\.\.?\/[^)#]+)(?:#[^)]+)?\)/g)) {
-    const target = normalize(join(dirname(path), match[1]));
-    const candidates = [target, `${target}.mdx`, `${target}.md`, join(target, 'index.mdx')];
-    if (!(await Promise.any(candidates.map((candidate) => access(candidate))).then(() => true, () => false))) {
-      failures.push(`${relative(root, path)} has unresolved link ${match[1]}`);
-    }
-  }
 }
 
 for (const output of ['llms.txt', 'llms-full.txt']) {
   await access(join(root, 'docs-app/public', output)).catch(() => failures.push(`missing ${output}`));
 }
 
-const pagePaths = docsFiles
-  .filter((path) => path.startsWith(`${contentRoot}${sep}`))
-  .filter((path) => ['.md', '.mdx'].includes(extname(path)))
+const pagePaths = contentMarkdownFiles
   .map((path) => relative(contentRoot, path).replaceAll('\\', '/').replace(/\.mdx?$/, '.md'))
   .sort();
 const markdownRoot = join(root, 'docs-app/public/markdown');

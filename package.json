@@ -11,7 +11,7 @@
   },
   "scripts": {
     "docs:build": "npm run generate -w docs-app && npm run build -w docs-app",
-    "docs:check": "npm run docs:generate && node scripts/check-docs.mjs && npm run check -w docs-app",
+    "docs:check": "npm run docs:generate && node --test scripts/check-docs.test.mjs && node scripts/check-docs.mjs && npm run check -w docs-app",
     "docs:generate": "node scripts/generate-docs.mjs",
     "docs:typecheck": "npm run generate -w docs-app && npm run typecheck -w docs-app",
     "packages:check": "node scripts/check-packaging.mjs",
@@ -22,7 +22,13 @@
   "devDependencies": {
     "@kitlangton/terminal-control": "0.6.0",
     "@modelcontextprotocol/conformance": "0.2.0-alpha.11",
+    "parse5": "7.3.0",
+    "remark-gfm": "4.0.1",
+    "remark-mdx": "3.1.1",
+    "remark-parse": "11.0.0",
     "tegami": "1.4.0",
+    "unified": "11.0.5",
+    "unist-util-visit": "5.1.0",
     "vitest": "3.2.7"
   }
 }
