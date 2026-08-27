@@ -46,7 +46,7 @@ try {
   New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "shims") | Out-Null
   $scoop = Join-Path $scoopSource "bin/scoop.ps1"
   & $scoop config aria2-enabled false | Out-Null
-  & $scoop install $manifest
+  & $scoop install --no-update-scoop $manifest
   if ($LASTEXITCODE -ne 0) { throw "Scoop refused the generated manifest" }
 
   $installed = & (Join-Path $env:SCOOP "shims/pangram.exe") --version
