@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Path $root | Out-Null
 
 $server = $null
 $current = $null
+$scoopRuntime = $null
 try {
   $manifest = Join-Path $root "pangram.json"
   $archiveName = "pangram-v$Version-x86_64-pc-windows-msvc.zip"
@@ -47,7 +48,13 @@ try {
   $current = Join-Path $env:SCOOP "apps\pangram\current"
   New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "buckets") | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $env:SCOOP "shims") | Out-Null
-  $scoop = Join-Path $scoopSource "bin/scoop.ps1"
+  # Scoop resolves its support files from its installed app directory, even
+  # when the entry point came from a separate checkout. Recreate the normal
+  # runtime layout from the pinned checkout so the smoke test stays offline.
+  $scoopRuntime = Join-Path $env:SCOOP "apps\scoop\current"
+  New-Item -ItemType Directory -Path (Split-Path -Parent $scoopRuntime) | Out-Null
+  New-Item -ItemType Junction -Path $scoopRuntime -Target $scoopSource | Out-Null
+  $scoop = Join-Path $scoopRuntime "bin/scoop.ps1"
   & $scoop config aria2-enabled false | Out-Null
   & $scoop install --no-update-scoop $manifest
   if ($LASTEXITCODE -ne 0) { throw "Scoop refused the generated manifest" }
@@ -61,12 +68,13 @@ try {
     Stop-Process -Id $server.Id -Force
     $server.WaitForExit()
   }
-  # Scoop marks its current-version junction read-only. Remove that junction
-  # directly before deleting the isolated smoke root.
-  if ($null -ne $current -and (Test-Path -LiteralPath $current)) {
-    & attrib.exe -R $current /L
+  # Remove current-version junctions directly before deleting the isolated
+  # smoke root. PowerShell cannot reliably remove these links on Windows.
+  foreach ($junction in @($current, $scoopRuntime)) {
+    if ($null -eq $junction -or -not (Test-Path -LiteralPath $junction)) { continue }
+    & attrib.exe -R $junction /L
     if ($LASTEXITCODE -ne 0) { throw "failed to make the Scoop junction removable" }
-    [IO.Directory]::Delete($current)
+    [IO.Directory]::Delete($junction)
   }
   Remove-Item -LiteralPath $root -Recurse -Force
 }
