@@ -76,23 +76,20 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             executable: pangram
-            packager: package-release
+            baseline_image: quay.io/pypa/manylinux2014_x86_64@sha256:edb6edbd84c2fa9d40ee83abb160e302ebce82eb93570d43343942a1fb10b962
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             executable: pangram
-            packager: package-release
+            baseline_image: quay.io/pypa/manylinux2014_aarch64@sha256:1145c233b5693c770b878d51e64261603b0d374942ff134d589656799f72e9f9
           - target: x86_64-apple-darwin
             os: macos-15-intel
             executable: pangram
-            packager: package-release
           - target: aarch64-apple-darwin
             os: macos-15
             executable: pangram
-            packager: package-release
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             executable: pangram.exe
-            packager: package-release.exe
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -104,17 +101,12 @@ jobs:
         with:
           toolchain: "1.97.1"
           targets: ${{ matrix.target }}
-      - name: Build and test the native release binary
-        shell: bash
-        run: |
-          cargo build --locked --release --target "${{ matrix.target }}" --bin pangram
-          "target/${{ matrix.target }}/release/${{ matrix.executable }}" --version
-          cargo build --locked --release --target "${{ matrix.target }}" \
-            --features dev-tools --bin package-release
-          "target/${{ matrix.target }}/release/${{ matrix.packager }}" \
-            --target "${{ matrix.target }}" \
-            --executable "target/${{ matrix.target }}/release/${{ matrix.executable }}" \
-            --out-dir release-artifacts
+      - name: Build and package the native release binary
+        uses: ./.github/actions/build-release-archive
+        with:
+          target: ${{ matrix.target }}
+          executable: ${{ matrix.executable }}
+          baseline-image: ${{ matrix.baseline_image }}
       - name: Upload target archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -146,6 +138,11 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: "1.97.1"
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+          cache: npm
       - name: Install cargo-about
         uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
         with:
@@ -173,6 +170,23 @@ jobs:
             --minimum-updater-version "1.0.0"
           node scripts/render-package-manifests.mjs release-artifacts "$VERSION"
           rm release-artifacts/*.artifact.json
+      - name: Pack staged npm and installer verification inputs
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-verification/npm
+          cp \
+            release-artifacts/pangram-update-manifest.json \
+            release-artifacts/pangram-update-manifest.json.sig \
+            release-artifacts/pangram-installer.sh \
+            release-artifacts/pangram-installer.ps1 \
+            release-artifacts/pangram.rb \
+            release-artifacts/pangram-scoop.json \
+            release-verification/
+          node scripts/stage-npm-packages.mjs release-artifacts "$VERSION"
+          npm run packages:check
+          node scripts/pack-npm-release.mjs release-verification/npm "$VERSION"
       - name: Generate third-party license notices
         run: >-
           cargo about generate about.hbs
@@ -203,11 +217,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pangram-release-verification
-          path: |
-            release-artifacts/pangram-update-manifest.json
-            release-artifacts/pangram-update-manifest.json.sig
-            release-artifacts/pangram-installer.sh
-            release-artifacts/pangram-installer.ps1
+          path: release-verification/
           if-no-files-found: error
 
   smoke:
@@ -229,6 +239,18 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+      - name: Check out pinned Scoop
+        if: runner.os == 'Windows'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ScoopInstaller/Scoop
+          ref: b588a06e41d920d2123ec70aee682bae14935939
+          path: .scoop
+          persist-credentials: false
       - name: Download target archive
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
@@ -413,6 +435,116 @@ jobs:
             }
             Remove-Item -LiteralPath $root -Recurse -Force
             Remove-Item -LiteralPath $receipt, $pendingReceipt -Force -ErrorAction SilentlyContinue
+          }
+      - name: Install the staged npm packages offline
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          trap 'rm -rf "$root"' EXIT
+          export npm_config_cache="$root/npm-cache"
+          packages="$GITHUB_WORKSPACE/release-artifacts/npm/packages.json"
+          native_package="$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.targets[process.env.TARGET] ?? "")' "$packages")"
+          wrapper_package="$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.wrapper)' "$packages")"
+          test -n "$native_package"
+          cd "$root"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund --offline --omit=optional \
+            "$GITHUB_WORKSPACE/release-artifacts/npm/$native_package" \
+            "$GITHUB_WORKSPACE/release-artifacts/npm/$wrapper_package"
+          test "$(node node_modules/@microck/pangram-cli/bin/pangram.js --version)" = \
+            "pangram ${VERSION}"
+      - name: Install and test the generated Homebrew formula
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          fi
+          root="$(mktemp -d)"
+          formula="$root/pangram.rb"
+          cp release-artifacts/pangram.rb "$formula"
+          python3 - "$formula" "$VERSION" "$PWD/release-artifacts" <<'PY'
+          import sys
+          from pathlib import Path
+
+          formula = Path(sys.argv[1])
+          version = sys.argv[2]
+          artifacts = Path(sys.argv[3]).resolve().as_uri()
+          production = f"https://github.com/Microck/pangram-cli/releases/download/v{version}"
+          contents = formula.read_text(encoding="utf-8")
+          if contents.count(production) != 4:
+              raise SystemExit("generated Homebrew formula has an unexpected release URL set")
+          formula.write_text(contents.replace(production, artifacts), encoding="utf-8")
+          PY
+          export HOMEBREW_CACHE="$root/cache"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_ENV_HINTS=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+          export HOMEBREW_NO_INSTALL_FROM_API=1
+          trap 'brew uninstall --force pangram >/dev/null 2>&1 || true; rm -rf "$root"' EXIT
+          brew install --formula "$formula"
+          brew test pangram
+          test "$("$(brew --prefix pangram)/bin/pangram" --version)" = "pangram ${VERSION}"
+      - name: Install the generated Scoop manifest
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ("pangram-scoop-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $manifest = Join-Path $root "pangram.json"
+          $archiveName = "pangram-v$env:VERSION-x86_64-pc-windows-msvc.zip"
+          $productionUrl = "https://github.com/Microck/pangram-cli/releases/download/v$env:VERSION/$archiveName"
+          $serverOrigin = "http://127.0.0.1:18765"
+          $contents = Get-Content -LiteralPath "release-artifacts/pangram-scoop.json" -Raw
+          if ([regex]::Matches($contents, [regex]::Escape($productionUrl)).Count -ne 1) {
+            throw "generated Scoop manifest has an unexpected release URL set"
+          }
+          $contents.Replace($productionUrl, "$serverOrigin/$archiveName") |
+            Set-Content -LiteralPath $manifest -Encoding utf8
+          $server = $null
+          try {
+            $server = Start-Process -FilePath (Get-Command python).Source -ArgumentList @(
+              "-m", "http.server", "18765", "--bind", "127.0.0.1",
+              "--directory", (Resolve-Path "release-artifacts").Path
+            ) -RedirectStandardOutput (Join-Path $root "http.stdout.log") `
+              -RedirectStandardError (Join-Path $root "http.stderr.log") -PassThru
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 50; $attempt++) {
+              try {
+                Microsoft.PowerShell.Utility\Invoke-WebRequest -UseBasicParsing `
+                  -Method Head -Uri "$serverOrigin/$archiveName" | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 100
+              }
+            }
+            if (-not $ready) { throw "local release server did not start" }
+            $env:SCOOP = (Resolve-Path ".scoop").Path
+            $env:SCOOP_GLOBAL = Join-Path $root "global"
+            & ".scoop/bin/scoop.ps1" config aria2-enabled false | Out-Null
+            & ".scoop/bin/scoop.ps1" install $manifest
+            if ($LASTEXITCODE -ne 0) { throw "Scoop refused the generated manifest" }
+            $installed = & ".scoop/shims/pangram.exe" --version
+            if ($installed -ne "pangram $env:VERSION") {
+              throw "Scoop-installed binary version mismatch"
+            }
+            & ".scoop/bin/scoop.ps1" uninstall pangram | Out-Null
+          } finally {
+            if ($null -ne $server -and -not $server.HasExited) {
+              Stop-Process -Id $server.Id -Force
+              $server.WaitForExit()
+            }
+            Remove-Item -LiteralPath $root -Recurse -Force
           }
 
   publish-release:

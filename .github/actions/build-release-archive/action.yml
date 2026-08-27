@@ -1,0 +1,54 @@
+name: Build release archive
+description: Build, baseline-test, and package one native Pangram release target
+
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+  executable:
+    description: Target executable name
+    required: true
+  baseline-image:
+    description: Digest-pinned glibc 2.17 image for Linux targets
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Zig
+      if: runner.os == 'Linux'
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+      with:
+        version: 0.15.2
+    - name: Install cargo-zigbuild
+      if: runner.os == 'Linux'
+      uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf
+      with:
+        tool: cargo-zigbuild@0.23.2
+    - name: Build and package the native release binary
+      shell: bash
+      env:
+        BASELINE_IMAGE: ${{ inputs.baseline-image }}
+        EXECUTABLE: ${{ inputs.executable }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        if [[ "$TARGET" == *-unknown-linux-gnu ]]; then
+          cargo zigbuild --locked --release --target "${TARGET}.2.17" --bin pangram
+          docker run --rm --volume "$PWD:/work:ro" "$BASELINE_IMAGE" \
+            /bin/bash -c 'test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.17"; "$1" --version' \
+            bash "/work/target/$TARGET/release/$EXECUTABLE"
+        else
+          cargo build --locked --release --target "$TARGET" --bin pangram
+        fi
+        "target/$TARGET/release/$EXECUTABLE" --version
+        cargo build --locked --release --features dev-tools --bin package-release
+        packager=target/release/package-release
+        if [[ "$TARGET" == *-windows-* ]]; then
+          packager+=.exe
+        fi
+        "$packager" \
+          --target "$TARGET" \
+          --executable "target/$TARGET/release/$EXECUTABLE" \
+          --out-dir release-artifacts

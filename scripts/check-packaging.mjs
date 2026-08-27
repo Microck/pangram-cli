@@ -62,7 +62,13 @@ for (const template of [
   }
 }
 
+const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
+const releaseBuildAction = await readFile(
+  ".github/actions/build-release-archive/action.yml",
+  "utf8",
+);
 const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
+const npmPackScript = await readFile("scripts/pack-npm-release.mjs", "utf8");
 const signedReplacementSmoke =
   "Run the public signed installer and receipt-owned replacement smoke test";
 if (releaseWorkflow.split(signedReplacementSmoke).length - 1 !== 2) {
@@ -74,6 +80,39 @@ if (
   releaseWorkflow.includes("__pangram-direct-install")
 ) {
   throw new Error("release workflow bypasses a generated public installer");
+}
+if (
+  !ciWorkflow.includes("uses: ./.github/actions/build-release-archive") ||
+  !releaseWorkflow.includes("uses: ./.github/actions/build-release-archive")
+) {
+  throw new Error("CI and release workflows must use the canonical release build action");
+}
+for (const requiredBuildProof of [
+  'cargo zigbuild --locked --release --target "${TARGET}.2.17" --bin pangram',
+  'test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.17"',
+]) {
+  if (!releaseBuildAction.includes(requiredBuildProof)) {
+    throw new Error(`release build action is missing proof: ${requiredBuildProof}`);
+  }
+}
+if (
+  !npmPackScript.includes('from "./release-platforms.mjs"') ||
+  !npmPackScript.includes('resolve(destination, "packages.json")') ||
+  !releaseWorkflow.includes(
+    'node scripts/pack-npm-release.mjs release-verification/npm "$VERSION"',
+  )
+) {
+  throw new Error("release workflow does not pack npm targets from the canonical platform map");
+}
+for (const requiredChannelProof of [
+  "npm install --ignore-scripts --no-audit --no-fund --offline --omit=optional",
+  'brew install --formula "$formula"',
+  "brew test pangram",
+  '& ".scoop/bin/scoop.ps1" install $manifest',
+]) {
+  if (!releaseWorkflow.includes(requiredChannelProof)) {
+    throw new Error(`release workflow is missing channel proof: ${requiredChannelProof}`);
+  }
 }
 if (
   !releaseWorkflow.includes('! cmp -s "$root/initial-receipt.json" "$receipt"') ||

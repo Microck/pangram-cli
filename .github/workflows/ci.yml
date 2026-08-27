@@ -248,27 +248,24 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             executable: pangram
-            packager: package-release
             extension: tar.xz
+            baseline_image: quay.io/pypa/manylinux2014_x86_64@sha256:edb6edbd84c2fa9d40ee83abb160e302ebce82eb93570d43343942a1fb10b962
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             executable: pangram
-            packager: package-release
             extension: tar.xz
+            baseline_image: quay.io/pypa/manylinux2014_aarch64@sha256:1145c233b5693c770b878d51e64261603b0d374942ff134d589656799f72e9f9
           - target: x86_64-apple-darwin
             os: macos-15-intel
             executable: pangram
-            packager: package-release
             extension: tar.xz
           - target: aarch64-apple-darwin
             os: macos-15
             executable: pangram
-            packager: package-release
             extension: tar.xz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             executable: pangram.exe
-            packager: package-release.exe
             extension: zip
     steps:
       - name: Check out repository
@@ -280,23 +277,20 @@ jobs:
         with:
           toolchain: "1.97.1"
           targets: ${{ matrix.target }}
-      - name: Build, package, and run the native archive
+      - name: Build and package the native release binary
+        uses: ./.github/actions/build-release-archive
+        with:
+          target: ${{ matrix.target }}
+          executable: ${{ matrix.executable }}
+          baseline-image: ${{ matrix.baseline_image }}
+      - name: Run the native archive
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           EXECUTABLE: ${{ matrix.executable }}
-          PACKAGER: ${{ matrix.packager }}
           EXTENSION: ${{ matrix.extension }}
         run: |
           set -euo pipefail
-          cargo build --locked --release --target "$TARGET" --bin pangram
-          "target/$TARGET/release/$EXECUTABLE" --version
-          cargo build --locked --release --target "$TARGET" \
-            --features dev-tools --bin package-release
-          "target/$TARGET/release/$PACKAGER" \
-            --target "$TARGET" \
-            --executable "target/$TARGET/release/$EXECUTABLE" \
-            --out-dir release-artifacts
           version="$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
           mkdir extracted
           archive="release-artifacts/pangram-v${version}-$TARGET.$EXTENSION"
