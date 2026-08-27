@@ -402,7 +402,7 @@ fn rewrite_dacl_appending_world_ace(
 /// The contract under test is that `read()` fails closed when the DACL is not
 /// an exact owner-only protected DACL. The original implementation only
 /// cleared `PROTECTED_DACL_SECURITY_INFORMATION` and assumed the tempdir's
-/// ancestry would then flow inherited ACEs in. On GitHub `windows-latest`
+/// ancestry would then flow inherited ACEs in. On GitHub `windows-2025`
 /// runners the temp directory carries no inheritable ACEs, so the post-state
 /// still read as an exact owner-only DACL with just the protected bit cleared,
 /// which is a *different* state than the one the test intends to build.

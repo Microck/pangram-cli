@@ -71,6 +71,11 @@ const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
 const npmPackScript = await readFile("scripts/pack-npm-release.mjs", "utf8");
 const homebrewSmoke = await readFile("scripts/smoke-homebrew-release.sh", "utf8");
 const scoopSmoke = await readFile("scripts/smoke-scoop-release.ps1", "utf8");
+const platformReference = await readFile(
+  "docs-app/content/docs/reference/platforms-packages.mdx",
+  "utf8",
+);
+const platformContract = await readFile("docs/contracts.md", "utf8");
 const signedReplacementSmoke =
   "Run the public signed installer and receipt-owned replacement smoke test";
 if (releaseWorkflow.split(signedReplacementSmoke).length - 1 !== 2) {
@@ -113,6 +118,22 @@ for (const requiredChannelProof of [
 ]) {
   if (!releaseWorkflow.includes(requiredChannelProof)) {
     throw new Error(`release workflow is missing channel proof: ${requiredChannelProof}`);
+  }
+}
+for (const platform of releasePlatforms) {
+  const nativeLane = new RegExp(
+    `^\\s*-\\s+target:\\s+${platform.target}\\s*$\\n^\\s+os:\\s+${platform.runner}\\s*$`,
+    "gm",
+  );
+  const referenceRow = `| ${platform.platform} | ${platform.minimumRuntime} |`;
+  const contractRow = `| \`${platform.target}\` | ${platform.minimumRuntime} |`;
+  if (
+    (releaseWorkflow.match(nativeLane)?.length ?? 0) !== 2 ||
+    (ciWorkflow.match(nativeLane)?.length ?? 0) !== 1 ||
+    !platformReference.includes(referenceRow) ||
+    !platformContract.includes(contractRow)
+  ) {
+    throw new Error(`${platform.target} support must match its native evidence`);
   }
 }
 for (const [script, contents, requiredProofs] of [

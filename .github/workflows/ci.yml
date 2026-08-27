@@ -213,7 +213,7 @@ jobs:
 
   windows-credential-acl:
     name: Windows credential ACL
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Check out repository
         # actions/checkout v7.0.1
@@ -264,7 +264,7 @@ jobs:
             executable: pangram
             extension: tar.xz
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2025
             executable: pangram.exe
             extension: zip
     steps:
