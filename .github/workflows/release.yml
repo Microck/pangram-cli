@@ -262,9 +262,8 @@ jobs:
             --archive "$archive" \
             --destination "$destination"
           test "$("$destination" --version)" = "pangram ${VERSION}"
-          mapfile -t receipts < <(find "$root" -name install-receipt.json -type f)
-          test "${#receipts[@]}" = 1
-          receipt="${receipts[0]}"
+          test "$(find "$root" -name install-receipt.json -type f | wc -l | tr -d ' ')" = 1
+          receipt="$(find "$root" -name install-receipt.json -type f)"
           cp "$receipt" "$root/initial-receipt.json"
 
           # A second run must enter the receipt-owned replacement path and
@@ -298,7 +297,8 @@ jobs:
           try {
             $archive = "release-artifacts/pangram-v$env:VERSION-$env:TARGET.zip"
             Expand-Archive -LiteralPath $archive -DestinationPath $root
-            $env:LOCALAPPDATA = Join-Path $root "data"
+            $env:APPDATA = Join-Path $root "data\roaming"
+            $env:LOCALAPPDATA = Join-Path $root "data\local"
             $destination = Join-Path $root "install\pangram.exe"
             & (Join-Path $root "pangram.exe") __pangram-direct-install `
               --manifest release-artifacts/pangram-update-manifest.json `
