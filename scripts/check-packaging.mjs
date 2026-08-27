@@ -69,6 +69,8 @@ const releaseBuildAction = await readFile(
 );
 const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
 const npmPackScript = await readFile("scripts/pack-npm-release.mjs", "utf8");
+const homebrewSmoke = await readFile("scripts/smoke-homebrew-release.sh", "utf8");
+const scoopSmoke = await readFile("scripts/smoke-scoop-release.ps1", "utf8");
 const signedReplacementSmoke =
   "Run the public signed installer and receipt-owned replacement smoke test";
 if (releaseWorkflow.split(signedReplacementSmoke).length - 1 !== 2) {
@@ -106,12 +108,39 @@ if (
 }
 for (const requiredChannelProof of [
   "npm install --ignore-scripts --no-audit --no-fund --offline --omit=optional",
-  'brew install --formula "$formula"',
-  "brew test pangram",
-  '& ".scoop/bin/scoop.ps1" install $manifest',
+  'bash release-artifacts/smoke-homebrew-release.sh release-artifacts "$VERSION"',
+  '& "release-artifacts/smoke-scoop-release.ps1"',
 ]) {
   if (!releaseWorkflow.includes(requiredChannelProof)) {
     throw new Error(`release workflow is missing channel proof: ${requiredChannelProof}`);
+  }
+}
+for (const [script, contents, requiredProofs] of [
+  [
+    "scripts/smoke-homebrew-release.sh",
+    homebrewSmoke,
+    [
+      'brew tap-new --no-git "$tap"',
+      'brew install "$tap/pangram"',
+      'brew test "$tap/pangram"',
+      '"pangram ${version}"',
+    ],
+  ],
+  [
+    "scripts/smoke-scoop-release.ps1",
+    scoopSmoke,
+    [
+      "& $scoop install $manifest",
+      '(Join-Path $env:SCOOP "shims/pangram.exe") --version',
+      '$installed -ne "pangram $Version"',
+      "& $scoop uninstall pangram",
+    ],
+  ],
+]) {
+  for (const requiredProof of requiredProofs) {
+    if (!contents.includes(requiredProof)) {
+      throw new Error(`${script} is missing channel proof: ${requiredProof}`);
+    }
   }
 }
 if (
