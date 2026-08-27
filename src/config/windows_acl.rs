@@ -78,7 +78,7 @@ pub fn set_owner_only_acl(path: &Path) -> Result<(), ConfigError> {
 /// step, and the file lives in a user-private configuration directory, the
 /// exposure window contains no credential material. A handle-bound
 /// `SetSecurityInfo` apply was considered but rejected: it failed empirically
-/// on the native `windows-latest` gate (RestrictionFailed on every store), so
+/// on the native `windows-2025` gate (RestrictionFailed on every store), so
 /// the proven by-name path is retained.
 pub fn restrict_handle_permissions(file: &File) -> Result<(), ConfigError> {
     use std::os::windows::io::AsRawHandle;

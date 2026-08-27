@@ -2180,6 +2180,26 @@ then-current default branch head. Its notes file is generated at runtime from
 the exact version section in the Tegami-owned root `CHANGELOG.md`; a missing or
 mismatched section fails before tag or release creation.
 
+### 14.11 Platform support baseline
+
+The public release supports a target only after its exact archive passes the
+required native evidence at or below the minimum runtime baseline:
+
+| Target | Minimum runtime baseline | Required release evidence |
+| --- | --- | --- |
+| `x86_64-unknown-linux-gnu` | glibc 2.17 | build plus native x86_64 smoke test in a digest-pinned manylinux2014 environment |
+| `aarch64-unknown-linux-gnu` | glibc 2.17 | build plus native ARM64 smoke test in a digest-pinned manylinux2014 environment |
+| `x86_64-apple-darwin` | macOS 15 | native x86_64 smoke test on `macos-15-intel` |
+| `aarch64-apple-darwin` | macOS 15 | native Apple Silicon smoke test on `macos-15` |
+| `x86_64-pc-windows-msvc` | Windows Server 2025 | native Windows x64 smoke test on `windows-2025` |
+
+These are Pangram CLI support claims, not cross-compiler target baselines. A
+deployment-target flag, symbol scan, or run on a newer environment does not
+replace the required native evidence. If the minimum-version environment is
+unavailable, narrow this contract before publishing rather than substituting
+cross-build evidence. The Linux contract claims a glibc baseline only; it does
+not claim an untested minimum kernel version.
+
 ## 15. Local setup contract
 
 The configuration, credential, and diagnostics contract is normative in

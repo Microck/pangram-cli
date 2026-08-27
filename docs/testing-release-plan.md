@@ -692,23 +692,21 @@ channels.
 
 ## 20.1 Platform support baseline
 
-| Target | Minimum runtime baseline | Required release evidence |
-| --- | --- | --- |
-| `x86_64-unknown-linux-gnu` | Linux kernel 3.2 and glibc 2.17 | build plus native smoke test in a glibc 2.17 environment |
-| `aarch64-unknown-linux-gnu` | Linux kernel 4.1 and glibc 2.17 | build plus native ARM64 smoke test in a glibc 2.17 environment |
-| `x86_64-apple-darwin` | macOS 10.12 | native x86_64 smoke test at the declared deployment target |
-| `aarch64-apple-darwin` | macOS 11.0 | native Apple Silicon smoke test |
-| `x86_64-pc-windows-msvc` | Windows 10 or Windows Server 2016 | native Windows x64 smoke test |
-
-These are Rust target baselines, not proof of Pangram CLI support. A target is
-publicly supported only after its native release evidence passes. If the
-required minimum-version environment is unavailable, narrow the published
-claim rather than substituting a cross-build.
+The public minimum runtime baselines and required native evidence are
+normative in [the observable contract](contracts.md#1411-platform-support-baseline).
+The macOS build and install-smoke lanes run on `macos-15-intel` and `macos-15`,
+the oldest standard native environments available to this repository. Windows
+build, install-smoke, and ACL lanes use the stable `windows-2025` label rather
+than the moving `windows-latest` alias. If a required native environment
+becomes unavailable, narrow the observable contract before publishing rather
+than substituting a deployment-target flag or cross-build.
 
 Linux release binaries target glibc 2.17 explicitly and then run unchanged on
 their native architecture inside a digest-pinned manylinux2014 container. The
 container MUST report `glibc 2.17` before its version smoke test. A symbol scan
-or successful run on a newer distribution does not replace this evidence.
+or successful run on a newer distribution does not replace this evidence. It
+does not establish a minimum Linux kernel version, so the public contract does
+not claim one.
 
 ## 21. Public release blockers
 
