@@ -454,7 +454,12 @@ Verify:
 - examples validate against schemas
 - commands and flags exist
 - blocked features are labeled
-- links return expected content
+- relative links resolve inside the repository
+- prose HTTPS links in `README.md`, `docs/**/*.md`, and Fumadocs Markdown or
+  MDX sources resolve through redirects to a 2xx or 3xx response
+- fenced and inline code are excluded from link discovery; transient network,
+  429, and 5xx failures receive bounded retries
+- `pangram.micr.dev` is the only external-link exclusion before deployment
 - Fumadocs typecheck and build
 - local search index
 - `llms.txt` and `llms-full.txt`
