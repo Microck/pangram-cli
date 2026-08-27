@@ -1,0 +1,21 @@
+core:changelogs:
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: minor\n  npm:@microck/pangram-cli:\n    type: minor\n---\n\n## Added\n\n- Analyze text, files, and bulk jobs with Pangram 4 from a JSON-first CLI.\n- Check plagiarism alone or alongside AI detection while preserving partial results.\n- Use the interactive Ratatui interface with mouse, keyboard, Vim bindings, history, settings, and the approved terminal fox intro.\n- Connect agents through a typed stdio MCP server with explicit file, history, mutation, and billing gates.\n- Store optional local history in a protected SQLite database with search, export, rerun, and deletion controls.\n- Install signed native builds on Linux x64 and ARM64, macOS x64 and ARM64, and Windows x64 through direct installers, npm, Homebrew, or Scoop.\n- Generate shell completions for Bash, Zsh, Fish, PowerShell, and Elvish.\n\n## Changed\n\n- Require Pangram 4 for text analysis and estimate usage in started 100-word units before billable bulk work.\n- Keep history, public dashboard links, telemetry, and update-network access disabled by default.\n- Report ambiguous submissions and partial combined analyses without automatic billable retries.\n\n## Fixed\n\n- Bound synchronous file and plagiarism requests with the configured timeout.\n- Preserve the prior executable and install receipt when a signed replacement fails validation or smoke testing.\n- Reject unsupported hosts and malformed release archives before installation.\n\n## Security\n\n- Store API credentials with owner-only filesystem protections and keep secrets and submitted content out of logs and diagnostics.\n- Verify signed update metadata, archive shape, checksums, target identity, and executable bytes before installation or replacement.\n- Sanitize untrusted terminal and Markdown content before human-readable rendering.\n"
+    filename: initial-public-release.md
+    v: 0.0.0
+core:packages:
+  - id: npm:pangram-cli-development-tools
+    updated: false
+  - id: npm:@microck/pangram-docs
+    updated: false
+  - changelogIds:
+      - initial-public-release.md
+    id: npm:@microck/pangram-cli
+    updated: true
+  - changelogIds:
+      - initial-public-release.md
+    id: cargo:microck-pangram-cli
+    updated: true
+npm:packages:
+  - id: npm:pangram-cli-development-tools
+  - id: npm:@microck/pangram-docs
+  - id: npm:@microck/pangram-cli

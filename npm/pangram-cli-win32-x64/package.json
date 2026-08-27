@@ -4,8 +4,17 @@
   "description": "Unofficial Pangram CLI binary for Windows x64",
   "license": "MIT",
   "repository": "https://github.com/Microck/pangram-cli",
-  "os": ["win32"],
-  "cpu": ["x64"],
-  "files": ["bin", "NOTICE.md"],
-  "publishConfig": { "access": "public" }
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin",
+    "NOTICE.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
