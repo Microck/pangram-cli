@@ -1,6 +1,6 @@
 # Pangram CLI TUI architecture
 
-Status: approved for implementation
+Status: implemented and normative
 
 This document owns the TUI detail split from the main architecture
 specification. The module boundaries and cross-adapter rules remain in

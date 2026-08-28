@@ -2,11 +2,11 @@
 //!
 //! Every CI profile builds the real SQLite fixture through the production
 //! bulk reconciliation path and executes the representative indexed query.
-//! The wall-clock acceptance assertion is release-only because
-//! `docs/testing-release-plan.md` defines the budget for release builds on
-//! supported desktop hardware. It measures 30 warm queries after five
-//! explicit warm-ups and requires the observed p95 to remain below 100 ms;
-//! setup and fixture insertion are outside the timed region.
+//! The wall-clock acceptance assertion is release-only because debug builds
+//! are not representative of supported desktop performance. It measures 30
+//! warm queries after five explicit warm-ups and requires the observed p95 to
+//! remain below 100 ms; setup and fixture insertion are outside the timed
+//! region.
 
 #![forbid(unsafe_code)]
 

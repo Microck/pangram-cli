@@ -1,6 +1,6 @@
 # Pangram CLI local-setup contract
 
-Status: approved for implementation
+Status: implemented and normative
 Schema major: `"1"`
 
 This file is the contract owner for local configuration, credential
