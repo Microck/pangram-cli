@@ -206,31 +206,40 @@
   ],
   "exit_codes": [
     {
-      "code": 0
+      "code": 0,
+      "description": "success"
     },
     {
-      "code": 1
+      "code": 1,
+      "description": "general failure"
     },
     {
-      "code": 2
+      "code": 2,
+      "description": "invalid usage or input"
     },
     {
-      "code": 3
+      "code": 3,
+      "description": "partial analysis"
     },
     {
-      "code": 4
+      "code": 4,
+      "description": "authentication or permission failure"
     },
     {
-      "code": 5
+      "code": 5,
+      "description": "payment or rate-limit failure"
     },
     {
-      "code": 6
+      "code": 6,
+      "description": "network or upstream failure"
     },
     {
-      "code": 7
+      "code": 7,
+      "description": "local configuration, history, or update failure"
     },
     {
-      "code": 130
+      "code": 130,
+      "description": "interrupted"
     }
   ]
 }

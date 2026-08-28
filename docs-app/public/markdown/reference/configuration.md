@@ -4,7 +4,7 @@ Generated from Pangram CLI 0.1.0 and schema major 1.
 
 | Field | Type | Required |
 | --- | --- | --- |
-| `config_version` | object | yes |
+| `config_version` | integer (constant 1) | yes |
 | `history` | object | no |
 | `tui` | object | no |
 | `updates` | object | no |

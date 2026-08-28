@@ -134,6 +134,29 @@ fn every_json_artifact_declares_generated_rust_ownership() {
     }
 }
 
+#[test]
+fn generated_exit_codes_include_their_meanings() {
+    let reference = generated_json("generated/error-reference.json");
+    let exits = reference["exit_codes"]
+        .as_array()
+        .expect("error-reference.json has an exit_codes array");
+
+    assert_eq!(
+        exits,
+        &[
+            json!({"code": 0, "description": "success"}),
+            json!({"code": 1, "description": "general failure"}),
+            json!({"code": 2, "description": "invalid usage or input"}),
+            json!({"code": 3, "description": "partial analysis"}),
+            json!({"code": 4, "description": "authentication or permission failure"}),
+            json!({"code": 5, "description": "payment or rate-limit failure"}),
+            json!({"code": 6, "description": "network or upstream failure"}),
+            json!({"code": 7, "description": "local configuration, history, or update failure"}),
+            json!({"code": 130, "description": "interrupted"}),
+        ]
+    );
+}
+
 fn output_schema_value() -> Value {
     let GeneratedArtifact { bytes, .. } = generated_artifacts()
         .unwrap()

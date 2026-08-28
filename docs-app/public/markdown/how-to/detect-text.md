@@ -2,7 +2,7 @@
 
 ```bash
 pangram detect 'Synthetic text to inspect.' --max-billable-units 1
-printf '%s\n' 'Synthetic text to inspect.' | pangram - --max-billable-units 1
+printf '%s\n' 'Synthetic text to inspect.' | pangram detect - --max-billable-units 1
 ```
 
 Detection is billable. Input is redacted from normal output and is not saved

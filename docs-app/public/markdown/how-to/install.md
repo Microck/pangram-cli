@@ -2,7 +2,7 @@
 
 ## macOS or Linux
 
-Download the versioned installer, inspect it, and run it:
+Download the latest release installer, inspect it, and run it:
 
 ```bash
 curl --fail --location --silent --show-error \
@@ -16,7 +16,7 @@ The default executable path is `$HOME/.local/bin/pangram`.
 
 ## Windows
 
-Download the versioned installer, inspect it, and run it in PowerShell:
+Download the latest release installer, inspect it, and run it in PowerShell:
 
 ```powershell
 Invoke-WebRequest `

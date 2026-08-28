@@ -675,14 +675,14 @@ Self-update is allowed only for an executable matching a direct-install
 receipt. Package-manager installations receive the exact manager command and
 are never mutated by Pangram CLI.
 
-Before public release, update networking is disabled.
+Update networking remains disabled throughout the public `0.x` release series.
 
 ## 14. Agent behavior
 
 The MCP server is stdio-only in v1 and implements MCP `2026-07-28`. It exposes
-typed tools for analysis, waiting, bulk retrieval, and optional history. Update
-checks remain owned by Phase 8. It does not implement the experimental Tasks
-extension, MCP Apps, or a legacy protocol path.
+typed tools for analysis, waiting, bulk retrieval, optional history, and an
+explicit nonbillable update check. It does not implement the experimental
+Tasks extension, MCP Apps, or a legacy protocol path.
 
 Default MCP behavior:
 
@@ -743,7 +743,7 @@ Blocked by upstream contract, and Unavailable through documented APIs.
 
 The intended public project is open source under the MIT license.
 
-Planned public channels:
+Public channels:
 
 - GitHub Releases
 - shell installer
@@ -809,16 +809,14 @@ v1 does not include:
 - invitation-only or reverse-engineered image detection
 - compatibility shims for pre-release local state
 
-## 19. Remaining blockers
+## 19. Remaining blockers for 1.0
 
 The intro behavior, timing, rendering strategy, and fallbacks are specified.
 The agent must establish the generated frame-art baseline against the locked
 visual rubric and pass the autonomous acceptance suite before release. The user
 reviews only final product quality.
 
-The following are external release blockers rather than unresolved design:
-
-- Pangram distribution permission
-- Pangram 4 text and bulk response conformance
-- file response conformance
-- plagiarism response conformance
+The authorized public `0.1.0` release satisfied the distribution, file,
+plagiarism, packaging, and site gates. Pangram 4 text and bulk response
+conformance remain external blockers for public 1.0 support. File and
+plagiarism response conformance were verified on 2026-08-24.

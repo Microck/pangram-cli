@@ -40,6 +40,9 @@ probabilistic evidence, not a verdict about authorship.
 - Use `get_bulk`, `wait_bulk`, or `get_bulk_results` with exactly one local or
   upstream bulk ID. Local IDs require history. Results require explicit
   `offset` and `limit`; the limit is 1 through 1,000.
+- Use `check_update` only when the user asks to check for an update. `0.x`
+  builds advertise the tool but return `update_unavailable` without network
+  or state access.
 - Use history and configuration tools only when server discovery advertises
   them. `save: true` requires both history and history-mutation capability.
 
@@ -52,6 +55,5 @@ Pangram task or bulk job. Do not report upstream cancellation.
 - Read `pangram://schema/errors/v1` for error and exit semantics.
 - Read `pangram://skills/pangram` when the full embedded skill is needed.
 
-Do not call or claim `detect_files` or `check_update`. Do not use the
-experimental MCP Tasks extension, invent prompts, or assume history resources
-exist.
+Do not call or claim `detect_files`. Do not use the experimental MCP Tasks
+extension, invent prompts, or assume history resources exist.
