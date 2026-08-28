@@ -27,56 +27,139 @@ Pangram's web application is useful for interactive checks, but terminal and age
 - typed MCP tools with billing, filesystem, and mutation safeguards
 - signed native releases with package-manager-aware updates
 
-## install
+## quickstart
 
-npm:
+### Linux or macOS
+
+Install the signed native binary:
+
+```bash
+curl -fsSL https://github.com/Microck/pangram-cli/releases/latest/download/pangram-installer.sh | sh
+pangram --help
+```
+
+The installer places `pangram` in `~/.local/bin`. Add that directory to `PATH` when the installer asks you to.
+
+### Windows
+
+Run the signed PowerShell installer:
+
+```powershell
+irm https://github.com/Microck/pangram-cli/releases/latest/download/pangram-installer.ps1 | iex
+pangram --help
+```
+
+### Using a package manager
 
 ```bash
 npm install -g @microck/pangram-cli
-```
 
-homebrew:
-
-```bash
+# homebrew
 brew install --formula https://github.com/Microck/pangram-cli/releases/latest/download/pangram.rb
 ```
 
-scoop:
-
 ```powershell
+# scoop
 scoop install https://github.com/Microck/pangram-cli/releases/latest/download/pangram-scoop.json
 ```
 
-signed direct installers and native archives for Linux, macOS, and Windows are available from [GitHub Releases](https://github.com/Microck/pangram-cli/releases). see the [installation guide](https://pangram.micr.dev/docs/how-to/install) for the verified shell and PowerShell flows.
+Native archives for Linux, macOS, and Windows are also available from [GitHub Releases](https://github.com/Microck/pangram-cli/releases). See the [installation guide](https://pangram.micr.dev/docs/how-to/install) for platform details.
 
-## quickstart
+### Authentication
 
-configure a Pangram API key and run a detection:
-
-```bash
-pangram auth
-pangram detect "text to analyze"
-```
-
-detecting text in a shell pipeline:
+Set `PANGRAM_API_KEY` before the first billable command:
 
 ```bash
-printf "text to analyze" | pangram
+export PANGRAM_API_KEY='...'
+pangram auth status
 ```
 
-opening the interactive terminal interface:
+Store the key in the protected local credential file without putting it in shell history or process arguments:
+
+```bash
+printf '%s\n' "$PANGRAM_API_KEY" | pangram auth set --api-key-stdin
+pangram auth status
+```
+
+Interactive terminals can run `pangram auth` for masked setup. Authentication commands do not submit content or consume credits.
+
+### First analysis
+
+Run AI detection on literal text:
+
+```bash
+pangram detect "text to analyze" --max-billable-units 1
+```
+
+Read text from a shell pipeline:
+
+```bash
+printf '%s\n' 'text to analyze' | pangram detect - --max-billable-units 1
+```
+
+Run AI detection and plagiarism checks together:
+
+```bash
+pangram analyze "text to analyze" --max-billable-units 6
+```
+
+Use terminal-readable output instead of the default JSON envelope:
+
+```bash
+pangram detect --format pretty "text to analyze" --max-billable-units 1
+```
+
+Open the interactive terminal interface:
 
 ```bash
 pangram
 ```
 
-requesting human-readable output:
+Every analysis submits content to Pangram. Use `--max-billable-units` to reject requests above a local spending ceiling. Local history and public dashboard links stay disabled by default.
+
+### Files and bulk jobs
+
+Analyze supported documents directly:
 
 ```bash
-pangram detect --format pretty "text to analyze"
+pangram detect --file ./paper.pdf --max-billable-units 10
+pangram detect --file ./notes.txt --format pretty --max-billable-units 1
 ```
 
-AI detection and plagiarism checks submit content to Pangram and may consume prepaid API credits.
+Preview a bulk JSONL request without credentials or network access:
+
+```bash
+pangram bulk submit items.jsonl --max-billable-units 20 --dry-run
+```
+
+Submit a bulk request and wait for its terminal result:
+
+```bash
+pangram bulk submit items.jsonl --max-billable-units 20 --wait
+```
+
+### MCP client
+
+Preview the exact configuration edit before writing it:
+
+```bash
+pangram mcp install --target cursor --dry-run
+pangram mcp install --target cursor
+```
+
+Restart the client, then call its Pangram detection tool with a positive billable-unit ceiling. MCP startup exposes no history mutations, public links, or file roots unless you enable those capabilities explicitly.
+
+### Shell completion
+
+Generate completion for your shell:
+
+```bash
+pangram completions bash > ~/.local/share/bash-completion/completions/pangram
+pangram completions zsh > ~/.zsh/completions/_pangram
+pangram completions fish > ~/.config/fish/completions/pangram.fish
+```
+
+For the full authentication, MCP, history, and platform guides, see the [documentation](https://pangram.micr.dev/docs).
 
 ## command surface
 
