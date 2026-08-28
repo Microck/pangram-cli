@@ -603,6 +603,21 @@ impl ExitCode {
         }
     }
 
+    /// Human-readable meaning used by generated reference documentation.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::GeneralFailure => "general failure",
+            Self::Usage => "invalid usage or input",
+            Self::Partial => "partial analysis",
+            Self::AuthenticationOrPermission => "authentication or permission failure",
+            Self::PaymentOrRateLimit => "payment or rate-limit failure",
+            Self::NetworkOrUpstream => "network or upstream failure",
+            Self::LocalState => "local configuration, history, or update failure",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
     pub const fn as_u8(self) -> u8 {
         self as u8
     }

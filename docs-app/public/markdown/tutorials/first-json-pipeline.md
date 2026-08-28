@@ -2,7 +2,7 @@
 
 ```bash
 printf '%s\n' 'A synthetic sample for automation.' | pangram - > result.json
-jq '.command, .data.analyses[0].status' result.json
+jq '.command, .data.status' result.json
 ```
 
 The analysis request is billable. The canonical envelope goes to stdout.

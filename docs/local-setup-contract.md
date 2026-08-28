@@ -85,7 +85,8 @@ restriction cannot be established.
 ### Intro startup contract
 
 An intro-eligible launch has an interactive TTY, does not run under `CI`, has
-`TERM` other than `dumb`, and has reached the minimum 80x24 terminal size.
+`TERM` other than `dumb`, and has reached the minimum 100x28 intro size. The
+interactive application itself operates down to 80x24.
 Re-entering the alternate screen within the same process is not a new launch.
 All three standard streams must be TTYs.
 

@@ -29,6 +29,15 @@ const writeIfChanged = async (path, content) => {
 };
 const escapeCell = (value) => String(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
 const frontmatter = (title, description) => `---\ntitle: ${title}\ndescription: ${description}\n---\n\n`;
+const schemaType = (schema) => {
+  if (schema.type) return schema.type;
+  if (schema.$ref) return schema.$ref;
+  if (schema.const !== undefined) {
+    const type = Number.isInteger(schema.const) ? 'integer' : typeof schema.const;
+    return `${type} (constant ${JSON.stringify(schema.const)})`;
+  }
+  return 'object';
+};
 
 await mkdir(referenceRoot, { recursive: true });
 await mkdir(schemasRoot, { recursive: true });
@@ -38,6 +47,7 @@ const commandRows = cli.commands.map((command) => {
   const path = command.path.length === 0 ? 'pangram' : `pangram ${command.path.join(' ')}`;
   const argumentsText = command.arguments
     .map((argument) => {
+      if (argument.kind === 'positional') return argument.name;
       const value = argument.value_name ? ` ${argument.value_name}` : '';
       return `${argument.name}${value}`;
     })
@@ -52,7 +62,7 @@ await writeIfChanged(
 
 const config = await readJson('contracts/config.schema.json');
 const configRows = Object.entries(config.properties).map(([name, schema]) =>
-  `| \`${name}\` | ${escapeCell(schema.type ?? schema.$ref ?? 'object')} | ${config.required?.includes(name) ? 'yes' : 'no'} |`,
+  `| \`${name}\` | ${escapeCell(schemaType(schema))} | ${config.required?.includes(name) ? 'yes' : 'no'} |`,
 );
 await writeIfChanged(
   join(referenceRoot, 'configuration.mdx'),
@@ -78,7 +88,7 @@ await writeIfChanged(
 await writeIfChanged(
   join(referenceRoot, 'exit-codes.mdx'),
   frontmatter('Exit codes', 'Generated stable process exit values.') +
-    `${generatedNotice}\n\n${errors.exit_codes.map(({ code }) => `- \`${code}\``).join('\n')}\n`,
+    `${generatedNotice}\n\n| Code | Meaning |\n| --- | --- |\n${errors.exit_codes.map(({ code, description }) => `| \`${code}\` | ${escapeCell(description)} |`).join('\n')}\n`,
 );
 
 await writeIfChanged(

@@ -28,6 +28,7 @@ const EXCLUDED_ROOT_DIRECTORIES: &[&str] = &[
     ".next",
     "coverage",
     "dist",
+    "docs-app/.next",
     "node_modules",
     "target",
 ];
@@ -514,12 +515,22 @@ mod tests {
     }
 
     #[test]
-    fn excludes_generated_directories_only_at_repository_root() {
+    fn excludes_only_named_generated_directories() {
         let repository = TempDirectory::new();
         let root_target = repository.path().join("target");
         fs::create_dir(&root_target).unwrap();
         fs::write(
             root_target.join("example.md"),
+            "ignored \u{2014} generated output\n",
+        )
+        .unwrap();
+
+        assert_eq!(check_repository(repository.path()).unwrap(), 0);
+
+        let docs_build = repository.path().join("docs-app/.next");
+        fs::create_dir_all(&docs_build).unwrap();
+        fs::write(
+            docs_build.join("generated.js"),
             "ignored \u{2014} generated output\n",
         )
         .unwrap();

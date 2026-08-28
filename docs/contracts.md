@@ -63,11 +63,10 @@ Phase 6 exposes text detection, ordinary task get/wait, bulk
 submit/get/wait/results, and capability-gated history and configuration tools.
 Phase 7 adds inline-text plagiarism and combined analysis. Binary file
 detection remains CLI-only because MCP requires a pre-submission billable-unit
-ceiling and Pangram publishes no local file-billing estimator. The explicit
-nonbillable `check_update` tool remains planned Phase 8 surface
-that ships only with the updater implementation and its real-stdio contract
-coverage, at which point `0.x` builds advertise it while performing zero
-update-network activity and returning typed `update_unavailable`. Public
+ceiling and Pangram publishes no local file-billing estimator. Phase 8 adds the
+explicit nonbillable `check_update` tool. `0.x` builds advertise it while
+performing zero update-network activity and returning typed
+`update_unavailable`. Public
 distribution of a stable `0.x` release does not enable self-update before
 `1.0.0`. There are no compatibility aliases or rejection-only
 placeholders for later tools.

@@ -2,7 +2,35 @@
 
 Source: https://pangram.micr.dev/docs/changelog
 
-Release notes are published here with each version.
+## 0.1.0
+
+### Added
+
+- Analyze text, files, and bulk jobs with Pangram 4 from a JSON-first CLI.
+- Check plagiarism alone or alongside AI detection while preserving partial results.
+- Use the interactive Ratatui interface with mouse, keyboard, Vim bindings, history, settings, and the approved terminal fox intro.
+- Connect agents through a typed stdio MCP server with explicit file, history, mutation, and billing gates.
+- Store optional local history in a protected SQLite database with search, export, rerun, and deletion controls.
+- Install signed native builds on Linux x64 and ARM64, macOS x64 and ARM64, and Windows x64 through direct installers, npm, Homebrew, or Scoop.
+- Generate shell completions for Bash, Zsh, Fish, PowerShell, and Elvish.
+
+### Changed
+
+- Require Pangram 4 for text analysis and estimate usage in started 100-word units before billable bulk work.
+- Keep history, public dashboard links, telemetry, and update-network access disabled by default.
+- Report ambiguous submissions and partial combined analyses without automatic billable retries.
+
+### Fixed
+
+- Bound synchronous file and plagiarism requests with the configured timeout.
+- Preserve the prior executable and install receipt when a signed replacement fails validation or smoke testing.
+- Reject unsupported hosts and malformed release archives before installation.
+
+### Security
+
+- Store API credentials with owner-only filesystem protections and keep secrets and submitted content out of logs and diagnostics.
+- Verify signed update metadata, archive shape, checksums, target identity, and executable bytes before installation or replacement.
+- Sanitize untrusted terminal and Markdown content before human-readable rendering.
 
 # Billing and billable-unit estimates
 
@@ -76,7 +104,7 @@ instructions and are never adopted by the self-updater.
 Source: https://pangram.micr.dev/docs/how-to/analyze-files
 
 ```bash
-pangram detect --file sample.pdf --file sample.docx --max-billable-units 2
+pangram detect --file sample.pdf --file sample.docx
 ```
 
 UTF-8 text, PDF, DOCX, and RTF are supported for AI detection. File requests
@@ -137,7 +165,7 @@ Source: https://pangram.micr.dev/docs/how-to/detect-text
 
 ```bash
 pangram detect 'Synthetic text to inspect.' --max-billable-units 1
-printf '%s\n' 'Synthetic text to inspect.' | pangram - --max-billable-units 1
+printf '%s\n' 'Synthetic text to inspect.' | pangram detect - --max-billable-units 1
 ```
 
 Detection is billable. Input is redacted from normal output and is not saved
@@ -161,7 +189,7 @@ Source: https://pangram.micr.dev/docs/how-to/install
 
 ## macOS or Linux
 
-Download the versioned installer, inspect it, and run it:
+Download the latest release installer, inspect it, and run it:
 
 ```bash
 curl --fail --location --silent --show-error \
@@ -175,7 +203,7 @@ The default executable path is `$HOME/.local/bin/pangram`.
 
 ## Windows
 
-Download the versioned installer, inspect it, and run it in PowerShell:
+Download the latest release installer, inspect it, and run it in PowerShell:
 
 ```powershell
 Invoke-WebRequest `
@@ -268,9 +296,9 @@ and reported as an ownership conflict.
 
 Source: https://pangram.micr.dev/docs/how-to/updates
 
-Private `0.x` builds expose `pangram update --check`, `pangram update`, and
+`0.x` builds expose `pangram update --check`, `pangram update`, and
 `pangram update --yes`, but all three return `update_unavailable` before any
-network or state access. Public direct installs will verify an Ed25519-signed
+network or state access. Direct installs at `1.0.0` or later will verify an Ed25519-signed
 manifest, archive size, SHA-256, layout, receipt ownership, and target version.
 Package-manager installs remain owned by their manager.
 
@@ -308,26 +336,26 @@ Generated from Pangram CLI 0.1.0 and schema major 1.
 
 | Command | Kind | Availability | Arguments |
 | --- | --- | --- | --- |
-| `pangram` | entrypoint | available | TEXT TEXT |
-| `pangram detect` | command | available | TEXT TEXT, --file PATH, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
-| `pangram plagiarism` | command | available | TEXT TEXT, --file PATH, --format FORMAT, --include-input, --save, --timeout DURATION, --progress MODE, --max-billable-units N |
-| `pangram analyze` | command | available | TEXT TEXT, --file PATH, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram` | entrypoint | available | TEXT |
+| `pangram detect` | command | available | TEXT, --file PATH, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram plagiarism` | command | available | TEXT, --file PATH, --format FORMAT, --include-input, --save, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram analyze` | command | available | TEXT, --file PATH, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram bulk` | namespace | available | none |
-| `pangram bulk submit` | command | available | JSONL_PATH JSONL_PATH, --max-billable-units N, --dry-run, --wait, --format FORMAT, --progress MODE |
-| `pangram bulk status` | command | available | ID ID |
-| `pangram bulk wait` | command | available | ID ID, --timeout DURATION, --progress MODE |
-| `pangram bulk results` | command | available | ID ID, --offset N, --limit N, --format FORMAT |
+| `pangram bulk submit` | command | available | JSONL_PATH, --max-billable-units N, --dry-run, --wait, --format FORMAT, --progress MODE |
+| `pangram bulk status` | command | available | ID |
+| `pangram bulk wait` | command | available | ID, --timeout DURATION, --progress MODE |
+| `pangram bulk results` | command | available | ID, --offset N, --limit N, --format FORMAT |
 | `pangram task` | namespace | available | none |
-| `pangram task status` | command | available | ID ID |
-| `pangram task wait` | command | available | ID ID, --timeout DURATION, --progress MODE |
+| `pangram task status` | command | available | ID |
+| `pangram task wait` | command | available | ID, --timeout DURATION, --progress MODE |
 | `pangram history` | namespace | available | none |
 | `pangram history list` | command | available | --status STATUS, --check CHECK, --limit N |
-| `pangram history show` | command | available | ID ID, --include-input, --format FORMAT |
-| `pangram history search` | command | available | QUERY QUERY, --status STATUS, --check CHECK, --limit N |
-| `pangram history delete` | command | available | ID ID, --yes |
+| `pangram history show` | command | available | ID, --include-input, --format FORMAT |
+| `pangram history search` | command | available | QUERY, --status STATUS, --check CHECK, --limit N |
+| `pangram history delete` | command | available | ID, --yes |
 | `pangram history clear` | command | available | --yes |
 | `pangram history export` | command | available | --format FORMAT, --redact-content |
-| `pangram history rerun` | command | available | ID ID, --format FORMAT, --progress MODE |
+| `pangram history rerun` | command | available | ID, --format FORMAT, --progress MODE |
 | `pangram auth` | command | available | none |
 | `pangram auth set` | command | available | --api-key VALUE, --api-key-stdin |
 | `pangram auth status` | command | available | none |
@@ -339,15 +367,15 @@ Generated from Pangram CLI 0.1.0 and schema major 1.
 | `pangram agent` | command | available | none |
 | `pangram skills` | namespace | available | none |
 | `pangram skills list` | command | available | none |
-| `pangram skills get` | command | available | SKILL SKILL, --full |
-| `pangram skills path` | command | available | SKILL SKILL |
+| `pangram skills get` | command | available | SKILL, --full |
+| `pangram skills path` | command | available | SKILL |
 | `pangram config` | namespace | available | none |
 | `pangram config list` | command | available | none |
-| `pangram config get` | command | available | KEY KEY |
-| `pangram config set` | command | available | KEY KEY, VALUE VALUE |
+| `pangram config get` | command | available | KEY |
+| `pangram config set` | command | available | KEY, VALUE |
 | `pangram config path` | command | available | none |
 | `pangram doctor` | command | available | --format FORMAT |
-| `pangram completions` | command | available | SHELL SHELL |
+| `pangram completions` | command | available | SHELL |
 | `pangram update` | command | available | --check, --yes |
 
 # Configuration reference
@@ -358,7 +386,7 @@ Generated from Pangram CLI 0.1.0 and schema major 1.
 
 | Field | Type | Required |
 | --- | --- | --- |
-| `config_version` | object | yes |
+| `config_version` | integer (constant 1) | yes |
 | `history` | object | no |
 | `tui` | object | no |
 | `updates` | object | no |
@@ -428,15 +456,17 @@ Source: https://pangram.micr.dev/docs/reference/exit-codes
 
 Generated from Pangram CLI 0.1.0 and schema major 1.
 
-- `0`
-- `1`
-- `2`
-- `3`
-- `4`
-- `5`
-- `6`
-- `7`
-- `130`
+| Code | Meaning |
+| --- | --- |
+| `0` | success |
+| `1` | general failure |
+| `2` | invalid usage or input |
+| `3` | partial analysis |
+| `4` | authentication or permission failure |
+| `5` | payment or rate-limit failure |
+| `6` | network or upstream failure |
+| `7` | local configuration, history, or update failure |
+| `130` | interrupted |
 
 # History storage
 
@@ -562,7 +592,7 @@ Source: https://pangram.micr.dev/docs/tutorials/first-json-pipeline
 
 ```bash
 printf '%s\n' 'A synthetic sample for automation.' | pangram - > result.json
-jq '.command, .data.analyses[0].status' result.json
+jq '.command, .data.status' result.json
 ```
 
 The analysis request is billable. The canonical envelope goes to stdout.

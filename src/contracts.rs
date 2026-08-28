@@ -406,7 +406,12 @@ fn error_reference() -> Value {
         .collect();
     let exits: Vec<_> = ExitCode::ALL
         .iter()
-        .map(|code| json!({"code": code.as_u8()}))
+        .map(|code| {
+            json!({
+                "code": code.as_u8(),
+                "description": code.description(),
+            })
+        })
         .collect();
     json!({
         "$schema": DRAFT_2020_12,
