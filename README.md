@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs-app/public/landing/images/pangram-cli-logo.svg" width="120" alt="Pangram CLI logo">
+</p>
+
 <h1 align="center">pangram</h1>
 
 <p align="center">
