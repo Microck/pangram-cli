@@ -8,7 +8,7 @@
 //!
 //! - the bundled runtime reports `SQLITE_ENABLE_FTS5` through
 //!   `PRAGMA compile_options`, matching the pinned build script's
-//!   unconditional `-DSQLITE_ENABLE_FTS5` flag (evidence-ledger)
+//!   unconditional `-DSQLITE_ENABLE_FTS5` flag
 //! - the exact FTS5 virtual-table statement from docs/history-contract.md
 //!   executes against an in-memory database
 //! - the foreign-key pragma the history contract demands on every connection

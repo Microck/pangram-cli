@@ -1,10 +1,25 @@
 /target/
 /tmp/
-/node_modules/
+node_modules/
 /docs-app/.next/
 /docs-app/.source/
 *.tsbuildinfo
 .env
+.env.*
+!.env.example
+
+# Local tool and editor state.
+.residue/
+.direnv/
+.DS_Store
+.idea/
+.vscode/
+
+# Test and diagnostic output.
+coverage/
+*.log
+*.profraw
+*.profdata
 
 # Crustini/crabbox remote-build runtime state and captures: machine-local
 # artifacts, never committed or synced.

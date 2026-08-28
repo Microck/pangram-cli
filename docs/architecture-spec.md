@@ -1,6 +1,6 @@
 # Pangram CLI architecture specification
 
-Status: approved for implementation
+Status: implemented and normative
 Runtime language: Rust 2024
 Documentation language: TypeScript
 Architecture style: one package, deep core module, thin adapters
@@ -64,7 +64,7 @@ operations and consume typed progress events and results.
 
 ## 3. Repository layout
 
-The initial implementation should follow this ownership layout:
+The implementation follows this ownership layout:
 
 ```text
 .
@@ -834,10 +834,8 @@ Files approaching 800 lines receive decomposition review. A file over 1,000
 lines blocks merge unless an ADR explains why cohesion outweighs navigation
 cost.
 
-## 22. Implementation sequence
+## 22. Change sequence
 
-The [implementation roadmap](implementation-roadmap.md) is the sole owner of
-phase order and PR boundaries. This architecture specifies dependencies, not a
-second sequence: contracts precede implementation, the text-analysis vertical
-slice precedes secondary workflows, and an adapter exposes only operations the
-shared analysis module already implements.
+Contracts precede observable implementation changes. An adapter exposes only
+operations the shared analysis module already implements, and generated
+artifacts change only through their owning Rust types or generators.

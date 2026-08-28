@@ -351,8 +351,7 @@ jobs:
           # brotli closure BSD-3-Clause); CDLA-Permissive-2.0 covers
           # Mozilla's webpki root certificate data; MIT-0 only appears as
           # an aws-lc-sys OR alternative; Apache-2.0 WITH LLVM-exception
-          # covers the Phase 6 cap-std winx dependency. Evidence:
-          # docs/evidence-ledger.md
+          # covers the Phase 6 cap-std winx dependency.
           license_policy="$RUNNER_TEMP/cargo-deny.toml"
           printf '%s\n' \
             '[graph]' \

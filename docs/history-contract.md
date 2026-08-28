@@ -1,6 +1,6 @@
 # Pangram CLI history contract
 
-Status: approved for implementation
+Status: implemented and normative
 Schema version: 1
 
 This file is the contract owner for the local SQLite schema. Changes to this

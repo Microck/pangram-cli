@@ -292,12 +292,12 @@ fn readme_available_table_matches_the_available_top_level_grammar() {
     let readme = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md"))
         .expect("read README.md");
 
-    // Extract the "Available today" table only, stopping at the next
+    // Extract the "available today" table only, stopping at the next
     // section heading, and pull the command token from each `pangram X` row.
     let available_section = readme
-        .split("Available today:")
+        .split("available today:")
         .nth(1)
-        .expect("the README keeps an \"Available today:\" section");
+        .expect("the README keeps an \"available today:\" section");
     let available_section = available_section
         .split("\n## ")
         .next()

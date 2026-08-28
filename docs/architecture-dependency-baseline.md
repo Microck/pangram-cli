@@ -29,10 +29,9 @@ package `rust-version`, Phase 2 raises `rust-version` from 1.85 to 1.87 (not to
 the RMCP 1.88 prerelease floor, which was not yet a selected dependency in
 Phase 2).
 
-Later tests add real Axum loopback servers, snapshots, PTYs, and the pinned
-Terminal Control harness when the corresponding behavior exists. Exact
-research snapshots live in [evidence-ledger.md](evidence-ledger.md), not in
-this normative architecture.
+The test suite uses real Axum loopback servers, snapshots, PTYs, and the pinned
+Terminal Control harness for the corresponding behavior. This document keeps
+only the dependency decisions that remain part of the normative architecture.
 
 The workspace pins current stable Rust for development and records the lowest
 dependency-compatible Rust 2024 toolchain as `rust-version`. Each phase MUST

@@ -1,6 +1,6 @@
 # Pangram CLI product specification
 
-Status: approved for implementation
+Status: implemented and normative
 Decision date: 2026-07-23
 Public product destination: `https://github.com/Microck/pangram-cli`
 

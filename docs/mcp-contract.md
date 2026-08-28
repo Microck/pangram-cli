@@ -1,6 +1,6 @@
 # Pangram CLI MCP contract
 
-Status: approved for implementation
+Status: implemented and normative
 Transport: stdio
 
 This file is the contract owner for the MCP interface. Input schemas set
