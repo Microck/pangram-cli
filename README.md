@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs-app/public/landing/images/pangram-cli-logo.svg" width="120" alt="Pangram CLI logo">
+  <img src="docs-app/public/landing/images/pangram-cli-logo.svg" width="120" alt="pangram cli logo">
 </p>
 
 <h1 align="center">pangram</h1>
@@ -19,7 +19,7 @@
 
 ## why
 
-Pangram's web application is useful for interactive checks, but terminal and agent workflows need a different interface:
+pangram's web application is useful for interactive checks, but terminal and agent workflows need a different interface:
 
 - one command surface for AI detection, plagiarism, files, and bulk work
 - JSON-first output with stable errors and exit codes
@@ -29,27 +29,27 @@ Pangram's web application is useful for interactive checks, but terminal and age
 
 ## quickstart
 
-### Linux or macOS
+### linux or macos
 
-Install the signed native binary:
+install the signed native binary:
 
 ```bash
 curl -fsSL https://github.com/Microck/pangram-cli/releases/latest/download/pangram-installer.sh | sh
 pangram --help
 ```
 
-The installer places `pangram` in `~/.local/bin`. Add that directory to `PATH` when the installer asks you to.
+the installer places `pangram` in `~/.local/bin`. add that directory to `PATH` when the installer asks you to.
 
-### Windows
+### windows
 
-Run the signed PowerShell installer:
+run the signed PowerShell installer:
 
 ```powershell
 irm https://github.com/Microck/pangram-cli/releases/latest/download/pangram-installer.ps1 | iex
 pangram --help
 ```
 
-### Using a package manager
+### using a package manager
 
 ```bash
 npm install -g @microck/pangram-cli
@@ -63,95 +63,95 @@ brew install --formula https://github.com/Microck/pangram-cli/releases/latest/do
 scoop install https://github.com/Microck/pangram-cli/releases/latest/download/pangram-scoop.json
 ```
 
-Native archives for Linux, macOS, and Windows are also available from [GitHub Releases](https://github.com/Microck/pangram-cli/releases). See the [installation guide](https://pangram.micr.dev/docs/how-to/install) for platform details.
+native archives for Linux, macOS, and Windows are also available from [GitHub Releases](https://github.com/Microck/pangram-cli/releases). see the [installation guide](https://pangram.micr.dev/docs/how-to/install) for platform details.
 
-### Authentication
+### authentication
 
-Set `PANGRAM_API_KEY` before the first billable command:
+set `PANGRAM_API_KEY` before the first billable command:
 
 ```bash
 export PANGRAM_API_KEY='...'
 pangram auth status
 ```
 
-Store the key in the protected local credential file without putting it in shell history or process arguments:
+store the key in the protected local credential file without putting it in shell history or process arguments:
 
 ```bash
 printf '%s\n' "$PANGRAM_API_KEY" | pangram auth set --api-key-stdin
 pangram auth status
 ```
 
-Interactive terminals can run `pangram auth` for masked setup. Authentication commands do not submit content or consume credits.
+interactive terminals can run `pangram auth` for masked setup. authentication commands do not submit content or consume credits.
 
-### First analysis
+### first analysis
 
-Run AI detection on literal text:
+run AI detection on literal text:
 
 ```bash
 pangram detect "text to analyze" --max-billable-units 1
 ```
 
-Read text from a shell pipeline:
+read text from a shell pipeline:
 
 ```bash
 printf '%s\n' 'text to analyze' | pangram detect - --max-billable-units 1
 ```
 
-Run AI detection and plagiarism checks together:
+run AI detection and plagiarism checks together:
 
 ```bash
 pangram analyze "text to analyze" --max-billable-units 6
 ```
 
-Use terminal-readable output instead of the default JSON envelope:
+use terminal-readable output instead of the default JSON envelope:
 
 ```bash
 pangram detect --format pretty "text to analyze" --max-billable-units 1
 ```
 
-Open the interactive terminal interface:
+open the interactive terminal interface:
 
 ```bash
 pangram
 ```
 
-Every analysis submits content to Pangram. Use `--max-billable-units` to reject requests above a local spending ceiling. Local history and public dashboard links stay disabled by default.
+every analysis submits content to Pangram. use `--max-billable-units` to reject requests above a local spending ceiling. local history and public dashboard links stay disabled by default.
 
-### Files and bulk jobs
+### files and bulk jobs
 
-Analyze supported documents directly:
+analyze supported documents directly:
 
 ```bash
 pangram detect --file ./paper.pdf --max-billable-units 10
 pangram detect --file ./notes.txt --format pretty --max-billable-units 1
 ```
 
-Preview a bulk JSONL request without credentials or network access:
+preview a bulk JSONL request without credentials or network access:
 
 ```bash
 pangram bulk submit items.jsonl --max-billable-units 20 --dry-run
 ```
 
-Submit a bulk request and wait for its terminal result:
+submit a bulk request and wait for its terminal result:
 
 ```bash
 pangram bulk submit items.jsonl --max-billable-units 20 --wait
 ```
 
-### MCP client
+### mcp client
 
-Preview the exact configuration edit before writing it:
+preview the exact configuration edit before writing it:
 
 ```bash
 pangram mcp install --target cursor --dry-run
 pangram mcp install --target cursor
 ```
 
-Restart the client, then call its Pangram detection tool with a positive billable-unit ceiling. MCP startup exposes no history mutations, public links, or file roots unless you enable those capabilities explicitly.
+restart the client, then call its Pangram detection tool with a positive billable-unit ceiling. MCP startup exposes no history mutations, public links, or file roots unless you enable those capabilities explicitly.
 
-### Shell completion
+### shell completion
 
-Generate completion for your shell:
+generate completion for your shell:
 
 ```bash
 pangram completions bash > ~/.local/share/bash-completion/completions/pangram
@@ -159,7 +159,7 @@ pangram completions zsh > ~/.zsh/completions/_pangram
 pangram completions fish > ~/.config/fish/completions/pangram.fish
 ```
 
-For the full authentication, MCP, history, and platform guides, see the [documentation](https://pangram.micr.dev/docs).
+for the full authentication, MCP, history, and platform guides, see the [documentation](https://pangram.micr.dev/docs).
 
 ## command surface
 
