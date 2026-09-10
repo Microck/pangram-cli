@@ -174,6 +174,9 @@ impl<'a> EffectExecutor<'a> {
                 Effect::StoreMotion(motion) => {
                     self.settings_worker.store(SettingWrite::Motion(motion));
                 }
+                Effect::StoreHighlight(enabled) => {
+                    self.settings_worker.store(SettingWrite::Highlight(enabled));
+                }
                 Effect::LoadHistory(request) => history_runtime::spawn_history_load(
                     self.service.clone(),
                     request,
@@ -449,6 +452,7 @@ fn startup_state(service: &ConfigService) -> Result<StartupState, ConfigError> {
             crate::config::Motion::Reduced => MotionLevel::Reduced,
             crate::config::Motion::Off => MotionLevel::Off,
         },
+        highlight: tui.highlight.expect("highlight default is complete"),
         update_preference: effective
             .updates
             .and_then(|updates| updates.check_on_tui_start),

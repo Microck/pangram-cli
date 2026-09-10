@@ -36,6 +36,8 @@ Closed values:
 - `tui.intro`: `once`, `always`, `off`
 - `tui.keymap`: `regular`, `vim`
 - `tui.motion`: `full`, `reduced`, `off`
+- `tui.highlight`: `true`, `false` (default `false`; `true` paints AI-detection
+  segment text in its evidence tone in the TUI result)
 
 Rules:
 

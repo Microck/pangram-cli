@@ -20,6 +20,7 @@ pub(super) enum SettingWrite {
     Intro(IntroFrequency),
     Keymap(Keymap),
     Motion(MotionLevel),
+    Highlight(bool),
 }
 
 impl SettingWrite {
@@ -31,6 +32,7 @@ impl SettingWrite {
             Self::Intro(intro) => StoredSetting::Intro(*intro),
             Self::Keymap(keymap) => StoredSetting::Keymap(*keymap),
             Self::Motion(motion) => StoredSetting::Motion(*motion),
+            Self::Highlight(enabled) => StoredSetting::Highlight(*enabled),
         }
     }
 
@@ -84,6 +86,12 @@ impl SettingWrite {
                     MotionLevel::Reduced => "reduced",
                     MotionLevel::Off => "off",
                 },
+            ),
+            Self::Highlight(enabled) => config_completion(
+                service,
+                setting,
+                ConfigKey::TuiHighlight,
+                if enabled { "true" } else { "false" },
             ),
         }
     }

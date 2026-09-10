@@ -59,6 +59,7 @@ pub enum ConfigKey {
     TuiIntro,
     TuiKeymap,
     TuiMotion,
+    TuiHighlight,
     UpdatesCheckOnTuiStart,
     NetworkMaxRequestsPerSecond,
 }
@@ -69,6 +70,7 @@ impl ConfigKey {
         Self::TuiIntro,
         Self::TuiKeymap,
         Self::TuiMotion,
+        Self::TuiHighlight,
         Self::UpdatesCheckOnTuiStart,
         Self::NetworkMaxRequestsPerSecond,
     ];
@@ -79,6 +81,7 @@ impl ConfigKey {
             Self::TuiIntro => "tui.intro",
             Self::TuiKeymap => "tui.keymap",
             Self::TuiMotion => "tui.motion",
+            Self::TuiHighlight => "tui.highlight",
             Self::UpdatesCheckOnTuiStart => "updates.check_on_tui_start",
             Self::NetworkMaxRequestsPerSecond => "network.max_requests_per_second",
         }
@@ -101,6 +104,7 @@ impl ConfigKey {
             "tui.intro" => Ok(Self::TuiIntro),
             "tui.keymap" => Ok(Self::TuiKeymap),
             "tui.motion" => Ok(Self::TuiMotion),
+            "tui.highlight" => Ok(Self::TuiHighlight),
             "updates.check_on_tui_start" => Ok(Self::UpdatesCheckOnTuiStart),
             "network.max_requests_per_second" => Ok(Self::NetworkMaxRequestsPerSecond),
             "" => Err(ConfigError::UnknownKey(input.trim().into())),
@@ -119,7 +123,9 @@ impl ConfigKey {
     pub fn parse_value(self, raw: &str) -> Result<ConfigValue, ConfigError> {
         let trimmed = raw.trim();
         match self {
-            Self::HistoryEnabled | Self::UpdatesCheckOnTuiStart => parse_bool(self, trimmed),
+            Self::HistoryEnabled | Self::TuiHighlight | Self::UpdatesCheckOnTuiStart => {
+                parse_bool(self, trimmed)
+            }
             Self::TuiIntro => closed_value(
                 self,
                 trimmed,
@@ -186,6 +192,9 @@ impl ConfigKey {
                     .expect("closed values are validated before apply");
                 config.tui.get_or_insert_with(TuiConfig::default).motion = Some(motion);
             }
+            (Self::TuiHighlight, ConfigValue::Bool(value)) => {
+                config.tui.get_or_insert_with(TuiConfig::default).highlight = Some(value);
+            }
             (Self::UpdatesCheckOnTuiStart, ConfigValue::Bool(value)) => {
                 config
                     .updates
@@ -234,6 +243,11 @@ impl ConfigKey {
                 .tui
                 .and_then(|section| section.motion)
                 .map(|value| ConfigValue::Text(value.as_str().into()))
+                .unwrap_or(ConfigValue::Unset),
+            Self::TuiHighlight => config
+                .tui
+                .and_then(|section| section.highlight)
+                .map(ConfigValue::Bool)
                 .unwrap_or(ConfigValue::Unset),
             Self::UpdatesCheckOnTuiStart => config
                 .updates
@@ -688,6 +702,7 @@ mod tests {
                 "tui.intro",
                 "tui.keymap",
                 "tui.motion",
+                "tui.highlight",
                 "updates.check_on_tui_start",
                 "network.max_requests_per_second"
             ]

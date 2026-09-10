@@ -47,7 +47,7 @@ fn analyze_lines(state: &AppState, narrow: bool) -> Vec<Line<'static>> {
     let (word_count, units) = state.billing_estimate();
     let estimate = estimate_label(word_count, units);
     let submit_label = analysis_action_label(state);
-    let rows = analyze_inspector_rows(!narrow);
+    let rows = analyze_inspector_rows(!narrow, state.analysis.current.is_some());
     let mut lines = vec![Line::raw(""); usize::from(rows.height)];
     if narrow {
         lines[usize::from(rows.public_link)] = inline_toggle_line(state);
@@ -62,6 +62,14 @@ fn analyze_lines(state: &AppState, narrow: bool) -> Vec<Line<'static>> {
             state.manual_save,
             "Manual save",
         );
+        if let Some(highlight_row) = rows.highlight {
+            lines[usize::from(highlight_row)] = toggle_line(
+                state.color_mode,
+                state.focus == Focus::Highlight,
+                state.settings.highlight,
+                "Highlight",
+            );
+        }
         lines[usize::from(rows.words)] = Line::raw(format!("  Words {word_count}"));
         lines[usize::from(rows.estimate)] = Line::raw(format!("  Estimate {estimate}"));
     }
@@ -129,6 +137,15 @@ fn inline_toggle_line(state: &AppState) -> Line<'static> {
         state.manual_save,
         "Manual save",
     ));
+    if state.analysis.current.is_some() {
+        spans.push(Span::raw("   "));
+        spans.extend(toggle_spans(
+            state.color_mode,
+            state.focus == Focus::Highlight,
+            state.settings.highlight,
+            "Highlight",
+        ));
+    }
     Line::from(spans)
 }
 

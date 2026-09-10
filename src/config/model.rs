@@ -53,6 +53,10 @@ pub struct TuiConfig {
     pub keymap: Option<Keymap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<Motion>,
+    /// Paint AI-detection segment text in its evidence tone in the TUI result.
+    /// Off by default: the text reads white and the toggle paints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -168,6 +172,7 @@ impl Config {
         tui.intro.get_or_insert(IntroMode::Once);
         tui.keymap.get_or_insert(Keymap::Regular);
         tui.motion.get_or_insert(Motion::Full);
+        tui.highlight.get_or_insert(false);
         let network = self.network.get_or_insert_with(NetworkConfig::default);
         network
             .max_requests_per_second

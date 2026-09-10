@@ -12,7 +12,9 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use super::history::{ExportAction, ExportContent, PendingOperation};
 use super::model::{AppState, Focus, HistoryExportField, Overlay};
-use super::result_lines::{analysis_status_label, sanitize_single_line, save_state_label};
+use super::result_lines::{
+    ResultPresentation, analysis_status_label, sanitize_single_line, save_state_label,
+};
 use super::result_viewport::visible_analysis_result_lines;
 use crate::domain::{AnalysisInput, AnalysisInputKind, AnalysisSummary, CheckKind};
 use crate::history::HistoryExportFormat;
@@ -83,6 +85,7 @@ pub(crate) fn render_history(frame: &mut Frame<'_>, area: Rect, state: &AppState
             detail,
             &state.result_viewport,
             state.focus == Focus::Result,
+            ResultPresentation::from_state(state),
             usize::from(content_area.width),
             result_rows,
         ));

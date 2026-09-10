@@ -212,17 +212,34 @@ pub(in crate::tui) fn shortcut_width(key: &str, label: &str) -> u16 {
 pub(in crate::tui) struct AnalyzeInspectorRows {
     pub(in crate::tui) public_link: u16,
     pub(in crate::tui) manual_save: u16,
+    /// Third toggle, present only while a completed result is shown so the
+    /// pre-result inspector keeps its rows.
+    pub(in crate::tui) highlight: Option<u16>,
     pub(in crate::tui) words: u16,
     pub(in crate::tui) estimate: u16,
     pub(in crate::tui) submit: u16,
     pub(in crate::tui) height: u16,
 }
 
-pub(in crate::tui) const fn analyze_inspector_rows(wide: bool) -> AnalyzeInspectorRows {
-    if wide {
+pub(in crate::tui) const fn analyze_inspector_rows(
+    wide: bool,
+    with_highlight: bool,
+) -> AnalyzeInspectorRows {
+    if wide && with_highlight {
         AnalyzeInspectorRows {
             public_link: 2,
             manual_save: 4,
+            highlight: Some(6),
+            words: 9,
+            estimate: 11,
+            submit: 14,
+            height: 15,
+        }
+    } else if wide {
+        AnalyzeInspectorRows {
+            public_link: 2,
+            manual_save: 4,
+            highlight: None,
             words: 7,
             estimate: 9,
             submit: 12,
@@ -232,6 +249,7 @@ pub(in crate::tui) const fn analyze_inspector_rows(wide: bool) -> AnalyzeInspect
         AnalyzeInspectorRows {
             public_link: 0,
             manual_save: 0,
+            highlight: if with_highlight { Some(0) } else { None },
             words: 3,
             estimate: 3,
             submit: 6,

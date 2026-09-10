@@ -27,7 +27,7 @@ fn disabled_local_tools_cannot_be_reached_by_naming_them_directly() {
 }
 
 #[test]
-fn update_config_persists_only_the_six_supported_non_secret_keys() {
+fn update_config_persists_only_the_seven_supported_non_secret_keys() {
     let root = tempfile::tempdir().unwrap();
     let config = root.path().join("config.toml");
     let environment = [("PANGRAM_CONFIG", config.as_os_str())];
@@ -39,6 +39,7 @@ fn update_config_persists_only_the_six_supported_non_secret_keys() {
         ("tui.intro", "off", "intro = \"off\""),
         ("tui.keymap", "vim", "keymap = \"vim\""),
         ("tui.motion", "reduced", "motion = \"reduced\""),
+        ("tui.highlight", "true", "highlight = true"),
         (
             "updates.check_on_tui_start",
             "false",

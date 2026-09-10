@@ -440,11 +440,15 @@ async fn history_search_filter_detail_cancel_delete_and_rerun_cross_real_boundar
             b"\x1b[Z\x1b[Z\r",
             "activate the selected billable rerun",
         );
-        assert_screen_text(&output_rx, &mut transcript, "Save state: saved history");
+        assert_screen_text(&output_rx, &mut transcript, "Save state  saved history");
 
         // A successful rerun opens its scrollable result. Traverse the
         // focusable New analysis action before Quit without a shortcut.
-        write_keys(&mut writer, b"\t\t\r", "activate the focusable Quit action");
+        write_keys(
+            &mut writer,
+            b"\t\t\t\r",
+            "activate the focusable Quit action",
+        );
     }));
 
     let mut killer = child.clone_killer();

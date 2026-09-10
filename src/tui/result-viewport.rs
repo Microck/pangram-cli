@@ -3,15 +3,19 @@
 use std::ops::Range;
 
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, StyledGrapheme};
 
 use crate::domain::{Analysis, AnalysisId};
 use crate::output::CanonicalError;
 
 use super::model::{AppState, Focus, KeyInput, Keymap, Route};
-use super::result_lines::analysis_result_lines;
+use super::render::{focus_marker, muted_style, primary_style};
+use super::result_lines::{ResultPresentation, analysis_result_lines};
 
 const PAGE_LINES: usize = 6;
+/// Every result row reserves the focus-marker gutter, focused or not, so text
+/// does not shift when the selection moves.
+const GUTTER: usize = focus_marker(false).len();
 
 #[derive(Clone, Copy)]
 pub(super) enum ResultMove {
@@ -101,7 +105,11 @@ pub(super) fn navigate(state: &mut AppState, movement: ResultMove) {
         return;
     };
     let width = result_width(state);
-    let lines = analysis_result_lines(analysis);
+    let lines = analysis_result_lines(
+        analysis,
+        ResultPresentation::from_state(state),
+        row_width(width),
+    );
     let row_count = wrapped_row_count(&lines, width);
     state
         .result_viewport
@@ -113,36 +121,64 @@ pub(super) fn visible_analysis_result_lines(
     analysis: &Analysis<CanonicalError>,
     viewport: &ResultViewport,
     focused: bool,
+    presentation: ResultPresentation,
     width: usize,
     capacity: usize,
 ) -> Vec<Line<'static>> {
-    let lines = analysis_result_lines(analysis);
+    let color_mode = presentation.color_mode;
+    let lines = analysis_result_lines(analysis, presentation, row_width(width));
     let row_count = wrapped_row_count(&lines, width);
     let (range, selected) = viewport.window(analysis.id, row_count, capacity.max(1));
     let mut visible = Vec::with_capacity(range.len() + 1);
-    visible.push(Line::raw(format!(
-        "{}Result rows {}-{} of {}",
-        if focused { "> " } else { "  " },
-        range.start.saturating_add(1),
-        range.end,
-        row_count,
-    )));
+    // The pager row is context, not a target: the selected row already owns
+    // the focus marker, so a second marker here would read as two selections.
+    visible.push(Line::styled(
+        format!(
+            "{}Result rows {}-{} of {}",
+            focus_marker(false),
+            range.start.saturating_add(1),
+            range.end,
+            row_count,
+        ),
+        muted_style(color_mode),
+    ));
     for (index, mut line) in visible_wrapped_rows(&lines, width, range.clone()) {
+        let marker = focused && index == selected;
+        // Ratatui's word wrapper renders a whitespace-only line as two rows,
+        // which would push the page tail off screen. A blank row carries no
+        // text, so it keeps only its marker.
+        if line.spans.iter().all(|span| span.content.trim().is_empty()) {
+            line = if marker {
+                Line::styled(">", primary_style(color_mode))
+            } else {
+                Line::default()
+            };
+            visible.push(line);
+            continue;
+        }
         line.spans.insert(
             0,
-            Span::raw(if focused && index == selected {
-                "> "
-            } else {
-                "  "
-            }),
+            Span::styled(
+                focus_marker(marker),
+                if marker {
+                    primary_style(color_mode)
+                } else {
+                    Style::default()
+                },
+            ),
         );
         visible.push(line);
     }
     visible
 }
 
+/// Cells one result row may use once the marker gutter is reserved.
+fn row_width(paragraph_width: usize) -> usize {
+    paragraph_width.saturating_sub(GUTTER).max(1)
+}
+
 fn wrapped_row_count(lines: &[Line<'_>], paragraph_width: usize) -> usize {
-    let width = paragraph_width.saturating_sub(2).max(1);
+    let width = row_width(paragraph_width);
     let mut count = 0;
     for line in lines {
         visit_wrapped_rows(line, width, |_| {
@@ -158,14 +194,14 @@ fn visible_wrapped_rows(
     paragraph_width: usize,
     range: Range<usize>,
 ) -> Vec<(usize, Line<'static>)> {
-    let width = paragraph_width.saturating_sub(2).max(1);
+    let width = row_width(paragraph_width);
     let mut visible = Vec::with_capacity(range.len());
     let mut row_index = 0;
 
     for line in lines {
         let completed = visit_wrapped_rows(line, width, |row| {
             if range.contains(&row_index) {
-                visible.push((row_index, Line::raw(row.concat())));
+                visible.push((row_index, row_line(row)));
             }
             row_index += 1;
             row_index < range.end
@@ -177,32 +213,70 @@ fn visible_wrapped_rows(
     visible
 }
 
+/// Rebuilds one physical row from styled graphemes, merging neighbours that
+/// share a style so the row keeps the projection's semantic colors.
+fn row_line(row: &[StyledGrapheme<'_>]) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for grapheme in row {
+        match spans.last_mut() {
+            Some(span) if span.style == grapheme.style => {
+                span.content.to_mut().push_str(grapheme.symbol);
+            }
+            _ => spans.push(Span::styled(grapheme.symbol.to_owned(), grapheme.style)),
+        }
+    }
+    Line::from(spans)
+}
+
+/// Splits one logical line into physical rows at whole words where possible.
+/// Continuation rows hang under the line's leading indent so indented
+/// evidence stays visually attached to its label row.
 fn visit_wrapped_rows<'a>(
     line: &'a Line<'_>,
     width: usize,
-    mut visit: impl FnMut(&[&'a str]) -> bool,
+    mut visit: impl FnMut(&[StyledGrapheme<'a>]) -> bool,
 ) -> bool {
-    let mut row = Vec::new();
+    let is_whitespace =
+        |grapheme: &StyledGrapheme<'_>| grapheme.symbol.chars().all(char::is_whitespace);
+    let graphemes: Vec<StyledGrapheme<'a>> = line.styled_graphemes(Style::default()).collect();
+    // The indent is capped so an over-indented line still leaves room for
+    // text; without the cap a continuation row could hold no content at all.
+    let indent = graphemes
+        .iter()
+        .take_while(|grapheme| is_whitespace(grapheme))
+        .count()
+        .min(width / 2);
+    let indent_cell = StyledGrapheme {
+        symbol: " ",
+        style: Style::default(),
+    };
+
+    // Invariant: `row[..indent]` is always indent, real on the first row and
+    // synthetic afterwards, so word breaks only ever happen after it.
+    let mut row: Vec<StyledGrapheme<'a>> = Vec::new();
     let mut used = 0_usize;
     let mut last_whitespace = None;
 
-    for grapheme in line.styled_graphemes(Style::default()) {
-        let symbol = grapheme.symbol;
-        let symbol_width = Span::raw(symbol).width();
-        while !row.is_empty() && used.saturating_add(symbol_width) > width {
+    for grapheme in graphemes {
+        let symbol_width = Span::raw(grapheme.symbol).width();
+        while row.len() > indent && used.saturating_add(symbol_width) > width {
             let split = last_whitespace.map_or(row.len(), |index| index + 1);
             if !visit(&row[..split]) {
                 return false;
             }
             row.drain(..split);
-            used = row.iter().map(|symbol| Span::raw(*symbol).width()).sum();
+            row.splice(0..0, std::iter::repeat_n(indent_cell.clone(), indent));
+            used = row.iter().map(|g| Span::raw(g.symbol).width()).sum();
             last_whitespace = row
                 .iter()
-                .rposition(|symbol| symbol.chars().all(char::is_whitespace));
+                .skip(indent)
+                .rposition(is_whitespace)
+                .map(|index| index + indent);
         }
-        row.push(symbol);
+        let breakable = is_whitespace(&grapheme);
+        row.push(grapheme);
         used = used.saturating_add(symbol_width);
-        if symbol.chars().all(char::is_whitespace) {
+        if breakable && row.len() > indent {
             last_whitespace = Some(row.len() - 1);
         }
     }
@@ -231,6 +305,15 @@ mod tests {
             .collect()
     }
 
+    fn rows_of(line: &Line<'_>, width: usize) -> Vec<String> {
+        let mut rows = Vec::new();
+        visit_wrapped_rows(line, width, |row| {
+            rows.push(row.iter().map(|g| g.symbol).collect::<String>());
+            true
+        });
+        rows
+    }
+
     #[test]
     fn physical_rows_preserve_wide_extended_graphemes_without_clipping() {
         let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
@@ -250,12 +333,50 @@ mod tests {
 
     #[test]
     fn wrapping_keeps_a_word_whole_when_it_fits_on_the_next_row() {
-        let mut rows = Vec::new();
-        visit_wrapped_rows(&Line::raw("evidence TAIL_SENTINEL"), 16, |row| {
-            rows.push(row.concat());
-            true
-        });
+        assert_eq!(
+            rows_of(&Line::raw("evidence TAIL_SENTINEL"), 16),
+            ["evidence ", "TAIL_SENTINEL"]
+        );
+    }
 
-        assert_eq!(rows, ["evidence ", "TAIL_SENTINEL"]);
+    #[test]
+    fn continuation_rows_hang_under_the_leading_indent() {
+        let rows = rows_of(&Line::raw("   alpha beta gamma delta"), 12);
+
+        assert_eq!(rows, ["   alpha ", "   beta ", "   gamma ", "   delta"]);
+    }
+
+    #[test]
+    fn hanging_indent_still_splits_an_overlong_token() {
+        let rows = rows_of(&Line::raw("   abcdefghijklmnop"), 10);
+
+        assert_eq!(rows.concat().replace(' ', ""), "abcdefghijklmnop");
+        assert!(rows.iter().all(|row| Span::raw(row.as_str()).width() <= 10));
+        assert!(rows.iter().all(|row| row.starts_with("   ")));
+    }
+
+    #[test]
+    fn physical_rows_keep_span_styles() {
+        let line = Line::from(vec![
+            Span::styled(
+                "bold ",
+                Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::raw("plain text that wraps"),
+        ]);
+        let rows = visible_wrapped_rows(&[line], 14, 0..3)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows[0].spans[0].content, "bold ");
+        assert!(
+            rows[0].spans[0]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
+        assert_eq!(rows[0].spans[1].content, "plain ");
+        assert_eq!(rows[0].spans[1].style, Style::default());
     }
 }

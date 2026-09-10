@@ -15,7 +15,7 @@ use super::model::{
     AppState, ColorMode, Focus, IntroFrequency, MIN_HEIGHT, MIN_WIDTH, MotionLevel, Route,
     WIDE_WIDTH,
 };
-use super::result_lines::{analysis_status_label, sanitize_single_line};
+use super::result_lines::{ResultPresentation, analysis_status_label, sanitize_single_line};
 use super::result_viewport::visible_analysis_result_lines;
 use crate::analysis::TextAnalysisMode;
 
@@ -29,8 +29,9 @@ mod render_layout;
 mod render_style;
 
 pub(super) use render_style::{
-    action_style, base_style, body_style, canvas_color, control_style, element_style,
+    EvidenceTone, action_style, base_style, body_style, canvas_color, control_style, element_style,
     fade_from_black, muted_style, panel_style, primary_style, route_style, separator_style,
+    tone_color, tone_style,
 };
 
 pub(super) use render_layout::{
@@ -419,6 +420,7 @@ fn try_render_analysis_state(frame: &mut Frame<'_>, area: Rect, state: &AppState
             analysis,
             &state.result_viewport,
             state.focus == Focus::Result,
+            ResultPresentation::from_state(state),
             usize::from(content_area.width),
             result_rows,
         ));
@@ -746,7 +748,7 @@ pub(super) fn focused_command(state: &AppState) -> (&'static str, &'static str) 
         }
         Focus::InputFiles => ("enter", "unavailable"),
         Focus::Composer => ("enter", "newline"),
-        Focus::PublicLink | Focus::ManualSave => ("enter", "toggle"),
+        Focus::PublicLink | Focus::ManualSave | Focus::Highlight => ("enter", "toggle"),
         Focus::Submit => (
             "enter",
             if analysis_can_reset(state) {

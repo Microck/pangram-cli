@@ -246,7 +246,7 @@ fn inspector_intent(
     state: &AppState,
 ) -> Option<PointerIntent> {
     let content = inset(area, if wide { 1 } else { 2 }, u16::from(wide));
-    let analyze_rows = analyze_inspector_rows(wide);
+    let analyze_rows = analyze_inspector_rows(wide, state.analysis.current.is_some());
     match state.route {
         Route::Analyze if wide => match row.checked_sub(content.y)? {
             offset
@@ -267,6 +267,16 @@ fn inspector_intent(
                             .saturating_add(toggle_width("Manual save", state.manual_save)) =>
             {
                 Some(PointerIntent::Activate(Focus::ManualSave))
+            }
+            offset
+                if Some(offset) == analyze_rows.highlight
+                    && column
+                        < content.x.saturating_add(toggle_width(
+                            "Highlight",
+                            state.settings.highlight,
+                        )) =>
+            {
+                Some(PointerIntent::Activate(Focus::Highlight))
             }
             offset
                 if offset == analyze_rows.submit
@@ -298,6 +308,17 @@ fn inspector_intent(
                             .saturating_add(toggle_width("Manual save", state.manual_save)) =>
             {
                 Some(PointerIntent::Activate(Focus::ManualSave))
+            }
+            offset
+                if Some(offset) == analyze_rows.highlight
+                    && column >= narrow_highlight_x(content, state)
+                    && column
+                        < narrow_highlight_x(content, state).saturating_add(toggle_width(
+                            "Highlight",
+                            state.settings.highlight,
+                        )) =>
+            {
+                Some(PointerIntent::Activate(Focus::Highlight))
             }
             offset
                 if offset == analyze_rows.submit
@@ -419,6 +440,14 @@ fn narrow_manual_save_x(content: Rect, state: &AppState) -> u16 {
     content
         .x
         .saturating_add(public_link_width)
+        .saturating_add(3)
+}
+
+/// The narrow inline toggle row places Highlight after Manual save with the
+/// same three-cell gap the inspector renders.
+fn narrow_highlight_x(content: Rect, state: &AppState) -> u16 {
+    narrow_manual_save_x(content, state)
+        .saturating_add(toggle_width("Manual save", state.manual_save))
         .saturating_add(3)
 }
 

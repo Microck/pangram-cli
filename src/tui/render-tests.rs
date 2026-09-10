@@ -549,10 +549,10 @@ fn succeeded_terminal_result_renders_classification_and_sanitized_dashboard_link
     let state = reduce(ready_state(120, 40), AppEvent::AnalysisFinished(analysis)).state;
     let text = draw(120, 40, &state).text();
 
-    assert!(text.contains("Overall: succeeded"));
-    assert!(text.contains("Classification: Human"));
-    assert!(text.contains("AI 0.0% | AI-assisted 0.0% | Human 100.0%"));
-    assert!(text.contains("Public dashboard: https://d.test/r [31mforged second-line"));
+    assert!(text.contains(&format!("Succeeded  {FIXED_ANALYSIS_ID}")));
+    assert!(text.contains("Human - Human-written"));
+    assert!(text.contains("AI 0.0%  AI-assisted 0.0%  Human 100.0%"));
+    assert!(text.contains("Public dashboard  https://d.test/r [31mforged second-line"));
     assert!(text.contains("second-line"));
     assert!(!text.contains('\u{1b}'));
     assert_eq!(text.matches("New analysis").count(), 1);
@@ -587,10 +587,8 @@ fn failed_submission_and_terminal_check_failures_have_distinct_results() {
     .state;
     let terminal_text = draw(120, 40, &terminal_state).text();
 
-    assert!(terminal_text.contains("Overall: failed"));
-    assert!(
-        terminal_text.contains("AI detection failed: Pangram could not complete this analysis.")
-    );
+    assert!(terminal_text.contains(&format!("Failed  {FIXED_ANALYSIS_ID}")));
+    assert!(terminal_text.contains("Failed - Pangram could not complete this analysis."));
 }
 
 #[test]
@@ -642,19 +640,20 @@ fn partial_terminal_result_keeps_succeeded_evidence_and_failed_diagnostic_termin
     .state;
     let text = draw(120, 40, &state).text();
 
-    assert!(text.contains("Overall: partial"));
-    assert!(text.contains("Plagiarism: detected - 50.0% across 1/2 sentences"));
-    assert!(text.contains("Match 1: 91.0% - https://e.test/ [32m x - evidence [2J shown"));
-    assert!(text.contains("AI detection failed: AI check failed. [31m Retry later."));
+    assert!(text.contains(&format!("Partial  {FIXED_ANALYSIS_ID}")));
+    assert!(text.contains("Detected - 50.0% across 1/2 sentences"));
+    assert!(text.contains("1  91.0% similar  https://e.test/ [32m x"));
+    assert!(text.contains("   evidence [2J shown"));
+    assert!(text.contains("Failed - AI check failed. [31m Retry later."));
     assert!(!text.contains('\u{1b}'));
 }
 
 #[test]
 fn terminal_result_labels_each_canonical_save_state() {
     for (save_state, expected) in [
-        (SaveState::Ephemeral, "Save state: ephemeral"),
-        (SaveState::SavedManual, "Save state: saved manual"),
-        (SaveState::SavedHistory, "Save state: saved history"),
+        (SaveState::Ephemeral, "Save state  ephemeral"),
+        (SaveState::SavedManual, "Save state  saved manual"),
+        (SaveState::SavedHistory, "Save state  saved history"),
     ] {
         let analysis = terminal_analysis(save_state, None);
         let state = reduce(ready_state(120, 40), AppEvent::AnalysisFinished(analysis)).state;
@@ -783,24 +782,25 @@ fn history_detail_is_redacted_and_uses_the_shared_terminal_safe_result_lines() {
     assert!(first_page.contains("Selected detail - retained input redacted"));
     assert!(first_page.contains("Input file: report [31m.txt - text/plain [0m - 20 bytes"));
     assert!(first_page.contains("Retained input content: redacted"));
-    assert!(first_page.contains("Classification: Mixed"));
-    assert!(first_page.contains("Result: headline [31mforged next"));
-    assert!(first_page.contains("Prediction: prediction [2Jcleared"));
+    assert!(first_page.contains("Mixed - headline [31mforged next"));
+    assert!(first_page.contains("prediction [2Jcleared"));
 
     let mut evidence_pages = String::new();
     for _ in 0..12 {
         state = reduce(state, AppEvent::Key(KeyInput::PageDown)).state;
         evidence_pages.push_str(&draw(120, 24, &state).text());
     }
-    assert!(evidence_pages.contains("8. segment-8 - 40.0% AI assistance"));
-    assert!(evidence_pages.contains("Text: segment evidence 8"));
-    assert!(evidence_pages.contains("Plagiarism: detected - 100.0% across 8/8 sentences"));
-    assert!(evidence_pages.contains("https://source.test/ [31murl - matched [2Jtext"));
+    assert!(evidence_pages.contains("8  segment-8  40.0% AI assistance  high confidence"));
+    assert!(evidence_pages.contains("segment evidence 8"));
+    assert!(evidence_pages.contains("Detected - 100.0% across 8/8 sentences"));
+    assert!(evidence_pages.contains("1  90.0% similar  https://source.test/ [31murl"));
+    assert!(evidence_pages.contains("   matched [2Jtext"));
 
     state = reduce(state, AppEvent::Key(KeyInput::End)).state;
     let last_page = draw(120, 24, &state).text();
-    assert!(last_page.contains("Match 8: 90.0% - https://source.test/8 - match evidence 8"));
-    assert!(last_page.contains("Save state: saved history"));
+    assert!(last_page.contains("8  90.0% similar  https://source.test/8"));
+    assert!(last_page.contains("   match evidence 8"));
+    assert!(last_page.contains("Save state  saved history"));
     for secret in [
         "SECRET_RETAINED_FILE",
         "SECRET_EXTRACTED_TEXT",
@@ -827,8 +827,8 @@ fn analyze_result_viewport_reaches_the_last_ordered_evidence() {
     state = reduce(state, AppEvent::Key(KeyInput::End)).state;
     let text = draw(120, 24, &state).text();
 
-    assert!(text.contains("Match 8: 90.0% - https://source.test/8 - match evidence 8"));
-    assert!(text.contains("Save state: saved history"));
+    assert!(text.contains("   match evidence 8"));
+    assert!(text.contains("Save state  saved history"));
 }
 
 #[test]

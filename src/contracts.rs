@@ -306,6 +306,11 @@ fn config_schema() -> Value {
         &["$defs", "TuiConfig", "properties", "motion"],
         json!("full"),
     );
+    set_default(
+        &mut schema,
+        &["$defs", "TuiConfig", "properties", "highlight"],
+        json!(false),
+    );
     let rate = object_mut(generated_path_mut(
         &mut schema,
         &[

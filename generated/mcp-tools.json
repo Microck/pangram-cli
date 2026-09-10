@@ -20823,6 +20823,7 @@
               "tui.intro",
               "tui.keymap",
               "tui.motion",
+              "tui.highlight",
               "updates.check_on_tui_start",
               "network.max_requests_per_second"
             ]

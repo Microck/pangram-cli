@@ -1252,6 +1252,11 @@ interactive surface has these observable boundaries:
 - Each focusable action has one visible owner. The Analyze inspector owns the
   `Submit` action before a result and changes it to `New analysis` after a
   result; the result workspace does not render a second copy of that action.
+  While a completed result is shown, the inspector also owns a `Highlight`
+  toggle after `Manual save` (a third inline toggle in the narrow layout). It
+  persists `tui.highlight` through the same typed configuration service as
+  Settings and sits between the result viewport and `New analysis` in the
+  focus order.
 - Result viewport capacity is derived from the rows already rendered above the
   result. Headings, filters, pending state, and wrapped preamble text must not
   reduce or obscure the visible result page.
@@ -1372,21 +1377,46 @@ original paths, and extracted text never enter TUI state or rendered cells.
 Detail and every diagnostic still pass through terminal sanitization.
 Completed Analyze results and loaded History detail expose every ordered AI
 segment and plagiarism match through one ID-owned result viewport; projection
-never truncates evidence. Each AI segment shows its canonical label, text,
-confidence, start and end offsets, word and token counts, AI-assistance
-score, and humanizer score and decision. Result paging budgets
+never truncates evidence. The projection opens with the analysis status and
+ID on one row, then one group per ordered check under a plain `AI detection`
+or `Plagiarism` heading, with one blank row between groups. A succeeded AI
+check shows classification and headline, prediction, one legend row with the
+three fractions and the segment counts, and a distribution bar. The distribution bar is one row of
+at most 60 cells that scales each segment by its word count in document
+order; colored terminals draw full-block cells in each tone and no-color terminals
+use `#` for AI, `=` for AI-assisted, and `.` for human. The bar is omitted
+when no segment has words. The segment texts then follow in order as plain
+paragraphs separated by blank rows, so the document reads as it does in the
+dashboard's text pane. After the paragraphs, each segment has two muted facts rows:
+its index, canonical label, AI-assistance score, and confidence; then, hanging
+under it, start and end offsets, word and token counts, the humanizer score,
+and the word `humanized` only when Pangram's decision is positive. Each plagiarism match is a similarity row with its source URL
+followed by the matched text. Failed, queued, and running checks show that
+state in words under their heading. Headings use the orange heading style,
+evidence uses body text, and counts, offsets, identities, and timestamps use
+the muted style. Three evidence tones mirror the Pangram dashboard: AI is
+red, AI-assisted is amber, and human is green. They color the classification,
+the legend labels, segment labels matched by keyword (`human`, `assist`, then
+`ai`), the plagiarism verdict, and the distribution bar. By default the
+paragraphs are white and only the facts labels carry tone. With
+`tui.highlight` on, each paragraph is painted in its segment's tone so the
+reader sees where the AI is. A failed check's `Failed` word
+uses the AI tone. No state depends on color alone. Result paging budgets
 rendered terminal rows at the active content width. Provider-authored text is
 sanitized, split at extended-grapheme boundaries without clipping, and its
 continuation rows remain navigable even when one evidence value is taller than
-the viewport. Up and Down move one result row, PageUp and PageDown move six
-rows, and Home and End move to the first and last row. Vim adds
-`k`/`j`, Ctrl+u/Ctrl+d, and `gg`/`G`. Loading a different analysis starts at
-its first result row. Tab and Shift+Tab leave or enter the viewport.
-After ordered evidence, the shared projection shows canonical provider,
+the viewport. Continuation rows hang under the logical row's leading indent.
+The pager row above the result reports the visible row range and is not a
+selection target; only the selected result row carries the focus marker. Up
+and Down move one result row, PageUp and PageDown move six rows, and Home and
+End move to the first and last row. Vim adds `k`/`j`, Ctrl+u/Ctrl+d, and
+`gg`/`G`. Loading a different analysis starts at its first result row. Tab and
+Shift+Tab leave or enter the viewport.
+After ordered evidence, the shared projection shows canonical provider and
 version, aggregate task IDs, bulk ID, submission and completion times, then
-per-check task IDs in canonical check order. It omits absent identities and
-sanitizes every upstream value before rendering. Save state and actions follow
-that provenance block.
+per-check task IDs in canonical check order, all muted. It omits absent
+identities and sanitizes every upstream value before rendering. Save state and
+actions follow that provenance block.
 
 Rerun is a focused action labeled as billable; activating it is the explicit
 request and does not add a second confirmation. It reconstructs and validates
