@@ -141,12 +141,18 @@ fn history_export_flush_failure_exits_general_failure() {
     assert!(output.stderr.is_empty());
 }
 
+/// The contract is that `--version` reports this package's version, so the
+/// expectation is derived from Cargo rather than pinned to one release. A
+/// literal would fail on every version bump without catching a real defect.
 #[test]
 fn version_reports_the_package_version() {
     let output = pangram().arg("--version").output().unwrap();
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "pangram 0.1.0\n");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("pangram {}\n", env!("CARGO_PKG_VERSION"))
+    );
     assert!(output.stderr.is_empty());
 }
 
@@ -155,7 +161,10 @@ fn short_version_reports_the_package_version() {
     let output = pangram().arg("-V").output().unwrap();
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "pangram 0.1.0\n");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("pangram {}\n", env!("CARGO_PKG_VERSION"))
+    );
     assert!(output.stderr.is_empty());
 }
 
