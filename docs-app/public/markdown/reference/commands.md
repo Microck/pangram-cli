@@ -1,6 +1,6 @@
 # Command index
 
-Generated from Pangram CLI 0.1.0 and schema major 1.
+Generated from Pangram CLI 0.1.1 and schema major 1.
 
 | Command | Kind | Availability | Arguments |
 | --- | --- | --- | --- |
