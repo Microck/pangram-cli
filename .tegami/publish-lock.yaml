@@ -1,6 +1,15 @@
 core:changelogs:
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: minor\n  npm:@microck/pangram-cli:\n    type: minor\n---\n\n## Added\n\n- Analyze text, files, and bulk jobs with Pangram 4 from a JSON-first CLI.\n- Check plagiarism alone or alongside AI detection while preserving partial results.\n- Use the interactive Ratatui interface with mouse, keyboard, Vim bindings, history, settings, and the approved terminal fox intro.\n- Connect agents through a typed stdio MCP server with explicit file, history, mutation, and billing gates.\n- Store optional local history in a protected SQLite database with search, export, rerun, and deletion controls.\n- Install signed native builds on Linux x64 and ARM64, macOS x64 and ARM64, and Windows x64 through direct installers, npm, Homebrew, or Scoop.\n- Generate shell completions for Bash, Zsh, Fish, PowerShell, and Elvish.\n\n## Changed\n\n- Require Pangram 4 for text analysis and estimate usage in started 100-word units before billable bulk work.\n- Keep history, public dashboard links, telemetry, and update-network access disabled by default.\n- Report ambiguous submissions and partial combined analyses without automatic billable retries.\n\n## Fixed\n\n- Bound synchronous file and plagiarism requests with the configured timeout.\n- Preserve the prior executable and install receipt when a signed replacement fails validation or smoke testing.\n- Reject unsupported hosts and malformed release archives before installation.\n\n## Security\n\n- Store API credentials with owner-only filesystem protections and keep secrets and submitted content out of logs and diagnostics.\n- Verify signed update metadata, archive shape, checksums, target identity, and executable bytes before installation or replacement.\n- Sanitize untrusted terminal and Markdown content before human-readable rendering.\n"
-    filename: initial-public-release.md
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Fixed\n\nCorrected command examples and generated reference pages so they match the shipped CLI and MCP contracts.\n"
+    filename: documentation-drift.md
+    v: 0.0.0
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Added\n\nPublic landing page for the Pangram CLI.\n\n## Changed\n\nAligned the README with the current release and installation paths.\n"
+    filename: landing-docs-refresh.md
+    v: 0.0.0
+  - content: "---\npackages:\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Security\n\nUpdated the documentation site to Next.js 16.3.4, which carries the fixes for GHSA-p293-qw3h-jr36 and GHSA-2xp9-vwfh-vxw4.\n"
+    filename: next-security-patch.md
+    v: 0.0.0
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Added\n\n`tui.highlight` (default `false`) paints AI-detection segment text in its evidence tone in the TUI result. A `Highlight` toggle in the Analyze inspector changes it while a result is shown.\n\n## Changed\n\nThe TUI result view groups each check under a heading, gives every AI segment its own label, text, and measurement rows, and mutes identities and timestamps so evidence is readable instead of one long line per segment.\n\nAI, AI-assisted, and human evidence use the same red, amber, and green tones as the Pangram dashboard, and a word-proportional bar shows where each kind of text sits in the document.\n"
+    filename: tui-result-layout.md
     v: 0.0.0
 core:packages:
   - id: npm:pangram-cli-development-tools
@@ -8,11 +17,16 @@ core:packages:
   - id: npm:@microck/pangram-docs
     updated: false
   - changelogIds:
-      - initial-public-release.md
+      - documentation-drift.md
+      - landing-docs-refresh.md
+      - next-security-patch.md
+      - tui-result-layout.md
     id: npm:@microck/pangram-cli
     updated: true
   - changelogIds:
-      - initial-public-release.md
+      - documentation-drift.md
+      - landing-docs-refresh.md
+      - tui-result-layout.md
     id: cargo:microck-pangram-cli
     updated: true
 npm:packages:

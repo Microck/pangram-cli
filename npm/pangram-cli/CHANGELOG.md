@@ -1,3 +1,31 @@
+## @microck/pangram-cli@0.1.1
+
+### Fixed
+
+Corrected command examples and generated reference pages so they match the shipped CLI and MCP contracts.
+
+### Added
+
+Public landing page for the Pangram CLI.
+
+### Changed
+
+Aligned the README with the current release and installation paths.
+
+### Security
+
+Updated the documentation site to Next.js 16.3.4, which carries the fixes for GHSA-p293-qw3h-jr36 and GHSA-2xp9-vwfh-vxw4.
+
+### Added
+
+`tui.highlight` (default `false`) paints AI-detection segment text in its evidence tone in the TUI result. A `Highlight` toggle in the Analyze inspector changes it while a result is shown.
+
+### Changed
+
+The TUI result view groups each check under a heading, gives every AI segment its own label, text, and measurement rows, and mutes identities and timestamps so evidence is readable instead of one long line per segment.
+
+AI, AI-assisted, and human evidence use the same red, amber, and green tones as the Pangram dashboard, and a word-proportional bar shows where each kind of text sits in the document.
+
 ## @microck/pangram-cli@0.1.0
 
 ### Added
