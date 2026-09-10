@@ -115,6 +115,10 @@ pub(crate) fn reduce_in_place(state: &mut AppState, event: AppEvent) -> Vec<Effe
                         state.settings.motion = motion;
                         state.notice = None;
                     }
+                    StoredSetting::Highlight(enabled) => {
+                        state.settings.highlight = enabled;
+                        state.notice = None;
+                    }
                 },
                 Err(error) => state.notice = Some(error.message().to_owned()),
             }
@@ -363,6 +367,11 @@ fn activate_focus(state: &mut AppState, effects: &mut Vec<Effect>) {
         }
         Focus::PublicLink => {}
         Focus::ManualSave => state.manual_save = !state.manual_save,
+        Focus::Highlight => request_setting(
+            &mut state.setting_write_pending,
+            effects,
+            Effect::StoreHighlight(!state.settings.highlight),
+        ),
         Focus::Submit => {
             if state.analysis.submitting || state.active.has_session() {
                 state.notice = Some(ANALYSIS_IN_PROGRESS_NOTICE.to_owned());
@@ -504,7 +513,13 @@ fn focus_order(state: &AppState) -> &'static [Focus] {
         Focus::Submit,
         Focus::Quit,
     ];
-    const ANALYZE_RESULT: &[Focus] = &[Focus::Routes, Focus::Result, Focus::Submit, Focus::Quit];
+    const ANALYZE_RESULT: &[Focus] = &[
+        Focus::Routes,
+        Focus::Result,
+        Focus::Highlight,
+        Focus::Submit,
+        Focus::Quit,
+    ];
     const ACTIVE: &[Focus] = &[Focus::Routes, Focus::ActiveList, Focus::Quit];
     const SETTINGS: &[Focus] = &[
         Focus::Routes,

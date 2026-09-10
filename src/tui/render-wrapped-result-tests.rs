@@ -61,7 +61,7 @@ fn analyze_result_viewport_reaches_every_physical_row_of_one_tall_value() {
         let text = draw(80, 24, &state).text();
         saw_begin |= text.contains("BEGIN_SENTINEL");
         saw_tail |= text.contains("TAIL_SENTINEL");
-        saw_save |= text.contains("Save state: saved history");
+        saw_save |= text.contains("Save state  saved history");
         state = reduce(state, AppEvent::Key(KeyInput::Down)).state;
     }
 
@@ -100,6 +100,6 @@ fn history_result_viewport_reaches_wrapped_tail_and_save_state() {
     assert!(
         draw(80, 24, &state)
             .text()
-            .contains("Save state: saved history")
+            .contains("Save state  saved history")
     );
 }

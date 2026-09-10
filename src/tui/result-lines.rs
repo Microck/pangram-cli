@@ -2,140 +2,211 @@
 //!
 //! Analyze and History both use this module so status, ordered check results,
 //! failures, and save state cannot drift between the two routes.
+//!
+//! Rows follow the rest of the TUI: orange headings name each check, white
+//! body rows carry the evidence a person reads, and muted rows carry counts,
+//! offsets, identities, and timestamps. Every state stays in the text itself
+//! so a no-color terminal loses nothing.
 
-use ratatui::text::Line;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 
+use super::model::{AppState, ColorMode};
+use super::render::{
+    EvidenceTone, body_style, heading, muted_style, primary_style, tone_color, tone_style,
+};
 use crate::domain::{
     AiClassification, Analysis, AnalysisStatus, Check, CheckState, CheckStatus, Confidence,
-    Provider, SaveState,
+    Provider, SaveState, Segment,
 };
 use crate::output::CanonicalError;
 
-/// Projects one canonical analysis into terminal-safe, text-labelled lines.
-pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::raw(format!(
-            "Overall: {}",
-            analysis_status_label(analysis.status())
-        )),
-        Line::raw(format!("Analysis: {}", analysis.id)),
-    ];
+/// Facts on one row are separated by two cells, matching inspector rows.
+const GAP: &str = "  ";
+/// Match text and segment measurements hang under their index.
+const INDENT: &str = "   ";
+/// The distribution bar stops growing here so very wide terminals do not
+/// turn a few segments into a full-width stripe.
+const MAX_BAR_WIDTH: usize = 60;
+/// Full block, the same glyph the intro uses for its densest colored cell.
+const BAR_CELL: &str = "\u{2588}";
+
+/// How the result is painted. Both are user preferences that travel together
+/// from `AppState` into the projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ResultPresentation {
+    pub(crate) color_mode: ColorMode,
+    /// Paint segment text in its tone, like the dashboard's text highlight.
+    /// Off keeps color on labels only.
+    pub(crate) highlight: bool,
+}
+
+impl ResultPresentation {
+    pub(crate) fn from_state(state: &AppState) -> Self {
+        Self {
+            color_mode: state.color_mode,
+            highlight: state.settings.highlight,
+        }
+    }
+}
+
+/// Projects one canonical analysis into terminal-safe, styled lines.
+///
+/// `width` is the number of cells one row may use; only the distribution bar
+/// depends on it, because every other row wraps downstream.
+pub(crate) fn analysis_result_lines(
+    analysis: &Analysis<CanonicalError>,
+    presentation: ResultPresentation,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let color_mode = presentation.color_mode;
+    let body = body_style(color_mode);
+    let strong = body.add_modifier(Modifier::BOLD);
+    let muted = muted_style(color_mode);
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            analysis_status_title(analysis.status()),
+            primary_style(color_mode),
+        ),
+        Span::styled(format!("{GAP}{}", analysis.id), muted),
+    ])];
 
     for check in analysis.checks() {
+        lines.push(Line::raw(""));
         match check {
             Check::AiDetection(CheckState::Succeeded { result, .. }) => {
-                lines.push(Line::raw(format!(
-                    "Classification: {}",
-                    classification_label(result.classification)
-                )));
-                lines.push(Line::raw(format!(
-                    "AI {:.1}% | AI-assisted {:.1}% | Human {:.1}%",
-                    result.fraction_ai.get() * 100.0,
-                    result.fraction_ai_assisted.get() * 100.0,
-                    result.fraction_human.get() * 100.0,
-                )));
-                lines.push(Line::raw(format!(
-                    "Result: {}",
-                    sanitize_single_line(&result.headline)
-                )));
-                lines.push(Line::raw(format!(
-                    "Prediction: {}",
-                    sanitize_single_line(&result.prediction)
-                )));
-                lines.push(Line::raw(format!(
-                    "Segments: {} (AI {}, AI-assisted {}, Human {})",
-                    result.segments.len(),
-                    result.num_ai_segments,
-                    result.num_ai_assisted_segments,
-                    result.num_human_segments,
-                )));
+                lines.push(heading(color_mode, "AI detection"));
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        classification_label(result.classification),
+                        tone_style(color_mode, classification_tone(result.classification)),
+                    ),
+                    Span::styled(
+                        format!(" - {}", sanitize_single_line(&result.headline)),
+                        strong,
+                    ),
+                ]));
+                lines.push(Line::styled(sanitize_single_line(&result.prediction), body));
+                // The fractions row doubles as the legend for the bar below
+                // it. Pangram's per-kind segment counts ride along muted as
+                // AI/AI-assisted/human; the segment list itself is the evidence.
+                let mut legend = toned_facts_line(
+                    color_mode,
+                    [
+                        (
+                            EvidenceTone::Ai,
+                            format!("{:.1}%", result.fraction_ai.get() * 100.0),
+                        ),
+                        (
+                            EvidenceTone::AiAssisted,
+                            format!("{:.1}%", result.fraction_ai_assisted.get() * 100.0),
+                        ),
+                        (
+                            EvidenceTone::Human,
+                            format!("{:.1}%", result.fraction_human.get() * 100.0),
+                        ),
+                    ],
+                    body,
+                );
+                legend.spans.push(Span::styled(
+                    format!(
+                        "{GAP}{} segment{} ({}/{}/{})",
+                        result.segments.len(),
+                        if result.segments.len() == 1 { "" } else { "s" },
+                        result.num_ai_segments,
+                        result.num_ai_assisted_segments,
+                        result.num_human_segments,
+                    ),
+                    muted,
+                ));
+                lines.push(legend);
+                if let Some(bar) = distribution_bar(&result.segments, color_mode, width) {
+                    lines.push(bar);
+                }
+                // The document reads as plain paragraphs, one per segment,
+                // like the dashboard's left pane. The per-segment facts follow
+                // as a compact list so the reading area stays uncluttered.
+                for segment in &result.segments {
+                    lines.push(Line::raw(""));
+                    lines.push(segment_text_line(segment, presentation));
+                }
+                if !result.segments.is_empty() {
+                    lines.push(Line::raw(""));
+                }
                 for (index, segment) in result.segments.iter().enumerate() {
-                    let mut summary = format!(
-                        "{}. {} - {:.1}% AI assistance | Text: {} | Confidence: {} | Offsets: {}..{} | Words: {} | Tokens: {}",
-                        index + 1,
-                        sanitize_single_line(segment.label.as_str()),
-                        segment.ai_assistance_score.get() * 100.0,
-                        sanitize_single_line(&segment.text),
-                        confidence_label(segment.confidence),
-                        segment.start_index,
-                        segment.end_index,
-                        segment.word_count,
-                        segment.token_length,
-                    );
-                    if let (Some(score), Some(is_humanized)) =
-                        (segment.humanizer_score, segment.is_humanized)
-                    {
-                        summary.push_str(&format!(
-                            " | Humanizer score: {:.1}% | Humanized: {}",
-                            score.get() * 100.0,
-                            if is_humanized { "yes" } else { "no" },
-                        ));
-                    }
-                    lines.push(Line::raw(summary));
+                    lines.extend(segment_facts_lines(index + 1, segment, color_mode));
                 }
                 if let Some(link) = &result.dashboard_link {
-                    lines.push(Line::raw(format!(
-                        "Public dashboard: {}",
-                        sanitize_single_line(link)
-                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled("Public dashboard", muted),
+                        Span::styled(format!("{GAP}{}", sanitize_single_line(link)), body),
+                    ]));
                 }
             }
             Check::AiDetection(CheckState::Failed { error, .. }) => {
-                lines.push(Line::raw(format!(
-                    "AI detection failed: {}",
-                    sanitize_single_line(error.message())
-                )));
+                lines.push(heading(color_mode, "AI detection"));
+                lines.push(failure_line(error, color_mode));
             }
-            Check::AiDetection(state) => lines.push(Line::raw(format!(
-                "AI detection: {}",
-                check_status_label(state.status())
-            ))),
+            Check::AiDetection(state) => {
+                lines.push(heading(color_mode, "AI detection"));
+                lines.push(Line::styled(check_status_title(state.status()), body));
+            }
             Check::Plagiarism(CheckState::Succeeded { result, .. }) => {
-                lines.push(Line::raw(format!(
-                    "Plagiarism: {} - {:.1}% across {}/{} sentences",
-                    if result.plagiarism_detected {
-                        "detected"
-                    } else {
-                        "not detected"
-                    },
-                    result.percent_plagiarized.get(),
-                    result.plagiarized_sentence_count,
-                    result.total_sentences,
-                )));
+                lines.push(heading(color_mode, "Plagiarism"));
+                let (verdict, tone) = if result.plagiarism_detected {
+                    ("Detected", EvidenceTone::Ai)
+                } else {
+                    ("Not detected", EvidenceTone::Human)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(verdict, tone_style(color_mode, tone)),
+                    Span::styled(
+                        format!(
+                            " - {:.1}% across {}/{} sentences",
+                            result.percent_plagiarized.get(),
+                            result.plagiarized_sentence_count,
+                            result.total_sentences,
+                        ),
+                        strong,
+                    ),
+                ]));
                 for (index, matched) in result.matches.iter().enumerate() {
-                    lines.push(Line::raw(format!(
-                        "Match {}: {:.1}% - {} - {}",
-                        index + 1,
-                        matched.similarity_score.get() * 100.0,
-                        sanitize_single_line(&matched.source_url),
-                        sanitize_single_line(&matched.matched_text),
-                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{:<3}", index + 1), muted),
+                        Span::styled(
+                            format!("{:.1}% similar", matched.similarity_score.get() * 100.0),
+                            strong,
+                        ),
+                        Span::styled(
+                            format!("{GAP}{}", sanitize_single_line(&matched.source_url)),
+                            body,
+                        ),
+                    ]));
+                    lines.push(Line::styled(
+                        format!("{INDENT}{}", sanitize_single_line(&matched.matched_text)),
+                        body,
+                    ));
                 }
             }
             Check::Plagiarism(CheckState::Failed { error, .. }) => {
-                lines.push(Line::raw(format!(
-                    "Plagiarism failed: {}",
-                    sanitize_single_line(error.message())
-                )));
+                lines.push(heading(color_mode, "Plagiarism"));
+                lines.push(failure_line(error, color_mode));
             }
-            Check::Plagiarism(state) => lines.push(Line::raw(format!(
-                "Plagiarism: {}",
-                check_status_label(state.status())
-            ))),
+            Check::Plagiarism(state) => {
+                lines.push(heading(color_mode, "Plagiarism"));
+                lines.push(Line::styled(check_status_title(state.status()), body));
+            }
         }
     }
 
+    lines.push(Line::raw(""));
     let provenance = analysis.provenance();
-    lines.push(Line::raw(format!(
-        "Provider: {}",
-        provider_label(provenance.provider)
-    )));
+    let mut provider = format!("Provider {}", provider_label(provenance.provider));
     if let Some(version) = &provenance.upstream_version {
-        lines.push(Line::raw(format!(
-            "Upstream version: {}",
-            sanitize_single_line(version)
-        )));
+        provider.push_str(&format!("{GAP}version {}", sanitize_single_line(version)));
     }
+    lines.push(Line::styled(provider, muted));
     if let Some(task_ids) = &provenance.upstream_task_ids
         && !task_ids.as_slice().is_empty()
     {
@@ -145,34 +216,198 @@ pub(crate) fn analysis_result_lines(analysis: &Analysis<CanonicalError>) -> Vec<
             .map(|id| sanitize_single_line(id.as_str()))
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(Line::raw(format!("Upstream task IDs: {ids}")));
+        lines.push(Line::styled(format!("Upstream tasks {ids}"), muted));
     }
     if let Some(bulk_id) = &provenance.upstream_bulk_id {
-        lines.push(Line::raw(format!(
-            "Upstream bulk ID: {}",
-            sanitize_single_line(bulk_id.as_str())
-        )));
+        lines.push(Line::styled(
+            format!("Upstream bulk {}", sanitize_single_line(bulk_id.as_str())),
+            muted,
+        ));
     }
     if let Some(submitted_at) = provenance.submitted_at {
-        lines.push(Line::raw(format!("Submitted at: {submitted_at}")));
+        lines.push(Line::styled(format!("Submitted {submitted_at}"), muted));
     }
     if let Some(completed_at) = provenance.completed_at {
-        lines.push(Line::raw(format!("Completed at: {completed_at}")));
+        lines.push(Line::styled(format!("Completed {completed_at}"), muted));
     }
     for check in analysis.checks() {
         if let Some((label, task_id)) = check_task_identity(check) {
-            lines.push(Line::raw(format!(
-                "{label} task ID: {}",
-                sanitize_single_line(task_id)
-            )));
+            lines.push(Line::styled(
+                format!("{label} task {}", sanitize_single_line(task_id)),
+                muted,
+            ));
         }
     }
 
-    lines.push(Line::raw(format!(
-        "Save state: {}",
-        save_state_label(analysis.save_state)
-    )));
+    lines.push(Line::from(vec![
+        Span::styled("Save state", muted),
+        Span::styled(
+            format!("{GAP}{}", save_state_label(analysis.save_state)),
+            body,
+        ),
+    ]));
     lines
+}
+
+/// One paragraph of the document. With highlight on it takes its segment's
+/// tone so the reader sees where the AI is, the way the dashboard washes
+/// highlighted text; off leaves it plain body text.
+fn segment_text_line(segment: &Segment, presentation: ResultPresentation) -> Line<'static> {
+    let body = body_style(presentation.color_mode);
+    let style = match segment_tone(&sanitize_single_line(segment.label.as_str())) {
+        Some(tone) if presentation.highlight => body.fg(tone_color(presentation.color_mode, tone)),
+        _ => body,
+    };
+    Line::styled(sanitize_single_line(&segment.text), style)
+}
+
+/// Two muted rows per segment: the canonical label with score and
+/// confidence, then offsets, counts, and humanizer evidence hanging under
+/// it. The index matches paragraph order above, and the label keeps its tone
+/// so it maps to the paint.
+fn segment_facts_lines(
+    number: usize,
+    segment: &Segment,
+    color_mode: ColorMode,
+) -> [Line<'static>; 2] {
+    let muted = muted_style(color_mode);
+    let label = sanitize_single_line(segment.label.as_str());
+    let label_style = segment_tone(&label).map_or(muted.add_modifier(Modifier::BOLD), |tone| {
+        tone_style(color_mode, tone)
+    });
+    let mut measurements = format!(
+        "{INDENT}{}..{}{GAP}{} words{GAP}{} tokens",
+        segment.start_index, segment.end_index, segment.word_count, segment.token_length,
+    );
+    // Pangram's humanizer decision is called out only when it fired; the
+    // score alone carries the negative case.
+    if let (Some(score), Some(is_humanized)) = (segment.humanizer_score, segment.is_humanized) {
+        measurements.push_str(&format!("{GAP}humanizer {:.1}%", score.get() * 100.0));
+        if is_humanized {
+            measurements.push_str(&format!("{GAP}humanized"));
+        }
+    }
+    [
+        Line::from(vec![
+            Span::styled(format!("{number:<3}"), muted),
+            Span::styled(label, label_style),
+            Span::styled(
+                format!(
+                    "{GAP}{:.1}% AI assistance{GAP}{} confidence",
+                    segment.ai_assistance_score.get() * 100.0,
+                    confidence_label(segment.confidence),
+                ),
+                muted,
+            ),
+        ]),
+        Line::styled(measurements, muted),
+    ]
+}
+
+fn failure_line(error: &CanonicalError, color_mode: ColorMode) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("Failed", tone_style(color_mode, EvidenceTone::Ai)),
+        Span::styled(
+            format!(" - {}", sanitize_single_line(error.message())),
+            body_style(color_mode),
+        ),
+    ])
+}
+
+/// One row of `label value` facts, one per tone, with the label in its tone.
+fn toned_facts_line(
+    color_mode: ColorMode,
+    facts: [(EvidenceTone, String); 3],
+    value_style: Style,
+) -> Line<'static> {
+    let mut spans = Vec::with_capacity(6);
+    for (index, (tone, value)) in facts.into_iter().enumerate() {
+        let separator = if index == 0 { "" } else { GAP };
+        spans.push(Span::styled(
+            format!("{separator}{}", tone_label(tone)),
+            tone_style(color_mode, tone),
+        ));
+        spans.push(Span::styled(format!(" {value}"), value_style));
+    }
+    Line::from(spans)
+}
+
+/// Word-proportional stripe of the segments in document order, like the
+/// dashboard's "AI usage across document" chart. Colored terminals draw
+/// full-block cells in the tone, following the intro's glyph choice;
+/// no-color terminals use one ASCII symbol per tone so the shape survives.
+/// Cells are never bare spaces because whitespace-only rows wrap badly in
+/// ratatui. Returns `None` when there is nothing to scale.
+fn distribution_bar(
+    segments: &[Segment],
+    color_mode: ColorMode,
+    width: usize,
+) -> Option<Line<'static>> {
+    let total_words: u64 = segments.iter().map(|segment| segment.word_count).sum();
+    let bar_width = width.min(MAX_BAR_WIDTH);
+    if total_words == 0 || bar_width == 0 {
+        return None;
+    }
+    // Cumulative rounding keeps the cells summing to exactly `bar_width`.
+    let mut spans = Vec::with_capacity(segments.len());
+    let mut words_so_far = 0_u64;
+    let mut cells_so_far = 0_usize;
+    for segment in segments {
+        words_so_far += segment.word_count;
+        let cells_end = usize::try_from(
+            (u128::from(words_so_far) * bar_width as u128 + u128::from(total_words) / 2)
+                / u128::from(total_words),
+        )
+        .unwrap_or(bar_width);
+        let cells = cells_end.saturating_sub(cells_so_far);
+        cells_so_far = cells_end;
+        if cells == 0 {
+            continue;
+        }
+        let tone = segment_tone(&sanitize_single_line(segment.label.as_str()));
+        let (symbol, style) = match (color_mode, tone) {
+            (ColorMode::None, Some(tone)) => (tone.bar_symbol(), Style::default()),
+            (ColorMode::None, None) => ("-", Style::default()),
+            (_, Some(tone)) => (BAR_CELL, Style::default().fg(tone_color(color_mode, tone))),
+            (_, None) => (BAR_CELL, Style::default().fg(Color::DarkGray)),
+        };
+        spans.push(Span::styled(symbol.repeat(cells), style));
+    }
+    Some(Line::from(spans))
+}
+
+/// Maps Pangram's free-text segment label onto a tone. Labels are provider
+/// authored ("AI-Assisted", "Human Written", "AI Generated"), so this is a
+/// case-insensitive keyword match; unknown labels keep the plain bold style.
+fn segment_tone(label: &str) -> Option<EvidenceTone> {
+    let lowered = label.to_ascii_lowercase();
+    if lowered.contains("human") {
+        Some(EvidenceTone::Human)
+    } else if lowered.contains("assist") {
+        Some(EvidenceTone::AiAssisted)
+    } else if lowered.contains("ai") {
+        Some(EvidenceTone::Ai)
+    } else {
+        None
+    }
+}
+
+/// Mixed documents share the AI-assisted amber, matching the dashboard's
+/// "Mixed" badge.
+const fn classification_tone(classification: AiClassification) -> EvidenceTone {
+    match classification {
+        AiClassification::Ai => EvidenceTone::Ai,
+        AiClassification::Human => EvidenceTone::Human,
+        AiClassification::Mixed => EvidenceTone::AiAssisted,
+    }
+}
+
+const fn tone_label(tone: EvidenceTone) -> &'static str {
+    match tone {
+        EvidenceTone::Ai => "AI",
+        EvidenceTone::AiAssisted => "AI-assisted",
+        EvidenceTone::Human => "Human",
+    }
 }
 
 fn provider_label(provider: Provider) -> &'static str {
@@ -213,12 +448,24 @@ pub(crate) const fn analysis_status_label(status: AnalysisStatus) -> &'static st
     }
 }
 
-pub(crate) const fn check_status_label(status: CheckStatus) -> &'static str {
+/// Title-case status for the result's first row; filters keep the lowercase
+/// `analysis_status_label` because they sit inside a control.
+const fn analysis_status_title(status: AnalysisStatus) -> &'static str {
     match status {
-        CheckStatus::Queued => "queued",
-        CheckStatus::Running => "running",
-        CheckStatus::Succeeded => "succeeded",
-        CheckStatus::Failed => "failed",
+        AnalysisStatus::Queued => "Queued",
+        AnalysisStatus::Running => "Running",
+        AnalysisStatus::Succeeded => "Succeeded",
+        AnalysisStatus::Failed => "Failed",
+        AnalysisStatus::Partial => "Partial",
+    }
+}
+
+const fn check_status_title(status: CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Queued => "Queued",
+        CheckStatus::Running => "Running",
+        CheckStatus::Succeeded => "Succeeded",
+        CheckStatus::Failed => "Failed",
     }
 }
 
@@ -250,7 +497,6 @@ pub(crate) fn sanitize_single_line(value: &str) -> String {
         })
         .collect()
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
@@ -306,6 +552,20 @@ mod tests {
         .expect("canonical terminal analysis")
     }
 
+    fn lines_text(analysis: &Analysis<CanonicalError>) -> Vec<String> {
+        analysis_result_lines(analysis, plain(), 80)
+            .iter()
+            .map(line_text)
+            .collect()
+    }
+
+    const fn plain() -> ResultPresentation {
+        ResultPresentation {
+            color_mode: ColorMode::None,
+            highlight: false,
+        }
+    }
+
     fn line_text(line: &Line<'_>) -> String {
         line.spans
             .iter()
@@ -314,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_segment_evidence_is_ordered_terminal_safe_and_one_line_per_segment() {
+    fn complete_segment_evidence_is_ordered_terminal_safe_as_paragraphs_then_facts() {
         let result = AiDetectionResult {
             classification: AiClassification::Mixed,
             headline: "Mixed\u{1b}[31m\nauthorship".to_owned(),
@@ -370,25 +630,36 @@ mod tests {
             },
         );
 
-        let lines = analysis_result_lines(&analysis);
-        let text: Vec<_> = lines.iter().map(line_text).collect();
+        let text = lines_text(&analysis);
 
-        assert_eq!(lines.len(), 12, "each segment remains one viewport line");
+        assert_eq!(
+            text.len(),
+            20,
+            "segments read as paragraphs, then two facts rows each"
+        );
         assert_eq!(
             text,
             [
-                "Overall: succeeded",
-                "Analysis: anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8aff",
-                "Classification: Mixed",
-                "AI 50.0% | AI-assisted 25.0% | Human 25.0%",
-                "Result: Mixed [31m authorship",
-                "Prediction: The document contains mixed authorship.",
-                "Segments: 2 (AI 1, AI-assisted 0, Human 1)",
-                "1. AI [31m label - 72.5% AI assistance | Text: provider [2J text tail | Confidence: low | Offsets: 4..29 | Words: 5 | Tokens: 7 | Humanizer score: 31.0% | Humanized: yes",
-                "2. Human Written - 0.0% AI assistance | Text: second segment | Confidence: medium | Offsets: 29..43 | Words: 2 | Tokens: 3 | Humanizer score: 0.0% | Humanized: no",
-                "Public dashboard: https://dashboard.test/result [0m forged",
-                "Provider: Pangram",
-                "Save state: saved history",
+                "Succeeded  anl_0198b16f-2c6f-7d0a-b6e0-9c2a1c0f8aff",
+                "",
+                "AI detection",
+                "Mixed - Mixed [31m authorship",
+                "The document contains mixed authorship.",
+                "AI 50.0%  AI-assisted 25.0%  Human 25.0%  2 segments (1/0/1)",
+                &format!("{}{}", "#".repeat(43), ".".repeat(17)),
+                "",
+                "provider [2J text tail",
+                "",
+                "second segment",
+                "",
+                "1  AI [31m label  72.5% AI assistance  low confidence",
+                "   4..29  5 words  7 tokens  humanizer 31.0%  humanized",
+                "2  Human Written  0.0% AI assistance  medium confidence",
+                "   29..43  2 words  3 tokens  humanizer 0.0%",
+                "Public dashboard  https://dashboard.test/result [0m forged",
+                "",
+                "Provider Pangram",
+                "Save state  saved history",
             ]
         );
         assert!(text.iter().all(|line| !line.contains(['\u{1b}', '\n'])));
@@ -429,22 +700,21 @@ mod tests {
             },
         );
 
-        let lines = analysis_result_lines(&analysis);
-        let text: Vec<_> = lines.iter().map(line_text).collect();
+        let text = lines_text(&analysis);
         let tail = &text[text.len() - 9..];
 
         assert_eq!(
             tail,
             [
-                "Provider: Pangram",
-                "Upstream version: 4.0 [2J forged",
-                "Upstream task IDs: task-ai [31m, task-plagiarism forged",
-                "Upstream bulk ID: bulk-123 [0m",
-                "Submitted at: 2026-07-23T12:00:00Z",
-                "Completed at: 2026-07-23T12:00:01Z",
-                "AI detection task ID: task-ai [31m",
-                "Plagiarism task ID: task-plagiarism forged",
-                "Save state: saved history",
+                "",
+                "Provider Pangram  version 4.0 [2J forged",
+                "Upstream tasks task-ai [31m, task-plagiarism forged",
+                "Upstream bulk bulk-123 [0m",
+                "Submitted 2026-07-23T12:00:00Z",
+                "Completed 2026-07-23T12:00:01Z",
+                "AI detection task task-ai [31m",
+                "Plagiarism task task-plagiarism forged",
+                "Save state  saved history",
             ]
         );
         assert!(text.iter().all(|line| !line.contains(['\u{1b}', '\n'])));
@@ -469,13 +739,128 @@ mod tests {
             },
         );
 
-        let lines = analysis_result_lines(&analysis);
-        let text: Vec<_> = lines.iter().map(line_text).collect();
+        let text = lines_text(&analysis);
 
         assert_eq!(
             &text[text.len() - 2..],
-            ["Provider: Pangram", "Save state: saved history"]
+            ["Provider Pangram", "Save state  saved history"]
         );
         assert!(!text.iter().any(|line| line.starts_with("Upstream ")));
+    }
+
+    #[test]
+    fn colored_rows_use_heading_body_and_muted_styles_by_role() {
+        let checks = OrderedChecks::new([Check::AiDetection(CheckState::Failed {
+            upstream: None,
+            error: failed_check_error(),
+        })])
+        .expect("canonical checks");
+        let analysis = analysis_with_identity(
+            checks,
+            Provenance {
+                provider: Provider::Pangram,
+                upstream_version: None,
+                upstream_task_ids: None,
+                upstream_bulk_id: None,
+                submitted_at: None,
+                completed_at: None,
+            },
+        );
+
+        let lines = analysis_result_lines(
+            &analysis,
+            ResultPresentation {
+                color_mode: ColorMode::TrueColor,
+                highlight: false,
+            },
+            80,
+        );
+
+        assert_eq!(lines[0].spans[0].style, primary_style(ColorMode::TrueColor));
+        assert_eq!(lines[0].spans[1].style, muted_style(ColorMode::TrueColor));
+        assert_eq!(lines[2].style, primary_style(ColorMode::TrueColor));
+        assert!(
+            lines[3].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert_eq!(lines[5].style, muted_style(ColorMode::TrueColor));
+    }
+
+    #[test]
+    fn highlight_paints_segment_text_in_its_tone_and_off_keeps_body_text() {
+        let segment = Segment {
+            text: "painted".to_owned(),
+            label: NonEmptyString::new("Human Written").expect("label"),
+            ai_assistance_score: Fraction::new(0.0).expect("fraction"),
+            confidence: Confidence::High,
+            start_index: 0,
+            end_index: 7,
+            word_count: 1,
+            token_length: 1,
+            humanizer_score: None,
+            is_humanized: None,
+        };
+        let text_row = |highlight: bool| {
+            segment_text_line(
+                &segment,
+                ResultPresentation {
+                    color_mode: ColorMode::TrueColor,
+                    highlight,
+                },
+            )
+        };
+
+        assert_eq!(
+            text_row(true).style.fg,
+            Some(tone_color(ColorMode::TrueColor, EvidenceTone::Human))
+        );
+        assert_eq!(text_row(false).style, body_style(ColorMode::TrueColor));
+    }
+
+    #[test]
+    fn distribution_bar_scales_segments_by_words_and_keeps_tone_order() {
+        let segment = |label: &str, words: u64| Segment {
+            text: "x".to_owned(),
+            label: NonEmptyString::new(label).expect("label"),
+            ai_assistance_score: Fraction::new(0.0).expect("fraction"),
+            confidence: Confidence::High,
+            start_index: 0,
+            end_index: 1,
+            word_count: words,
+            token_length: words,
+            humanizer_score: None,
+            is_humanized: None,
+        };
+        let segments = [
+            segment("AI Generated", 1),
+            segment("AI-Assisted", 2),
+            segment("Human Written", 1),
+            segment("Unlabeled", 0),
+        ];
+
+        let ascii = distribution_bar(&segments, ColorMode::None, 200).expect("bar");
+        assert_eq!(
+            line_text(&ascii),
+            format!("{}{}{}", "#".repeat(15), "=".repeat(30), ".".repeat(15)),
+            "cells sum to the 60-cell cap and zero-word segments take no cell"
+        );
+
+        let colored = distribution_bar(&segments, ColorMode::TrueColor, 20).expect("bar");
+        assert_eq!(line_text(&colored), BAR_CELL.repeat(20));
+        assert_eq!(
+            colored
+                .spans
+                .iter()
+                .map(|span| span.style.fg)
+                .collect::<Vec<_>>(),
+            [
+                Some(tone_color(ColorMode::TrueColor, EvidenceTone::Ai)),
+                Some(tone_color(ColorMode::TrueColor, EvidenceTone::AiAssisted)),
+                Some(tone_color(ColorMode::TrueColor, EvidenceTone::Human)),
+            ]
+        );
+        assert!(distribution_bar(&segments[3..], ColorMode::None, 20).is_none());
     }
 }

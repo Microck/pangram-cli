@@ -259,10 +259,11 @@ fn config_get_on_an_absent_file_returns_effective_documented_defaults() {
         "precheck: no config file exists"
     );
 
-    let cases: [(&str, Value); 5] = [
+    let cases: [(&str, Value); 6] = [
         ("tui.intro", Value::String("once".into())),
         ("tui.keymap", Value::String("regular".into())),
         ("tui.motion", Value::String("full".into())),
+        ("tui.highlight", Value::Bool(false)),
         ("history.enabled", Value::Bool(false)),
         ("network.max_requests_per_second", serde_json::json!(5.0)),
     ];

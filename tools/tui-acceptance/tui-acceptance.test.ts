@@ -292,7 +292,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         mode: "success",
         artifactName: "analysis-success",
         text: "This synthetic terminal journey remains human written today",
-        expected: ["Overall: succeeded", "Classification: Human", "Human 100.0%"],
+        expected: ["Succeeded  anl_", "Human - Human-written", "Human 100.0%"],
       }),
   )
 
@@ -304,7 +304,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         mode: "failure",
         artifactName: "analysis-upstream-failure",
         text: "This synthetic request produces one terminal provider failure",
-        expected: ["Overall: failed", "Pangram could not analyze the submitted text."],
+        expected: ["Failed  anl_", "Failed - Pangram could not analyze the submitted text."],
         sensitiveValues: [HOSTILE_UPSTREAM_MESSAGE],
       }),
   )

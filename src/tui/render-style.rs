@@ -115,6 +115,50 @@ pub(in crate::tui) fn muted_style(color_mode: ColorMode) -> Style {
     }
 }
 
+/// Semantic tone for AI-detection evidence. Mirrors the Pangram dashboard,
+/// where AI-assisted text is amber and human text is green; pure AI uses a
+/// red-orange that stays distinct from the brand orange owned by headings
+/// and focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum EvidenceTone {
+    Ai,
+    AiAssisted,
+    Human,
+}
+
+impl EvidenceTone {
+    /// ASCII stand-in for one bar cell when color is unavailable.
+    pub(in crate::tui) const fn bar_symbol(self) -> &'static str {
+        match self {
+            Self::Ai => "#",
+            Self::AiAssisted => "=",
+            Self::Human => ".",
+        }
+    }
+}
+
+pub(in crate::tui) fn tone_color(color_mode: ColorMode, tone: EvidenceTone) -> Color {
+    match (color_mode, tone) {
+        (ColorMode::None, _) => Color::Reset,
+        (ColorMode::Ansi, EvidenceTone::Ai) => Color::Indexed(203),
+        (ColorMode::Ansi, EvidenceTone::AiAssisted) => Color::Indexed(221),
+        (ColorMode::Ansi, EvidenceTone::Human) => Color::Indexed(78),
+        (ColorMode::TrueColor, EvidenceTone::Ai) => Color::Rgb(255, 92, 92),
+        (ColorMode::TrueColor, EvidenceTone::AiAssisted) => Color::Rgb(245, 197, 66),
+        (ColorMode::TrueColor, EvidenceTone::Human) => Color::Rgb(72, 199, 116),
+    }
+}
+
+/// Foreground tone for a label; bold so the label reads as a heading for
+/// its row even in the no-color fallback.
+pub(in crate::tui) fn tone_style(color_mode: ColorMode, tone: EvidenceTone) -> Style {
+    let style = match color_mode {
+        ColorMode::None => Style::default(),
+        ColorMode::Ansi | ColorMode::TrueColor => Style::default().fg(tone_color(color_mode, tone)),
+    };
+    style.add_modifier(Modifier::BOLD)
+}
+
 pub(in crate::tui) fn separator_style(color_mode: ColorMode) -> Style {
     match color_mode {
         ColorMode::None => Style::default(),

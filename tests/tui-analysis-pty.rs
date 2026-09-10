@@ -237,8 +237,7 @@ async fn all_tty_combined_analysis_reaches_both_shared_analyzer_routes_once() {
 
         assert!(
             receive_until(&output_rx, &mut transcript, ANALYSIS_TIMEOUT, |bytes| {
-                screen_contains(bytes, "Classification:")
-                    && screen_contains(bytes, "Plagiarism: not detected")
+                screen_contains(bytes, "segment (") && screen_contains(bytes, "Not detected")
             }),
             "completed combined result was not visibly rendered:\n{}",
             String::from_utf8_lossy(&transcript)
@@ -281,8 +280,9 @@ async fn all_tty_combined_analysis_reaches_both_shared_analyzer_routes_once() {
         assert_eq!(plagiarism.body_json(), serde_json::json!({"text": text}));
 
         // Completed results focus the scrollable evidence first. Traverse the
-        // focusable New analysis action before reaching Quit without a shortcut.
-        writer.write_all(b"\t\t").expect("focus Quit");
+        // Highlight toggle and the focusable New analysis action before
+        // reaching Quit without a shortcut.
+        writer.write_all(b"\t\t\t").expect("focus Quit");
         writer.flush().expect("flush Quit navigation");
         writer.write_all(b"\r").expect("activate Quit");
         writer.flush().expect("flush Quit");

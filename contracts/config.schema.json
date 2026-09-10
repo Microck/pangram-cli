@@ -78,6 +78,13 @@
             }
           ],
           "default": "full"
+        },
+        "highlight": {
+          "description": "Paint AI-detection segment text in its evidence tone in the TUI result.\nOff by default: the text reads white and the toggle paints it.",
+          "type": [
+            "boolean"
+          ],
+          "default": false
         }
       },
       "additionalProperties": false

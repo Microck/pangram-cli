@@ -339,7 +339,8 @@ this rhythm in both layouts; dense result and history lists may remain one row
 per item when height is limited. Modal content has one row of vertical and two
 columns of horizontal inner padding. Selection markers keep a fixed slot so
 changing state does not move adjacent labels. Result rows wrap whole words
-where possible. Only an overlong token splits across rows.
+where possible, and continuation rows hang under the row's leading indent.
+Only an overlong token splits across rows.
 
 ### 8.2 Analyze workflow
 
@@ -352,6 +353,8 @@ The Analyze screen contains:
 - public-link toggle, unchecked for each submission and unavailable for
   plagiarism-only work
 - manual-save toggle, unchecked unless the user selects it
+- highlight toggle, shown with a completed result, persisted as
+  `tui.highlight`
 - estimated word and billable-unit summary
 - submit control
 

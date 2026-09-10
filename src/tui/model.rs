@@ -85,6 +85,8 @@ pub struct SettingsDraft {
     pub history_enabled: bool,
     pub intro: IntroFrequency,
     pub motion: MotionLevel,
+    /// Paint segment text in its evidence tone in the result view.
+    pub highlight: bool,
     pub update_preference: Option<bool>,
 }
 
@@ -134,6 +136,9 @@ pub enum Focus {
     Composer,
     PublicLink,
     ManualSave,
+    /// Inspector toggle for painting result segment text; present only while
+    /// a completed result is shown.
+    Highlight,
     Submit,
     Result,
     ActiveList,
@@ -409,6 +414,7 @@ pub enum StoredSetting {
     Intro(IntroFrequency),
     Keymap(Keymap),
     Motion(MotionLevel),
+    Highlight(bool),
 }
 
 pub enum Effect {
@@ -427,6 +433,7 @@ pub enum Effect {
     StoreIntro(IntroFrequency),
     StoreKeymap(Keymap),
     StoreMotion(MotionLevel),
+    StoreHighlight(bool),
     LoadHistory(HistoryLoadRequest),
     LoadHistoryDetail(AnalysisId),
     DeleteHistory(AnalysisId),

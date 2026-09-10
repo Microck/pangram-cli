@@ -19,7 +19,7 @@ fn configuration_schema_is_strict_and_bounded() {
                 instance: json!({
                     "config_version": 1,
                     "history": {"enabled": false},
-                    "tui": {"intro": "once", "keymap": "regular", "motion": "full"},
+                    "tui": {"intro": "once", "keymap": "regular", "motion": "full", "highlight": true},
                     "updates": {"check_on_tui_start": true},
                     "network": {"max_requests_per_second": 5}
                 }),
