@@ -39,7 +39,7 @@ pub(crate) struct PhaseOneOutcome {
 }
 
 impl PhaseOneOutcome {
-    fn success(data: CommandData) -> Self {
+    pub(super) fn success(data: CommandData) -> Self {
         Self {
             exit_code: ExitCode::Success.as_u8(),
             envelope: Some(CommandEnvelope::success(data, EnvelopeMeta::default())),
@@ -55,6 +55,15 @@ impl PhaseOneOutcome {
                 error,
                 EnvelopeMeta::default(),
             )),
+        }
+    }
+
+    /// An interactive decline. It mutates nothing and renders nothing, so the
+    /// exit code alone reports the outcome, matching `history delete`.
+    pub(super) const fn declined() -> Self {
+        Self {
+            exit_code: 130,
+            envelope: None,
         }
     }
 

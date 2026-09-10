@@ -64,11 +64,9 @@ submit/get/wait/results, and capability-gated history and configuration tools.
 Phase 7 adds inline-text plagiarism and combined analysis. Binary file
 detection remains CLI-only because MCP requires a pre-submission billable-unit
 ceiling and Pangram publishes no local file-billing estimator. Phase 8 adds the
-explicit nonbillable `check_update` tool. `0.x` builds advertise it while
-performing zero update-network activity and returning typed
-`update_unavailable`. Public
-distribution of a stable `0.x` release does not enable self-update before
-`1.0.0`. There are no compatibility aliases or rejection-only
+explicit nonbillable `check_update` tool. It performs one explicit read-only
+check, shares its policy owner with the CLI, never installs, and needs no
+capability gate. There are no compatibility aliases or rejection-only
 placeholders for later tools.
 
 File-backed MCP input requires an explicit repeatable `--allow-file-root PATH`
@@ -2168,17 +2166,19 @@ pangram update --yes
 Completions emit only the completion script. The `completions` command is
 compiled and available.
 
-Phase 8 exposes the three `update` forms in `0.x` builds behind the outermost
-no-network policy from `docs/update-contract.md`: each form returns
-`update_unavailable` before prompting, reading updater state, or mutating the
-installation. Stable `0.x` releases may be distributed only with exact-version
-release authority, but this does not enable self-update. Builds at `1.0.0` or
-newer keep the final interaction contract:
+Phase 8 exposes the three `update` forms under the ownership policy from
+`docs/update-contract.md`: every form resolves the running executable and its
+direct receipt before any network request, a manager-owned path reports that
+manager's command without mutating, and a path without a direct receipt fails
+as `update_not_owned`. Builds at `1.0.0` or newer keep the final interaction
+contract:
 `pangram update --check` never prompts or installs; bare `pangram update`
 prompts only when stdin, stdout, and stderr are all TTYs and `CI` is unset, a
-decline or interruption performs no mutation and exits 130, CI or any
-redirected stream fails with `input_required` and exit 2, and `pangram update
---yes` is the sole noninteractive install form.
+decline or interruption performs no mutation, renders no envelope, and exits
+130, CI or any redirected stream fails with `input_required` and exit 2, and
+`pangram update --yes` is the sole noninteractive install form. The archive
+download is bounded by the signed artifact's declared size and rejected on any
+length mismatch before hash, layout, and executable-identity validation.
 
 Every versioned direct installer fetches its manifest, detached signature, and
 native archive from the same immutable `vVERSION` GitHub Release. It never

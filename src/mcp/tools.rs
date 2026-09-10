@@ -102,11 +102,7 @@ impl ToolRuntime {
             ToolName::GetBulkResults => {
                 bulk::observe(&context, arguments, started, bulk::BulkOperation::Results).await
             }
-            ToolName::CheckUpdate => failure(
-                ResolvedCommand::UpdateCheck,
-                crate::update::private_build_error(),
-                started,
-            ),
+            ToolName::CheckUpdate => check_update(&context, started).await,
             ToolName::HistoryList => {
                 local::history_query(&context, arguments, false, started).await
             }
@@ -178,6 +174,69 @@ impl ToolCallContext<'_> {
 
 pub(super) fn invalid_arguments() -> ToolCallOutcome {
     ToolCallOutcome::InvalidArguments
+}
+
+/// The nonbillable read-only update check. It shares one policy owner with
+/// the CLI and never installs, so no capability gate applies.
+async fn check_update(context: &ToolCallContext<'_>, started: UtcTimestamp) -> ToolCallOutcome {
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => {
+            return failure(
+                ResolvedCommand::UpdateCheck,
+                crate::update::unresolved_executable_error(),
+                started,
+            );
+        }
+    };
+    let Some(target) = crate::update::Target::current() else {
+        return failure(
+            ResolvedCommand::UpdateCheck,
+            crate::update::unsupported_target_error(),
+            started,
+        );
+    };
+    let paths = context.service().paths();
+    let data_dir = paths.data_dir().to_path_buf();
+    let receipt_path = paths.platform_data_dir().join("install-receipt.json");
+    let report = match crate::update::explicit_check(
+        &data_dir,
+        &receipt_path,
+        &executable,
+        env!("CARGO_PKG_VERSION"),
+        target,
+    )
+    .await
+    {
+        Ok(report) => report,
+        Err(error) => {
+            return failure(
+                ResolvedCommand::UpdateCheck,
+                error.into_canonical(),
+                started,
+            );
+        }
+    };
+    let payload = match crate::output::UpdateStatus::new(
+        report.kind(),
+        env!("CARGO_PKG_VERSION"),
+        report.available_version().map(str::to_owned),
+        report.manager_command().map(str::to_owned),
+    ) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return failure(
+                ResolvedCommand::UpdateCheck,
+                crate::update::unresolved_executable_error(),
+                started,
+            );
+        }
+    };
+    let summary = match report.available_version() {
+        Some(version) => format!("Update {version} is available."),
+        None => "No update is available.".to_owned(),
+    };
+    success(CommandData::UpdateCheck(payload), summary, started)
 }
 
 pub(super) fn success(

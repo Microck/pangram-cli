@@ -69,6 +69,24 @@ pub fn artifact_for(
     target: Target,
     format: ArchiveFormat,
 ) -> UpdateArtifact {
+    artifact_at(
+        archive,
+        executable_size,
+        target,
+        format,
+        "https://github.com/Microck/pangram-cli/releases/download/v1.2.1/archive",
+    )
+}
+
+/// Same signed artifact, with an explicit URL so a loopback server can serve
+/// the archive bytes for download tests.
+pub fn artifact_at(
+    archive: &[u8],
+    executable_size: usize,
+    target: Target,
+    format: ArchiveFormat,
+    url: &str,
+) -> UpdateArtifact {
     let mut value = manifest();
     value["version"] = json!("1.2.1");
     value["artifacts"] = json!([{
@@ -77,7 +95,7 @@ pub fn artifact_for(
             ArchiveFormat::TarXz => "tar.xz",
             ArchiveFormat::Zip => "zip",
         },
-        "url": "https://github.com/Microck/pangram-cli/releases/download/v1.2.1/archive",
+        "url": url,
         "size_bytes": archive.len(),
         "executable_size_bytes": executable_size,
         "sha256": Sha256Hash::digest(archive)

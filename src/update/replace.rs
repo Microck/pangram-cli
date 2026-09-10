@@ -261,6 +261,28 @@ pub fn finalize_pending_receipt(
     Ok(receipt)
 }
 
+/// Reads one receipt for an ownership decision made outside this module.
+/// It shares the protected reader so permission enforcement has one owner.
+pub(super) fn read_owned_receipt(path: &Path) -> Result<Vec<u8>, UpdateError> {
+    if !fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+    {
+        return Err(UpdateError::new(
+            UpdateErrorKind::InstallNotOwned,
+            "This installation has no direct-install receipt.",
+        ));
+    }
+    // Unsafe permissions make a receipt untrustworthy as ownership evidence,
+    // so this reads as "not owned" rather than a replacement failure.
+    read_protected(path).map_err(|_| {
+        UpdateError::new(
+            UpdateErrorKind::InstallNotOwned,
+            "This installation's direct-install receipt is not trustworthy.",
+        )
+    })
+}
+
 fn read_protected(path: &Path) -> Result<Vec<u8>, UpdateError> {
     crate::config::enforce_protected_permissions(path).map_err(|_| replace_error())?;
     fs::read(path).map_err(|_| replace_error())

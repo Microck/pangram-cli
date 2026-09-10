@@ -36,8 +36,12 @@ fn default_inventory_is_ordered_closed_and_contains_no_future_or_fixture_tools()
     assert_eq!(server.shutdown(), "");
 }
 
+/// From 1.0.0 the tool performs a real read-only check, but ownership still
+/// precedes any network request: a server process has no direct-install
+/// receipt, so the call fails closed without contacting the release endpoint
+/// or writing updater state.
 #[test]
-fn private_check_update_is_typed_and_performs_no_state_or_network_work() {
+fn check_update_requires_direct_install_ownership_before_any_network_work() {
     let data = tempfile::tempdir().unwrap();
     let sentinel = data.path().join("must-not-change");
     std::fs::write(&sentinel, b"unchanged").unwrap();
@@ -56,7 +60,7 @@ fn private_check_update_is_typed_and_performs_no_state_or_network_work() {
     assert_eq!(call["structuredContent"]["command"], "update_check");
     assert_eq!(
         call["structuredContent"]["error"]["code"],
-        "update_unavailable"
+        "update_not_owned"
     );
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
     assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
