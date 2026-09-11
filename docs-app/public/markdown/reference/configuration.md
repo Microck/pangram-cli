@@ -1,6 +1,6 @@
 # Configuration reference
 
-Generated from Pangram CLI 0.1.1 and schema major 1.
+Generated from Pangram CLI 1.0.0 and schema major 1.
 
 | Field | Type | Required |
 | --- | --- | --- |
