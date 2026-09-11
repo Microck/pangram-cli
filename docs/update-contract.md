@@ -15,13 +15,24 @@ https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-m
 
 Alternate locations exist only in test constructors.
 
-`0.x` binaries expose the three `pangram update` forms so scripts can depend on
-the final command grammar, but they perform no release network request, prompt,
-state read, or mutation. This remains true for an authorized public `0.x`
-release. `pangram update --check`,
-bare `pangram update`, and `pangram update --yes` all return the canonical
-`update_unavailable` failure before any other updater work. This major-version
-guard remains the outermost updater policy until `1.0.0`.
+Signed self-update is active from `1.0.0`. The outermost policy is now
+installation ownership rather than the major version: every form resolves the
+running executable and its direct receipt before any network request. A
+manager-owned path reports that manager's command and mutates nothing. A path
+without a direct receipt fails as `update_not_owned`.
+
+`pangram update --check` performs one explicit check and never prompts or
+installs. Bare `pangram update` prompts only when stdin, stdout, and stderr are
+all TTYs and `CI` is unset; a decline mutates nothing, renders no envelope, and
+exits 130; CI or any redirected stream fails as `input_required` with exit 2.
+`pangram update --yes` is the sole noninteractive install form. No adapter ever
+checks in the background: every check is an explicit command.
+
+The archive download is bounded by the signed artifact's exact declared size
+and rejected when the received length differs, before `validate_archive`
+proves the hash, layout, and executable identity. Verified updater state is
+committed only after a successful comparison or replacement, so a network,
+signature, or replacement failure leaves the prior cache intact.
 
 ## Local state and receipt
 

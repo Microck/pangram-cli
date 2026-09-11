@@ -7,8 +7,8 @@ use reqwest::header::{ETAG, IF_NONE_MATCH};
 use url::Url;
 
 use super::{
-    ReleaseDecision, Target, TrustedManifestKey, UpdateError, UpdateErrorKind, UpdateManifest,
-    UpdateState, verify_manifest,
+    ReleaseDecision, Target, TrustedManifestKey, UpdateArtifact, UpdateError, UpdateErrorKind,
+    UpdateManifest, UpdateState, verify_manifest,
 };
 use crate::domain::UtcTimestamp;
 
@@ -17,6 +17,10 @@ const MANIFEST_URL: &str =
 const SIGNATURE_URL: &str = "https://github.com/Microck/pangram-cli/releases/latest/download/pangram-update-manifest.json.sig";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: usize = 16 * 1024;
+/// Ceiling for one downloaded release archive. The signed artifact entry
+/// carries the exact expected size, so this only bounds a hostile response
+/// that claims or streams more than any real archive.
+const MAX_ARCHIVE_BYTES: usize = 128 * 1024 * 1024;
 
 /// Result class for one explicit update check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +61,9 @@ pub struct UpdateChecker {
     client: reqwest::Client,
     manifest_url: Url,
     signature_url: Url,
+    /// True only for the loopback test constructor. Production keeps the
+    /// https requirement on artifact URLs.
+    loopback: bool,
 }
 
 impl UpdateChecker {
@@ -96,6 +103,7 @@ impl UpdateChecker {
             client,
             manifest_url,
             signature_url,
+            loopback: no_proxy,
         })
     }
 
@@ -161,6 +169,38 @@ impl UpdateChecker {
             manifest: Some(manifest),
         })
     }
+
+    /// Downloads one signed artifact's archive bytes. The artifact must come
+    /// from a verified manifest, and the response is bounded by both the
+    /// artifact's declared size and the hard ceiling. Identity is proven by
+    /// `validate_archive`, which the caller applies to the returned bytes;
+    /// this function deliberately performs no extraction.
+    pub async fn fetch_archive(&self, artifact: &UpdateArtifact) -> Result<Vec<u8>, UpdateError> {
+        let declared = usize::try_from(artifact.size_bytes()).map_err(|_| archive_error())?;
+        if declared == 0 || declared > MAX_ARCHIVE_BYTES {
+            return Err(archive_error());
+        }
+        let url = Url::parse(artifact.url()).map_err(|_| archive_error())?;
+        if url.scheme() != "https" && !self.loopback {
+            return Err(archive_error());
+        }
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| archive_error())?;
+        if response.status() != StatusCode::OK {
+            return Err(archive_error());
+        }
+        // The declared size is the bound: a longer body is a mismatch, and a
+        // shorter one fails the archive identity check below.
+        let bytes = bounded_body(response, declared).await?;
+        if bytes.len() != declared {
+            return Err(archive_error());
+        }
+        Ok(bytes)
+    }
 }
 
 async fn bounded_body(
@@ -186,6 +226,13 @@ async fn bounded_body(
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+const fn archive_error() -> UpdateError {
+    UpdateError::new(
+        UpdateErrorKind::Network,
+        "The update could not retrieve a valid release archive.",
+    )
 }
 
 const fn network_error() -> UpdateError {

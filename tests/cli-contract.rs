@@ -208,8 +208,11 @@ fn planned_top_level_names_are_literal_text_and_not_advertised_as_commands() {
     }
 }
 
+/// From 1.0.0 the outermost updater policy is installation ownership, not the
+/// major version. A test binary has no direct receipt, so every form must fail
+/// `update_not_owned` before any network request, prompt, or mutation.
 #[test]
-fn private_update_forms_fail_typed_before_prompt_network_or_mutation() {
+fn update_forms_require_direct_install_ownership_before_network_or_prompt() {
     let update = command(&["update"]);
     assert_eq!(update.availability, Availability::Available);
     assert!(
@@ -239,12 +242,34 @@ fn private_update_forms_fail_typed_before_prompt_network_or_mutation() {
         let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(envelope["command"], resolved_command, "{arguments:?}");
         assert_eq!(
-            envelope["error"]["code"], "update_unavailable",
+            envelope["error"]["code"], "update_not_owned",
             "{arguments:?}"
         );
+        // No updater state, receipt, or replacement may appear from a refused
+        // invocation, and nothing already present may change.
         assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     }
+
+    // `--data-dir` is accepted by every update form and redirects the updater
+    // state directory. It cannot redirect the receipt, which lives in the
+    // platform data directory exactly as the signed installer writes it, so a
+    // refused invocation writes nothing to either root.
+    let explicit = tempfile::tempdir().unwrap();
+    let requested = pangram()
+        .args(["--data-dir", explicit.path().to_str().unwrap()])
+        .args(["update", "--check"])
+        .env("PANGRAM_DATA_DIR", tempfile::tempdir().unwrap().path())
+        .output()
+        .unwrap();
+    assert_eq!(requested.status.code(), Some(7));
+    let envelope: Value = serde_json::from_slice(&requested.stdout).unwrap();
+    assert_eq!(envelope["error"]["code"], "update_not_owned");
+    assert_eq!(
+        fs::read_dir(explicit.path()).unwrap().count(),
+        0,
+        "a refused invocation writes no updater state to the requested root"
+    );
 
     let conflict = pangram()
         .args(["update", "--check", "--yes"])

@@ -112,6 +112,152 @@ pub struct UpdateError {
     message: &'static str,
 }
 
+/// Reports the cached available version when it is still newer than the
+/// running build. A cached value equal to or older than the current version
+/// is stale, which happens after an update installs and the next check has
+/// not refreshed the manifest yet.
+pub fn cached_availability(
+    state: &UpdateState,
+    current_version: &str,
+) -> Result<Option<String>, UpdateError> {
+    let Some(cached) = state.available_version() else {
+        return Ok(None);
+    };
+    let current = parse_version(current_version)?;
+    let cached_version = parse_version(cached)?;
+    Ok((cached_version > current).then(|| cached.to_owned()))
+}
+
+/// Proves that a direct-install receipt owns this exact executable before any
+/// network work. The receipt is read through the protected reader, so wrong
+/// permissions, a directory, an empty file, or a receipt describing another
+/// executable, version, or target all fail closed.
+pub fn require_direct_ownership(
+    receipt_path: &std::path::Path,
+    executable: &std::path::Path,
+    current_version: &str,
+    target: Target,
+) -> Result<(), UpdateError> {
+    let bytes = replace::read_owned_receipt(receipt_path)?;
+    validate_install_receipt(&bytes, executable, current_version, target).map(|_| ())
+}
+
+/// One read-only update check, shared by the CLI and MCP adapters so the
+/// nonbillable check policy has a single owner. It never downloads an
+/// archive and never mutates the installation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckReport {
+    kind: crate::output::UpdateStatusKind,
+    available_version: Option<String>,
+    manager_command: Option<String>,
+}
+
+impl CheckReport {
+    #[must_use]
+    pub const fn kind(&self) -> crate::output::UpdateStatusKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn available_version(&self) -> Option<&str> {
+        self.available_version.as_deref()
+    }
+
+    #[must_use]
+    pub fn manager_command(&self) -> Option<&str> {
+        self.manager_command.as_deref()
+    }
+}
+
+/// Performs one explicit check against the fixed production endpoints.
+///
+/// A manager-owned executable reports that manager's command instead of a
+/// release comparison, because those bytes have another owner. Verified
+/// state is committed only after a successful comparison, so a network or
+/// signature failure leaves the prior cache intact.
+pub async fn explicit_check(
+    data_dir: &std::path::Path,
+    receipt_path: &std::path::Path,
+    executable: &std::path::Path,
+    current_version: &str,
+    target: Target,
+) -> Result<CheckReport, UpdateError> {
+    explicit_check_with(
+        &UpdateChecker::production()?,
+        data_dir,
+        receipt_path,
+        executable,
+        current_version,
+        target,
+    )
+    .await
+}
+
+/// The same policy against a supplied checker, so a test can observe that an
+/// unowned or manager-owned executable issues no release request at all.
+pub async fn explicit_check_with(
+    checker: &UpdateChecker,
+    data_dir: &std::path::Path,
+    receipt_path: &std::path::Path,
+    executable: &std::path::Path,
+    current_version: &str,
+    target: Target,
+) -> Result<CheckReport, UpdateError> {
+    if let Some(advisory) = detect_manager_install(executable) {
+        return Ok(CheckReport {
+            kind: crate::output::UpdateStatusKind::NoUpdate,
+            available_version: None,
+            manager_command: Some(advisory.command().to_owned()),
+        });
+    }
+    // Ownership precedes every network request, so a copied executable with no
+    // direct receipt never contacts the release endpoint.
+    require_direct_ownership(receipt_path, executable, current_version, target)?;
+    let prior = load_update_state(data_dir)?;
+    let check = checker
+        .check(
+            prior.as_ref(),
+            UtcTimestamp::now(),
+            current_version,
+            current_version,
+            target,
+            &production_manifest_keys(),
+        )
+        .await?;
+    let report = match check.manifest() {
+        // A valid 304 carries no manifest but keeps the previously verified
+        // availability, so the cached version decides rather than defaulting
+        // to "no update".
+        None => match cached_availability(check.state(), current_version)? {
+            Some(version) => CheckReport {
+                kind: crate::output::UpdateStatusKind::UpdateAvailable,
+                available_version: Some(version),
+                manager_command: None,
+            },
+            None => CheckReport {
+                kind: crate::output::UpdateStatusKind::NoUpdate,
+                available_version: None,
+                manager_command: None,
+            },
+        },
+        Some(manifest) => match manifest.release_for(current_version, current_version, target)? {
+            ReleaseDecision::NoUpdate => CheckReport {
+                kind: crate::output::UpdateStatusKind::NoUpdate,
+                available_version: None,
+                manager_command: None,
+            },
+            ReleaseDecision::Update(_) => CheckReport {
+                kind: crate::output::UpdateStatusKind::UpdateAvailable,
+                available_version: Some(manifest.version().to_owned()),
+                manager_command: None,
+            },
+        },
+    };
+    // A cache write failure must not fail an otherwise verified check.
+    let _ = store_update_state(data_dir, check.state());
+    Ok(report)
+}
+
 impl UpdateError {
     const fn new(kind: UpdateErrorKind, message: &'static str) -> Self {
         Self { kind, message }
@@ -199,6 +345,30 @@ pub struct UpdateArtifact {
 }
 
 impl UpdateArtifact {
+    /// Loopback-only constructor compiled solely with the repository test
+    /// feature. A production artifact can only be deserialized from a
+    /// signature-verified manifest, whose schema pins `https://` URLs.
+    #[cfg(feature = "dev-tools")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test(
+        target: Target,
+        archive_format: ArchiveFormat,
+        url: impl Into<String>,
+        size_bytes: u64,
+        executable_size_bytes: u64,
+        sha256: Sha256Hash,
+    ) -> Self {
+        Self {
+            target,
+            archive_format,
+            url: url.into(),
+            size_bytes,
+            executable_size_bytes,
+            sha256,
+        }
+    }
+
     #[must_use]
     pub const fn target(&self) -> Target {
         self.target
@@ -469,10 +639,50 @@ const fn invalid_manifest() -> UpdateError {
     )
 }
 
-pub(crate) fn private_build_error() -> CanonicalError {
+impl UpdateError {
+    /// Maps one updater failure onto its canonical error code. Messages are
+    /// already fixed and sanitized, so the mapping only selects the code the
+    /// error reference documents for that class.
+    #[must_use]
+    pub fn into_canonical(self) -> CanonicalError {
+        let code = match self.kind {
+            UpdateErrorKind::SignatureDocumentInvalid
+            | UpdateErrorKind::UnknownManifestKey
+            | UpdateErrorKind::DuplicateManifestKey
+            | UpdateErrorKind::ManifestSignature
+            | UpdateErrorKind::ManifestInvalid
+            | UpdateErrorKind::ArchiveSize
+            | UpdateErrorKind::ArchiveHash
+            | UpdateErrorKind::ArchiveLayout => ErrorCode::UpdateVerificationFailed,
+            UpdateErrorKind::UpdaterTooOld
+            | UpdateErrorKind::Downgrade
+            | UpdateErrorKind::TargetUnavailable => ErrorCode::UpdateUnavailable,
+            UpdateErrorKind::InstallReceiptInvalid | UpdateErrorKind::InstallNotOwned => {
+                ErrorCode::UpdateNotOwned
+            }
+            UpdateErrorKind::Network => ErrorCode::NetworkUnavailable,
+            UpdateErrorKind::UpdateStateInvalid | UpdateErrorKind::ReplaceFailed => {
+                ErrorCode::UpdateReplaceFailed
+            }
+        };
+        CanonicalError::new(code, self.message).expect("every fixed updater message is non-empty")
+    }
+}
+
+/// The running executable's own path could not be resolved, so no update
+/// decision can be attributed to a real installation.
+pub(crate) fn unresolved_executable_error() -> CanonicalError {
+    CanonicalError::new(
+        ErrorCode::UpdateReplaceFailed,
+        "The running executable path could not be resolved.",
+    )
+    .expect("the fixed update-replace message is non-empty")
+}
+
+pub(crate) fn unsupported_target_error() -> CanonicalError {
     CanonicalError::new(
         ErrorCode::UpdateUnavailable,
-        "Updates are unavailable for private development builds.",
+        "Updates are unavailable for this host target.",
     )
     .expect("the fixed update-unavailable message is non-empty")
 }

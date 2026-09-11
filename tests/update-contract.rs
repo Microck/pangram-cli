@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -9,11 +10,13 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use microck_pangram_cli::domain::Sha256Hash;
 use microck_pangram_cli::domain::UtcTimestamp;
+use microck_pangram_cli::output::ErrorCode;
 use microck_pangram_cli::update::{
     ArchiveFormat, DirectReplacement, DirectUpdateCandidate, InstallManager, ReleaseDecision,
-    Target, TrustedManifestKey, UpdateCheckKind, UpdateChecker, UpdateErrorKind, UpdateState,
-    detect_manager_install, finalize_pending_receipt, load_update_state, production_manifest_keys,
-    store_update_state, validate_archive, validate_install_receipt, verify_manifest,
+    Target, TrustedManifestKey, UpdateArtifact, UpdateCheckKind, UpdateChecker, UpdateErrorKind,
+    UpdateState, cached_availability, detect_manager_install, finalize_pending_receipt,
+    load_update_state, production_manifest_keys, store_update_state, validate_archive,
+    validate_install_receipt, verify_manifest,
 };
 use serde_json::{Value, json};
 use tar::EntryType;
@@ -519,6 +522,241 @@ async fn explicit_check_uses_etag_and_preserves_state_on_not_modified() {
     assert_eq!(second.state().last_checked_at(), second_time);
     assert_eq!(manifest_requests.load(Ordering::SeqCst), 2);
     assert_eq!(signature_requests.load(Ordering::SeqCst), 1);
+}
+
+/// A valid 304 keeps the previously verified availability. Reporting the
+/// cached value only while it is newer than the running build stops a stale
+/// entry from surviving the update that consumed it.
+#[test]
+fn cached_availability_survives_not_modified_and_expires_after_installing() {
+    let checked_at = UtcTimestamp::from_str("2026-08-25T00:00:00Z").unwrap();
+    let with_available = UpdateState::checked(
+        checked_at,
+        Some("\"etag\"".to_owned()),
+        Some("1.2.0".to_owned()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        cached_availability(&with_available, "1.1.0").unwrap(),
+        Some("1.2.0".to_owned()),
+        "a newer cached release stays available across a 304"
+    );
+    assert_eq!(
+        cached_availability(&with_available, "1.2.0").unwrap(),
+        None,
+        "the cached entry is stale once it is installed"
+    );
+    assert_eq!(
+        cached_availability(&with_available, "1.3.0").unwrap(),
+        None,
+        "a newer running build never reports an older cached release"
+    );
+
+    let without_available = UpdateState::checked(checked_at, None, None).unwrap();
+    assert_eq!(
+        cached_availability(&without_available, "1.1.0").unwrap(),
+        None
+    );
+}
+
+/// Ownership is proven before any network request. A counted endpoint proves
+/// the order rather than inferring it from the returned code, so a regression
+/// that asks first and refuses afterwards fails this test.
+#[tokio::test(flavor = "multi_thread")]
+async fn explicit_check_refuses_an_unowned_executable_without_any_release_request() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&requests);
+    let app = Router::new().route(
+        "/manifest.json",
+        get(move || {
+            let counter = Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                (StatusCode::OK, Bytes::new())
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let checker = UpdateChecker::for_test(
+        format!("http://{address}/manifest.json"),
+        format!("http://{address}/manifest.json.sig"),
+    )
+    .unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("pangram");
+    fs::write(&executable, b"not installed by the signed installer").unwrap();
+    let receipt = root.path().join("install-receipt.json");
+
+    // The observable contract is the canonical code: every way of failing to
+    // prove ownership reports `update_not_owned`, whatever the internal kind.
+    let refuse = async |receipt: &Path| {
+        microck_pangram_cli::update::explicit_check_with(
+            &checker,
+            root.path(),
+            receipt,
+            &executable,
+            "1.0.0",
+            Target::X86_64UnknownLinuxGnu,
+        )
+        .await
+        .unwrap_err()
+        .into_canonical()
+        .code()
+    };
+
+    assert_eq!(refuse(&receipt).await, ErrorCode::UpdateNotOwned);
+
+    // An over-permissive receipt is untrustworthy evidence, not a replacement
+    // failure, so it reports the same ownership refusal.
+    fs::write(&receipt, b"{}").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(refuse(&receipt).await, ErrorCode::UpdateNotOwned);
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    // A protected but meaningless receipt is still not ownership evidence.
+    assert_eq!(refuse(&receipt).await, ErrorCode::UpdateNotOwned);
+
+    fs::remove_file(&receipt).unwrap();
+    fs::create_dir(&receipt).unwrap();
+    assert_eq!(refuse(&receipt).await, ErrorCode::UpdateNotOwned);
+
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        0,
+        "an unowned executable must never reach the release endpoint"
+    );
+    assert!(
+        !root.path().join("update-state.json").exists(),
+        "a refused check writes no updater state"
+    );
+}
+
+/// A manager-owned executable is advised, never replaced, and that decision
+/// also precedes any release request.
+#[tokio::test(flavor = "multi_thread")]
+async fn manager_owned_executable_is_advised_without_any_release_request() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&requests);
+    let app = Router::new().route(
+        "/manifest.json",
+        get(move || {
+            let counter = Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                (StatusCode::OK, Bytes::new())
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let checker = UpdateChecker::for_test(
+        format!("http://{address}/manifest.json"),
+        format!("http://{address}/manifest.json.sig"),
+    )
+    .unwrap();
+
+    let root = tempfile::tempdir().unwrap();
+    let cellar = root.path().join("Cellar/pangram/1.0.0/bin");
+    fs::create_dir_all(&cellar).unwrap();
+    let executable = cellar.join("pangram");
+    fs::write(&executable, b"homebrew owns these bytes").unwrap();
+
+    let report = microck_pangram_cli::update::explicit_check_with(
+        &checker,
+        root.path(),
+        &root.path().join("install-receipt.json"),
+        &executable,
+        "1.0.0",
+        Target::X86_64UnknownLinuxGnu,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.manager_command(), Some("brew upgrade pangram"));
+    assert_eq!(report.available_version(), None);
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+}
+
+/// The archive download is bounded by the signed size and must deliver
+/// exactly that many bytes. A short or long body is rejected before any
+/// identity check, so a hostile mirror cannot stream an unbounded response.
+#[tokio::test(flavor = "multi_thread")]
+async fn archive_download_requires_the_exact_signed_length_before_validation() {
+    let executable = vec![0x41_u8; 64];
+    let archive = fixtures::tar_xz(&[("pangram", &executable, EntryType::Regular)]);
+    let served = archive.clone();
+    let truncated = archive[..archive.len() - 1].to_vec();
+    let padded = {
+        let mut bytes = archive.clone();
+        bytes.push(0);
+        bytes
+    };
+
+    let app = Router::new()
+        .route(
+            "/exact",
+            get(move || {
+                let bytes = served.clone();
+                async move { (StatusCode::OK, Bytes::from(bytes)) }
+            }),
+        )
+        .route(
+            "/short",
+            get(move || {
+                let bytes = truncated.clone();
+                async move { (StatusCode::OK, Bytes::from(bytes)) }
+            }),
+        )
+        .route(
+            "/long",
+            get(move || {
+                let bytes = padded.clone();
+                async move { (StatusCode::OK, Bytes::from(bytes)) }
+            }),
+        )
+        .route(
+            "/missing",
+            get(|| async { (StatusCode::NOT_FOUND, Bytes::new()) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let checker = UpdateChecker::for_test(
+        format!("http://{address}/manifest.json"),
+        format!("http://{address}/manifest.json.sig"),
+    )
+    .unwrap();
+
+    let loopback_artifact = |path: &str| {
+        UpdateArtifact::for_test(
+            Target::X86_64UnknownLinuxGnu,
+            ArchiveFormat::TarXz,
+            format!("http://{address}/{path}"),
+            archive.len() as u64,
+            executable.len() as u64,
+            Sha256Hash::digest(&archive),
+        )
+    };
+    let exact = loopback_artifact("exact");
+    let downloaded = checker.fetch_archive(&exact).await.unwrap();
+    assert_eq!(downloaded, archive);
+    assert_eq!(validate_archive(&exact, &downloaded).unwrap(), executable);
+
+    for path in ["short", "long", "missing"] {
+        let artifact = loopback_artifact(path);
+        assert_eq!(
+            checker.fetch_archive(&artifact).await.unwrap_err().kind(),
+            UpdateErrorKind::Network,
+            "{path} must not produce archive bytes"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

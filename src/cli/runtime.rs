@@ -269,7 +269,7 @@ where
             finish_raw_bytes(bytes, invocation)
         }
         Some(("completions", sub)) => execute_completions(sub, invocation),
-        Some(("update", sub)) => execute_private_update(sub),
+        Some(("update", sub)) => finish(super::update::execute(&matches, sub)),
         // A bare literal-text reach (`pangram some text`) resolves to implicit
         // detection; the literal `-` reads stdin. A no-text reach can only
         // come from the non-rendering parsing hook because process-facing bare
@@ -325,22 +325,6 @@ fn execute_completions(arguments: &ArgMatches, invocation: &InvocationContext<'_
     let mut bytes = Vec::new();
     clap_complete::generate(shell, &mut command, "pangram", &mut bytes);
     finish_raw_bytes(&bytes, invocation)
-}
-
-/// Private development builds expose the final command grammar but stop at
-/// the updater's outer policy boundary. This dispatch intentionally resolves
-/// the command name before constructing the typed failure so scripts can
-/// distinguish a check from an install request without any updater I/O.
-fn execute_private_update(arguments: &ArgMatches) -> RunOutcome {
-    let command = if arguments.get_flag("check") {
-        crate::output::ResolvedCommand::UpdateCheck
-    } else {
-        crate::output::ResolvedCommand::UpdateInstall
-    };
-    finish(PhaseOneOutcome::failure(
-        command,
-        crate::update::private_build_error(),
-    ))
 }
 
 /// Runs the blocking stdio server only for the real process entrypoint.

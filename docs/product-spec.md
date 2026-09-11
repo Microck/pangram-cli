@@ -788,8 +788,8 @@ Public v1 requires:
 10. no unresolved P0 or P1 test, security, or maintainability findings
 
 Stable `0.x` releases may be distributed with the same exact-version authority
-and release gates as later versions. They perform no update networking. Signed
-self-update begins at `1.0.0`.
+and release gates as later versions. Signed self-update is active from
+`1.0.0`, gated on direct-install ownership rather than the major version.
 
 ## 18. Explicit non-goals
 

@@ -8,6 +8,7 @@ mod local_setup;
 mod mcp;
 mod phase7;
 mod runtime;
+mod update;
 
 pub(crate) use crate::config::redact_io;
 #[cfg(test)]
