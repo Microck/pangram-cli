@@ -1,6 +1,6 @@
 {
   "name": "@microck/pangram-cli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Unofficial Pangram terminal client",
   "license": "MIT",
   "repository": "https://github.com/Microck/pangram-cli",
@@ -15,11 +15,11 @@
     "node": ">=20"
   },
   "optionalDependencies": {
-    "@microck/pangram-cli-darwin-arm64": "1.0.0",
-    "@microck/pangram-cli-darwin-x64": "1.0.0",
-    "@microck/pangram-cli-linux-arm64": "1.0.0",
-    "@microck/pangram-cli-linux-x64": "1.0.0",
-    "@microck/pangram-cli-win32-x64": "1.0.0"
+    "@microck/pangram-cli-darwin-arm64": "1.1.0",
+    "@microck/pangram-cli-darwin-x64": "1.1.0",
+    "@microck/pangram-cli-linux-arm64": "1.1.0",
+    "@microck/pangram-cli-linux-x64": "1.1.0",
+    "@microck/pangram-cli-win32-x64": "1.1.0"
   },
   "publishConfig": {
     "access": "public"
