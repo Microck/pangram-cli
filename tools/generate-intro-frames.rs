@@ -16,6 +16,8 @@ const SOURCE_PATH: &str = "assets/brand/pangram-fox-source.gif";
 const OUTPUT_PATH: &str = "src/tui/intro-frames.rs";
 const PUFFERFISH_SOURCE_PATH: &str = "assets/brand/pangram-cat-pufferfish-source.gif";
 const PUFFERFISH_OUTPUT_PATH: &str = "src/tui/intro-pufferfish-frames.rs";
+const PUFFERFISH_PART0_PATH: &str = "src/tui/intro-pufferfish-frames-0.rs";
+const PUFFERFISH_PART1_PATH: &str = "src/tui/intro-pufferfish-frames-1.rs";
 const PUFFERFISH_SOURCE_SHA256: &str =
     "e0bef48d2d8c0643445bb35cbd521eb83811ba9942b49fbd6307db9ffbe6ffed";
 const SOURCE_SHA256: &str = "fa806f95e5775e9bc4ffda599a540910edd2042115eae80729308b02d89a542e";
@@ -67,6 +69,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cycle = generate_cycle(&frames, crop);
     let dissolves = generate_dissolves(&cycle);
     let fox_frames: Vec<_> = cycle.into_iter().chain(dissolves).collect();
+    let [pufferfish_frames, first, second] = pufferfish::render_modules(
+        &pufferfish_source,
+        &format!("Source SHA-256: {PUFFERFISH_SOURCE_SHA256}"),
+        PLAYBACK_FRAME_COUNT,
+        DISSOLVE_FRAME_COUNT,
+        dissolve_score,
+    );
     let outputs = [
         (
             OUTPUT_PATH,
@@ -78,16 +87,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &playback_sequence(),
             ),
         ),
-        (
-            PUFFERFISH_OUTPUT_PATH,
-            pufferfish::render_module(
-                &pufferfish_source,
-                &format!("Source SHA-256: {PUFFERFISH_SOURCE_SHA256}"),
-                PLAYBACK_FRAME_COUNT,
-                DISSOLVE_FRAME_COUNT,
-                dissolve_score,
-            ),
-        ),
+        (PUFFERFISH_OUTPUT_PATH, pufferfish_frames),
+        (PUFFERFISH_PART0_PATH, first),
+        (PUFFERFISH_PART1_PATH, second),
     ];
 
     for (path, generated) in outputs {
