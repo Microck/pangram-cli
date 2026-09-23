@@ -1,6 +1,6 @@
 {
   "name": "@microck/pangram-cli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Unofficial Pangram terminal client",
   "license": "MIT",
   "repository": "https://github.com/Microck/pangram-cli",
