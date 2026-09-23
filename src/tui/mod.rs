@@ -268,8 +268,11 @@ fn run_inner(analyzer_source: crate::analysis::AnalyzerSource) -> Result<u8, Tui
     let mut session = TerminalSession::enter()?;
     #[cfg(feature = "dev-tools")]
     inject_terminal_failure_for_test()?;
+    let intro_artwork = intro::IntroArtwork::random();
+    #[cfg(feature = "dev-tools")]
+    let intro_artwork = intro_artwork_for_test().unwrap_or(intro_artwork);
     let (intro_resolution, deferred_input) =
-        match intro_playback::play(&mut session, intro_plan, &state)? {
+        match intro_playback::play(&mut session, intro_plan, intro_artwork, &state)? {
             intro_playback::PlaybackExit::Continue {
                 resolution,
                 deferred,
@@ -424,6 +427,17 @@ fn inject_terminal_failure_for_test() -> Result<(), TuiError> {
         return Err(io::Error::other("injected terminal I/O failure").into());
     }
     Ok(())
+}
+
+#[cfg(feature = "dev-tools")]
+fn intro_artwork_for_test() -> Option<intro::IntroArtwork> {
+    // PTY tests pin the otherwise random artwork. Unknown values keep the
+    // production draw so an inherited variable cannot change behavior silently.
+    match std::env::var_os("PANGRAM_TUI_TEST_INTRO_ARTWORK")?.to_str()? {
+        "fox" => Some(intro::IntroArtwork::Fox),
+        "cat-pufferfish" => Some(intro::IntroArtwork::CatPufferfish),
+        _ => None,
+    }
 }
 
 fn startup_state(service: &ConfigService) -> Result<StartupState, ConfigError> {

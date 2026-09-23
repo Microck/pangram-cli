@@ -1,0 +1,22 @@
+{
+  "original_filename": "Cute Cat Pufferfish Jul 21 2026.png",
+  "acquired_on": "2026-09-23",
+  "source_owner": "Pangram Labs",
+  "source_url": "https://pangram-public.s3.us-east-1.amazonaws.com/web/assets/Cute+Cat+Pufferfish+Jul+21+2026.png",
+  "original_sha256": "26282addf5c723243bdd1a96f06ef4379c6bd25613023e42ff0552d5545bab9f",
+  "processing": [
+    "background removed with rembg 2.0.85 isnet-general-use",
+    "cool, water-tinted pixels (PIL hue 45-235) re-hued to the median puffer tan with saturation clamped to its range",
+    "trimmed to the alpha bounds and resized 50%",
+    "alpha thresholded at 50%",
+    "levels 0%,82% and saturation 125% for dark terminal backdrops",
+    "quantized without dithering to a 30-color GIF palette"
+  ],
+  "sha256": "e0bef48d2d8c0643445bb35cbd521eb83811ba9942b49fbd6307db9ffbe6ffed",
+  "width_px": 569,
+  "height_px": 494,
+  "frame_count": 1,
+  "permission_reference": "User confirmed Pangram authorization for this image and its terminal derivatives on 2026-09-23",
+  "license_boundary": "The source and generated derivatives are not covered by the repository MIT license.",
+  "generator": "tools/generate-intro-frames.rs"
+}

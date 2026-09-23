@@ -3,7 +3,7 @@
 pub(crate) const ART_WIDTH: usize = 72;
 pub(crate) const ART_HEIGHT: usize = 16;
 pub(crate) const UNIQUE_FRAME_COUNT: usize = 22;
-pub(crate) const ART_FRAMES: [[&str; ART_HEIGHT]; UNIQUE_FRAME_COUNT] = [
+pub(crate) static ART_FRAMES: [[&str; ART_HEIGHT]; UNIQUE_FRAME_COUNT] = [
     [
         "                                                                        ",
         "      aba                                                               ",
