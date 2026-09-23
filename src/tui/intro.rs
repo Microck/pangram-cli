@@ -13,20 +13,20 @@ use super::model::{IntroFrequency, MotionLevel, TerminalSize};
 
 pub(crate) const STATE_FILE_NAME: &str = "tui-state.json";
 const FRAME_DURATION_MILLIS: u64 = 50;
-const FOX_DURATION_MILLIS: u64 = 2_800;
+const ART_DURATION_MILLIS: u64 = 2_800;
 const TUI_FADE_DURATION_MILLIS: u64 = 300;
-const INTRO_DURATION_MILLIS: u64 = FOX_DURATION_MILLIS + TUI_FADE_DURATION_MILLIS;
+const INTRO_DURATION_MILLIS: u64 = ART_DURATION_MILLIS + TUI_FADE_DURATION_MILLIS;
 const _: () = assert!(INTRO_DURATION_MILLIS.is_multiple_of(FRAME_DURATION_MILLIS));
 pub(crate) const FRAME_DURATION: Duration = Duration::from_millis(FRAME_DURATION_MILLIS);
 #[cfg(test)]
-pub(crate) const FOX_DURATION: Duration = Duration::from_millis(FOX_DURATION_MILLIS);
+pub(crate) const ART_DURATION: Duration = Duration::from_millis(ART_DURATION_MILLIS);
 #[cfg(test)]
 pub(crate) const TUI_FADE_DURATION: Duration = Duration::from_millis(TUI_FADE_DURATION_MILLIS);
 pub(crate) const INTRO_DURATION: Duration = Duration::from_millis(INTRO_DURATION_MILLIS);
-pub(crate) const FOX_FRAME_COUNT: usize = (FOX_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
+pub(crate) const ART_FRAME_COUNT: usize = (ART_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
 pub(crate) const TUI_FADE_FRAME_COUNT: usize =
     (TUI_FADE_DURATION_MILLIS / FRAME_DURATION_MILLIS) as usize;
-pub(crate) const FRAME_COUNT: usize = FOX_FRAME_COUNT + TUI_FADE_FRAME_COUNT;
+pub(crate) const FRAME_COUNT: usize = ART_FRAME_COUNT + TUI_FADE_FRAME_COUNT;
 /// Samples of cubic-bezier(0.23, 1, 0.32, 1) at 0%, 20%, ..., 100%.
 pub(crate) const TUI_FADE_OPACITY: [u16; TUI_FADE_FRAME_COUNT] =
     [0, 6_819, 9_252, 9_859, 9_988, 10_000];
@@ -284,6 +284,32 @@ pub(crate) const fn plan_intro(
     }
 
     IntroPlan::FullMotion
+}
+
+/// The drawing a full-motion playback shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntroArtwork {
+    Fox,
+    CatPufferfish,
+}
+
+impl IntroArtwork {
+    /// One roll in four selects the cat-pufferfish.
+    pub(crate) const fn from_roll(roll: u64) -> Self {
+        if roll.is_multiple_of(4) {
+            Self::CatPufferfish
+        } else {
+            Self::Fox
+        }
+    }
+
+    /// Draws once from process randomness. `RandomState` keys come from the
+    /// operating system, which is enough for a cosmetic choice and avoids a
+    /// random-number dependency.
+    pub(crate) fn random() -> Self {
+        use std::hash::BuildHasher as _;
+        Self::from_roll(std::collections::hash_map::RandomState::new().hash_one(0_u8))
+    }
 }
 
 /// A point where an offered intro has actually resolved for the user.
@@ -563,9 +589,9 @@ mod tests {
     #[test]
     fn elapsed_time_selects_boundaries_and_skips_stale_frames() {
         assert_eq!(
-            FOX_DURATION,
-            FRAME_DURATION * u32::try_from(FOX_FRAME_COUNT).expect("frame count fits u32"),
-            "the fox frame count must stay derived from its sequence timing"
+            ART_DURATION,
+            FRAME_DURATION * u32::try_from(ART_FRAME_COUNT).expect("frame count fits u32"),
+            "the art frame count must stay derived from its sequence timing"
         );
         assert_eq!(
             TUI_FADE_DURATION,
@@ -575,8 +601,8 @@ mod tests {
         );
         assert_eq!(
             INTRO_DURATION,
-            FOX_DURATION + TUI_FADE_DURATION,
-            "the complete intro includes both the fox and interface fade"
+            ART_DURATION + TUI_FADE_DURATION,
+            "the complete intro includes both the art and interface fade"
         );
         assert_eq!(select_frame(Duration::ZERO), FrameSelection::Frame(0));
         assert_eq!(
@@ -592,12 +618,12 @@ mod tests {
             FrameSelection::Frame(3)
         );
         assert_eq!(
-            select_frame(FOX_DURATION - Duration::from_millis(1)),
-            FrameSelection::Frame(FOX_FRAME_COUNT - 1)
+            select_frame(ART_DURATION - Duration::from_millis(1)),
+            FrameSelection::Frame(ART_FRAME_COUNT - 1)
         );
         assert_eq!(
-            select_frame(FOX_DURATION),
-            FrameSelection::Frame(FOX_FRAME_COUNT)
+            select_frame(ART_DURATION),
+            FrameSelection::Frame(ART_FRAME_COUNT)
         );
         assert_eq!(
             select_frame(INTRO_DURATION - Duration::from_millis(1)),
@@ -626,5 +652,23 @@ mod tests {
             assert_eq!(classify_key(key), IntroKeyDisposition::RouteNormally);
             assert!(!classify_key(key).consumed());
         }
+    }
+
+    #[test]
+    fn exactly_one_roll_in_four_selects_the_cat_pufferfish() {
+        let pufferfish = (0..400)
+            .filter(|roll| IntroArtwork::from_roll(*roll) == IntroArtwork::CatPufferfish)
+            .count();
+        assert_eq!(pufferfish, 100);
+    }
+
+    #[test]
+    fn random_artwork_draws_vary_near_one_in_four() {
+        // Mean 100 and standard deviation about 8.7; the bounds are over five
+        // deviations wide, so only a constant or badly skewed source fails.
+        let pufferfish = (0..400)
+            .filter(|_| IntroArtwork::random() == IntroArtwork::CatPufferfish)
+            .count();
+        assert!((50..=150).contains(&pufferfish), "{pufferfish} of 400");
     }
 }

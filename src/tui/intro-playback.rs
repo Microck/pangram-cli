@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyEventKind};
 
 use super::intro::{
-    self, FOX_FRAME_COUNT, FRAME_DURATION, FrameSelection, INTRO_MIN_COLUMNS, INTRO_MIN_ROWS,
-    IntroPlan, IntroResolution, TUI_FADE_OPACITY,
+    self, ART_FRAME_COUNT, FRAME_DURATION, FrameSelection, INTRO_MIN_COLUMNS, INTRO_MIN_ROWS,
+    IntroArtwork, IntroPlan, IntroResolution, TUI_FADE_OPACITY,
 };
 use super::intro_render;
 use super::model::AppState;
@@ -15,7 +15,8 @@ use super::render;
 use super::terminal::{ProcessSignal, TerminalSession};
 
 const MAX_EVENT_WAIT: Duration = Duration::from_millis(25);
-const _: () = assert!(FOX_FRAME_COUNT == intro_render::FRAME_SEQUENCE.len());
+const _: () = assert!(ART_FRAME_COUNT == intro_render::FOX_SEQUENCE_LEN);
+const _: () = assert!(ART_FRAME_COUNT == intro_render::PUFFERFISH_SEQUENCE_LEN);
 
 pub(crate) enum PlaybackExit {
     Continue {
@@ -28,6 +29,7 @@ pub(crate) enum PlaybackExit {
 pub(crate) fn play(
     session: &mut TerminalSession,
     plan: IntroPlan,
+    artwork: IntroArtwork,
     state: &AppState,
 ) -> io::Result<PlaybackExit> {
     if matches!(plan, IntroPlan::Suppressed) {
@@ -59,12 +61,12 @@ pub(crate) fn play(
             FrameSelection::Frame(frame_index) => frame_index,
         };
         if rendered != Some(frame_index) {
-            if frame_index < FOX_FRAME_COUNT {
+            if frame_index < ART_FRAME_COUNT {
                 session.draw(|frame| {
-                    intro_render::render(frame, frame_index, state.color_mode);
+                    intro_render::render(frame, artwork, frame_index, state.color_mode);
                 })?;
             } else {
-                let fade_index = frame_index - FOX_FRAME_COUNT;
+                let fade_index = frame_index - ART_FRAME_COUNT;
                 let opacity = TUI_FADE_OPACITY
                     .get(fade_index)
                     .copied()

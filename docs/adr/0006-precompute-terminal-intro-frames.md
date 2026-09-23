@@ -34,9 +34,9 @@ During the first 900 ms, its backdrop reaches the TUI canvas color. The real
 Analyze buffer then fades in over six fixed 50 ms easing samples, for a 3.1
 second complete presentation.
 
-The source hash, geometry, provenance, rights, and acceptance artifact are
-normative in `../intro-art-contract.md`. Missing or invalid generated art blocks
-only the intro rather than the core TUI.
+The source GIFs, their hashes, and provenance metadata live in
+`assets/brand/`. The generator checks the hashes. Missing or invalid generated
+art blocks only the intro rather than the core TUI.
 
 Playback selects a frame from monotonic elapsed time. It skips stale frames
 when rendering falls behind. Escape, Enter, and Space skip playback and are
@@ -46,6 +46,20 @@ maintaining a separate transition layout.
 Intro frequency is `once`, `always`, or `off`, with `once` as the default.
 Motion is an independent `full`, `reduced`, or `off` setting. The one-time
 marker is local state and does not rewrite user configuration.
+
+### Amendment: cat-pufferfish variant
+
+Date: 2026-09-23
+
+One in four full-motion playbacks shows Pangram Labs' "Cute Cat Pufferfish"
+instead of the fox. The source is a single still, so the development
+generator cuts it out from its background, then moves, tilts, and scales it
+through a swim-in and puff-up. A photo loses too much detail in four colors,
+so this variant stores two square pixels per cell as `▀` half blocks over its
+own 30-color source palette, with precomputed xterm-256 equivalents. It keeps
+the fox's 56-frame, 20 fps sequence, final eight-frame dissolve pattern, and
+playback path. Selection happens once per playback from process randomness
+and is neither persisted nor configurable.
 
 ## Consequences
 

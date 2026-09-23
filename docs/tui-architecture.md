@@ -105,6 +105,18 @@ The generator samples one sequence:
 - repeat that cycle four times
 - replace playback frames 48 through 55 with deterministic density dissolves
 
+A second generated 72x24 table holds the cat-pufferfish variant. The same
+generator verifies and decodes Pangram's background-removed cat-pufferfish
+still, animates it in `tools/intro-pufferfish.rs` into two square pixels per
+cell for `▀` half blocks, applies the same dissolve to playback frames 48
+through 55, and stores each distinct frame once behind its own 56-entry
+sequence. Startup draws the
+artwork once per launch, with one chance in four for the cat-pufferfish, and
+passes it to playback. Frame selection, fades, skips, and state handling do not
+depend on the artwork. Compiled PTY tests pin the choice through the
+`dev-tools`-only `PANGRAM_TUI_TEST_INTRO_ARTWORK` variable, which normal
+builds do not read.
+
 For elapsed time below 2,800 ms, frame selection uses
 `floor(elapsed_ms / 50)`. During the first 900 ms, the renderer moves the full
 frame backdrop from terminal black to the resolved TUI canvas color. From 2,800

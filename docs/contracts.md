@@ -1312,6 +1312,18 @@ interactive surface has these observable boundaries:
   colors over six 50 ms steps using the `cubic-bezier(0.23, 1, 0.32, 1)`
   ease-out curve. The complete presentation is 3.1 seconds. The runtime does
   not decode or read the source asset.
+- Each full-motion playback selects its artwork once, before the first frame:
+  the cat-pufferfish with probability 1/4 and the fox otherwise. The
+  cat-pufferfish source is Pangram Labs' "Cute Cat Pufferfish" image with its
+  background removed, stored as a 569x494, single-frame, 30-color GIF with
+  SHA-256 `e0bef48d2d8c0643445bb35cbd521eb83811ba9942b49fbd6307db9ffbe6ffed`.
+  The generator animates that still into a centered 72x24 half-block sequence
+  of exactly 56 frames, two square pixels per cell. The fish swims in small
+  from the right with a wobble, settles, puffs up to full size on a springy
+  overshoot, and dissolves over the final eight frames. Timing, backdrop fade,
+  Analyze fade, skip keys, resize behavior, suppression rules, and one-time
+  state are identical for both artworks. Neither choice is persisted or
+  configurable.
 - The intro is eligible only at 100x28 or larger. A smaller viewport opens
   Analyze immediately and leaves first-run playback unconsumed. Resizing below
   that floor during playback ends the intro without marking it seen. Reduced
@@ -1321,10 +1333,13 @@ interactive surface has these observable boundaries:
   Analyze workflow, layout, or terminal restoration.
 - The fox is centered and uses Pangram orange as its dominant color, with pink,
   cream, and dark-orange detail. ANSI terminals receive fixed indexed-color
-  equivalents. `NO_COLOR` preserves the silhouette with density glyphs and no
-  color escapes. Escape, Enter, or Space skips playback and is consumed; other
-  input remains available to the normal reducer. A resize below 100x28 or a
-  skip during either the fox or Analyze fade reveals the final TUI immediately.
+  equivalents. The cat-pufferfish keeps its source palette in truecolor and
+  uses the nearest xterm-256 colors in ANSI terminals. For either artwork,
+  `NO_COLOR` preserves the silhouette with density glyphs and no color
+  escapes. Escape, Enter, or Space skips playback
+  and is consumed; other input remains available to the normal reducer. A
+  resize below 100x28 or a skip during either the artwork or Analyze fade
+  reveals the final TUI immediately.
   Completed or explicitly skipped full-motion playback marks the intro seen
   only after the terminal has entered its full-screen session successfully.
 

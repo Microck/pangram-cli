@@ -2,22 +2,25 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 
+use super::intro::IntroArtwork;
 use super::intro_render;
 use super::model::{AppState, ColorMode, TerminalSize};
 use super::render;
 
-fn draw(frame_index: usize, color_mode: ColorMode) -> TestBackend {
+const ARTWORKS: [IntroArtwork; 2] = [IntroArtwork::Fox, IntroArtwork::CatPufferfish];
+
+fn draw(artwork: IntroArtwork, frame_index: usize, color_mode: ColorMode) -> TestBackend {
     let backend = TestBackend::new(100, 28);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| intro_render::render(frame, frame_index, color_mode))
+        .draw(|frame| intro_render::render(frame, artwork, frame_index, color_mode))
         .unwrap();
     terminal.backend().clone()
 }
 
 #[test]
 fn fox_is_centered_while_the_backdrop_starts_at_terminal_default() {
-    let backend = draw(0, ColorMode::TrueColor);
+    let backend = draw(IntroArtwork::Fox, 0, ColorMode::TrueColor);
     let buffer = backend.buffer();
     let occupied: Vec<_> = (0..28)
         .flat_map(|y| (0..100).map(move |x| (x, y)))
@@ -36,7 +39,7 @@ fn fox_is_centered_while_the_backdrop_starts_at_terminal_default() {
 
 #[test]
 fn fox_backdrop_reaches_the_exact_tui_canvas_after_900ms() {
-    let midway = draw(9, ColorMode::TrueColor);
+    let midway = draw(IntroArtwork::Fox, 9, ColorMode::TrueColor);
     assert!(
         midway
             .buffer()
@@ -45,8 +48,8 @@ fn fox_backdrop_reaches_the_exact_tui_canvas_after_900ms() {
             .all(|cell| cell.bg == Color::Rgb(9, 9, 9))
     );
 
-    for frame_index in [18, intro_render::FRAME_SEQUENCE.len() - 1] {
-        let backend = draw(frame_index, ColorMode::TrueColor);
+    for frame_index in [18, intro_render::FOX_SEQUENCE_LEN - 1] {
+        let backend = draw(IntroArtwork::Fox, frame_index, ColorMode::TrueColor);
         assert!(
             backend
                 .buffer()
@@ -59,7 +62,7 @@ fn fox_backdrop_reaches_the_exact_tui_canvas_after_900ms() {
 
 #[test]
 fn truecolor_is_orange_dominant_with_three_detail_colors() {
-    let backend = draw(0, ColorMode::TrueColor);
+    let backend = draw(IntroArtwork::Fox, 0, ColorMode::TrueColor);
     let buffer = backend.buffer();
     let count = |color| {
         buffer
@@ -76,26 +79,82 @@ fn truecolor_is_orange_dominant_with_three_detail_colors() {
 }
 
 #[test]
+fn cat_pufferfish_swims_in_then_puffs_up_centered_in_photo_color() {
+    let occupied = |frame_index| -> Vec<(u16, u16)> {
+        let backend = draw(
+            IntroArtwork::CatPufferfish,
+            frame_index,
+            ColorMode::TrueColor,
+        );
+        let buffer = backend.buffer().clone();
+        (0..28)
+            .flat_map(|y| (0..100).map(move |x| (x, y)))
+            .filter(|&(x, y)| buffer[(x, y)].symbol() != " ")
+            .collect()
+    };
+    let center = |cells: &[(u16, u16)]| {
+        let left = cells.iter().map(|(x, _)| i32::from(*x)).min().unwrap();
+        let right = cells.iter().map(|(x, _)| i32::from(*x)).max().unwrap();
+        (left + right) / 2
+    };
+
+    let swimming = occupied(0);
+    let puffed = occupied(40);
+    assert!(
+        swimming.len() > 150,
+        "the swimming fish must remain legible"
+    );
+    assert!(center(&swimming) > 60, "the fish enters from the right");
+    assert!(
+        puffed.len() > 2 * occupied(18).len(),
+        "the fish must visibly puff up"
+    );
+    assert!(
+        (center(&puffed) - 50).abs() <= 3,
+        "the puffed fish is centered"
+    );
+
+    let backend = draw(IntroArtwork::CatPufferfish, 40, ColorMode::TrueColor);
+    let mut colors: Vec<_> = backend
+        .buffer()
+        .content()
+        .iter()
+        .filter(|cell| cell.symbol() != " ")
+        .flat_map(|cell| [cell.fg, cell.bg])
+        .filter(|color| matches!(color, Color::Rgb(..)) && *color != Color::Rgb(17, 17, 17))
+        .collect();
+    colors.sort_by_key(|color| format!("{color:?}"));
+    colors.dedup();
+    assert!(colors.len() >= 16, "photo colors survive: {}", colors.len());
+    assert!(!colors.contains(&Color::Rgb(255, 97, 6)), "no fox orange");
+}
+
+#[test]
 fn no_color_uses_only_ascii_density_glyphs_and_reset_colors() {
-    let backend = draw(0, ColorMode::None);
-    let buffer = backend.buffer();
-    for cell in buffer.content() {
-        assert!(matches!(cell.symbol(), " " | "." | "+" | "#"));
-        assert_eq!(cell.fg, Color::Reset);
-        assert_eq!(cell.bg, Color::Reset);
+    for artwork in ARTWORKS {
+        let backend = draw(artwork, 0, ColorMode::None);
+        let buffer = backend.buffer();
+        assert!(buffer.content().iter().any(|cell| cell.symbol() == "#"));
+        for cell in buffer.content() {
+            assert!(matches!(cell.symbol(), " " | "." | "+" | "#"));
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
     }
 }
 
 #[test]
 fn last_playback_frame_is_fully_dissolved() {
-    let backend = draw(intro_render::FRAME_SEQUENCE.len() - 1, ColorMode::Ansi);
-    assert!(
-        backend
-            .buffer()
-            .content()
-            .iter()
-            .all(|cell| cell.symbol() == " ")
-    );
+    for artwork in ARTWORKS {
+        let backend = draw(artwork, 55, ColorMode::Ansi);
+        assert!(
+            backend
+                .buffer()
+                .content()
+                .iter()
+                .all(|cell| cell.symbol() == " ")
+        );
+    }
 }
 
 fn draw_tui(opacity: Option<u16>) -> TestBackend {

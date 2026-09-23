@@ -433,6 +433,12 @@ The intro is a terminal-native recreation of the approved Pangram fox GIF. It
 uses precomputed terminal-cell frames, not bundled runtime media, an image
 decoder, or third-party frame data.
 
+One in four full-motion playbacks shows the cat-pufferfish instead of the fox.
+Its source is Pangram Labs' "Cute Cat Pufferfish" image, cut out from its
+underwater background and animated by the frame generator into half-block
+terminal cells. The choice is made once per playback, is not persisted, and
+changes nothing else about timing, skipping, or suppression.
+
 The default `tui.intro = "once"` plays the intro on the first eligible
 full-motion launch. `always` replays it on every eligible launch, and `off`
 opens Analyze immediately. Intro frequency and motion level are separate
@@ -469,8 +475,8 @@ The approved GIF is a development source, not a runtime asset. The software
 license does not cover the source artwork or generated derivatives; public
 source and release artifacts carry the separate artwork notice.
 
-The normative source-art, provenance, rights, and visual acceptance requirements
-are in [intro-art-contract.md](intro-art-contract.md). Missing or invalid
+The source GIFs and provenance metadata live in `assets/brand/`. The generator
+verifies their hashes before producing terminal frames. Missing or invalid
 generated art blocks only the intro, not the core CLI, TUI reducer, or terminal
 lifecycle.
 

@@ -344,11 +344,23 @@ fn ci_suppressed_mouse_route_and_clean_quit_leave_intro_unseen() {
 }
 
 #[test]
-fn eligible_truecolor_intro_renders_and_skip_records_once_state() {
+fn eligible_truecolor_fox_intro_renders_and_skip_records_once_state() {
+    assert_intro_renders_and_skip_records_once_state("fox", (255, 97, 6));
+}
+
+#[test]
+fn eligible_truecolor_cat_pufferfish_intro_renders_and_skip_records_once_state() {
+    assert_intro_renders_and_skip_records_once_state("cat-pufferfish", (172, 151, 110));
+}
+
+/// Pins the otherwise random artwork, then checks its signature color, the
+/// Enter skip, the once marker, and terminal restoration.
+fn assert_intro_renders_and_skip_records_once_state(artwork: &str, signature: (u8, u8, u8)) {
     let isolated = tempfile::tempdir().unwrap();
     let data_dir = isolated.path().join("data");
     let mut command = isolated_command(isolated.path(), false, false);
     command.env("PANGRAM_API_KEY", "synthetic-intro-pty-key");
+    command.env("PANGRAM_TUI_TEST_INTRO_ARTWORK", artwork);
     std::fs::write(
         isolated.path().join("config.toml"),
         "config_version = 1\n\n[updates]\ncheck_on_tui_start = false\n",
@@ -388,7 +400,7 @@ fn eligible_truecolor_intro_renders_and_skip_records_once_state() {
 
     let mut transcript = Vec::new();
     let interaction = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let fox_rendered = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
+        let art_rendered = receive_until(&output_rx, &mut transcript, START_TIMEOUT, |bytes| {
             let visible = screen_contents(bytes);
             !visible.contains("Analyze")
                 && visible
@@ -398,13 +410,13 @@ fn eligible_truecolor_intro_renders_and_skip_records_once_state() {
                     > 200
         });
         assert!(
-            fox_rendered,
-            "eligible launch did not render the generated fox:\n{}",
+            art_rendered,
+            "eligible launch did not render the generated {artwork}:\n{}",
             String::from_utf8_lossy(&transcript)
         );
         assert!(
-            screen_has_rgb(&transcript, (255, 97, 6)),
-            "truecolor playback did not render Pangram orange"
+            screen_has_rgb(&transcript, signature),
+            "truecolor {artwork} playback did not render its signature color"
         );
 
         writer.write_all(b"\r").expect("skip intro with Enter");
