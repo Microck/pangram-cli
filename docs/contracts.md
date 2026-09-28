@@ -1,7 +1,7 @@
 # Pangram CLI observable contracts
 
 Status: normative implementation contract
-Schema major: `"1"`
+Schema major: `"2"`
 Configuration version: `1`
 
 This document defines behavior visible outside an implementation module. When
@@ -34,7 +34,7 @@ CI rejects regeneration drift and stale generated files.
 
 ## 1. Compatibility rules
 
-Within schema major `"1"`:
+Within schema major `"2"`:
 
 - fields may be added
 - enum values MUST NOT be added unless the field is documented as open text
@@ -104,7 +104,7 @@ different meanings. The initial public model does not require it.
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "command": "detect",
   "data": {
     "id": "anl_01983c20-0180-7a80-a001-000000000001",
@@ -175,7 +175,7 @@ arbitrary command or unconstrained `data`.
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "command": "detect",
   "error": {
     "code": "missing_api_key",
@@ -348,19 +348,31 @@ Text input:
 
 Closed `origin` values:
 
-- `literal`
-- `stdin`
-- `file`
-- `unknown`
+- `literal`: UTF-8 text supplied as a CLI argv operand
+- `stdin`: UTF-8 text read from stdin
+- `file`: a local UTF-8 text file whose basename is `name`
+- `transcript`: UTF-8 text produced by local speech-to-text from media or
+  YouTube audio; `name` is the media path or YouTube URL
+- `github`: UTF-8 text assembled from GitHub REST prose; `name` is the
+  resource `html_url`
+- `unknown`: a remotely authored operation observed by explicit upstream ID
+  (section 4.6). Valid only on that resumed-observation path; locally
+  submitted commands never emit it.
 
-`unknown` marks the descriptor of a remotely authored operation the caller
-observes by explicit upstream ID (section 4.6): the input was submitted by
-another actor or process, so no local submission category applies. It is
-valid only on that resumed-observation path; locally submitted commands
-never emit it.
+Schema major `"2"` adds `transcript` and `github`. Previously valid major
+`"1"` envelopes are not valid major `"2"` documents. There is no
+compatibility migration path.
 
-`name` is present for a text file. `text` is omitted unless the caller
-explicitly requests input content or reads a full saved export.
+`name` is present if and only if `origin` is `file`, `transcript`, or
+`github`. `text` is omitted unless the caller explicitly requests input
+content or reads a full saved export.
+
+Source-ingest shortcuts (`video`, `audio`, `youtube`, `pr`, `issue`,
+`comments`) submit text detection. The JSON envelope `command` is `detect`.
+They MUST NOT emit `origin: file` for GitHub or media, and MUST NOT emit
+`origin: literal` for source-derived text.
+
+
 
 Binary file input:
 
@@ -983,6 +995,11 @@ Initial stable codes:
 | `update_not_owned` | update | no |
 | `update_verification_failed` | update | no |
 | `update_replace_failed` | update | depends |
+| `missing_dependency` | usage | no |
+| `model_download_required` | usage | no |
+| `transcription_failed` | usage | no |
+| `github_authentication` | authentication | no |
+| `github_not_found` | usage | no |
 
 `details` is sanitized and code-specific. It MUST NOT contain credentials,
 auth headers, submitted content, segment text, plagiarism matches, or raw
@@ -2243,6 +2260,74 @@ replace the required native evidence. If the minimum-version environment is
 unavailable, narrow this contract before publishing rather than substituting
 cross-build evidence. The Linux contract claims a glibc baseline only; it does
 not claim an untested minimum kernel version.
+
+### 14.12 Source ingest
+
+These commands preprocess local or remote prose into UTF-8 text, then run the
+ordinary `detect` path. They do not call Pangram HTTP. The analysis module
+remains the only Pangram client.
+
+```text
+pangram video PATH
+pangram audio PATH
+pangram youtube URL
+pangram pr REF [--comments]
+pangram issue REF [--comments]
+pangram comments REF
+```
+
+Shared flags are the detect flags except `--file`: `--format`, `--include-input`,
+`--save`, `--public-link`, `--timeout`, `--progress`, `--max-billable-units`,
+`--detach`. `--max-billable-units` is required. Omitting it is
+`unsupported_combination` before download, transcription, or GitHub I/O.
+
+Media flags: `--model large-v3-turbo|large-v3-turbo-q5_0|large-v3` (default
+`large-v3-turbo`) and `--download-model`.
+
+The envelope `command` is `detect`. `origin` is `transcript` or `github`.
+
+#### Media
+
+`video` and `audio` decode with `ffmpeg` on PATH to 16 kHz mono PCM, then
+transcribe with `whisper-cli` from `{data-dir}/transcription/bin/` or PATH
+and a ggml model under `{data-dir}/transcription/models/`. The engine is not
+compiled into `pangram`. `--download-model` downloads the selected ggml
+weights after SHA-256 verification. It does not install ffmpeg, yt-dlp, or
+whisper-cli.
+
+`youtube` requires user-installed `yt-dlp` on PATH, downloads audio only, then
+transcribes. Missing yt-dlp is `missing_dependency` with recovery that names
+installing yt-dlp. Pangram CLI does not vendor yt-dlp. Invoking a
+user-installed downloader is not YouTube platform permission.
+
+Noninteractive runs MUST NOT prompt. A missing model without `--download-model`
+is `model_download_required`. An all-TTY interactive run may prompt once.
+Missing ffmpeg or whisper-cli is `missing_dependency`. A failed transcribe is
+`transcription_failed`. Download transport failure is `network_unavailable`.
+
+Media is never sent to Pangram's file endpoint (PDF, DOCX, RTF only). Billing
+uses the text estimator after transcription.
+
+Stderr may warn that speech transcripts are weaker evidence than long-form
+writing. The warning MUST NOT include transcript text.
+
+#### GitHub
+
+`REF` is a github.com pull or issue URL, or `OWNER/REPO#N`.
+
+Token precedence: `GH_TOKEN`, then `GITHUB_TOKEN`. Missing or rejected tokens
+are `github_authentication`. Tokens are never stored in `config.toml` or
+printed.
+
+Default `pr` and `issue` submit title plus body. `--comments` and `comments`
+also include issue-comment `body` values and pull-request review-comment
+`body` values. The client MUST omit `diff_hunk`, patches, and file diffs.
+
+Assembled text uses labeled Markdown sections. A 404 is `github_not_found`.
+Production GitHub API base is `https://api.github.com`. Alternate bases exist
+only in test constructors.
+
+TUI and MCP do not add ingest tools in this change.
 
 ## 15. Local setup contract
 

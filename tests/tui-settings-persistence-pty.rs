@@ -136,7 +136,7 @@ fn success_data(output: &Output, expected_command: &str) -> Value {
             String::from_utf8_lossy(&output.stdout)
         )
     });
-    assert_eq!(envelope["schema_version"], "1");
+    assert_eq!(envelope["schema_version"], "2");
     assert_eq!(envelope["command"], expected_command);
     envelope["data"].clone()
 }

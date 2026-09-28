@@ -101,7 +101,7 @@ pub(super) fn output_schema() -> Value {
             "type": "object",
             "required": ["schema_version", "command", "data", "meta"],
             "properties": {
-                "schema_version": {"const": OutputSchemaVersion::V1},
+                "schema_version": {"const": OutputSchemaVersion::V2},
                 "command": {"enum": json_commands},
                 "data": {"oneOf": [{"type": "object"}, {"type": "array"}]},
                 "meta": schema_ref::<EnvelopeMeta>(),
@@ -117,7 +117,7 @@ pub(super) fn output_schema() -> Value {
             "type": "object",
             "required": ["schema_version", "command", "error", "meta"],
             "properties": {
-                "schema_version": {"const": OutputSchemaVersion::V1},
+                "schema_version": {"const": OutputSchemaVersion::V2},
                 "command": {"enum": all_commands},
                 "error": schema_ref::<CanonicalError>(),
                 "meta": schema_ref::<EnvelopeMeta>(),

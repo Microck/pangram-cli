@@ -82,6 +82,7 @@ The implementation follows this ownership layout:
 |   |-- tui.rs
 |   |-- mcp.rs
 |   |-- update.rs
+|   |-- ingest.rs
 |   `-- diagnostics.rs
 |-- tools/
 |   |-- generate-contracts.rs
@@ -143,7 +144,8 @@ override, or feature-dependent endpoint behavior.
 | Module | Owns | Must not own |
 | --- | --- | --- |
 | `domain` | IDs, inputs, checks, status, results, events, errors | HTTP, terminal, SQLite |
-| `analysis` | HTTP submission, polling, retry, normalization, running handles | CLI flags, TUI state, RMCP |
+| `analysis` | Pangram HTTP submission, polling, retry, normalization, running handles | CLI flags, TUI state, RMCP, GitHub, yt-dlp |
+| `ingest` | ffmpeg/whisper/yt-dlp subprocesses, GitHub REST, model download | Pangram endpoints, CLI flags, SQLite |
 | `config` | paths, precedence, TOML validation, credential permissions | remote validation |
 | `history` | SQLite schema, transactions, FTS, exports | remote submission |
 | `output` | canonical envelopes and projections | command execution |
@@ -318,6 +320,13 @@ All requests use `x-api-key`.
 
 Production configuration cannot override these values. Test-only constructors
 accept loopback endpoint sets.
+
+Ingest HTTP is separate. Production GitHub requests use
+`https://api.github.com`. Model downloads use the pinned ggml URLs in
+`src/ingest`. Neither is overridable in the shipped binary. Test constructors
+may point GitHub at loopback. Ingest MUST NOT call Pangram hosts.
+Reqwest construction for ingest lives in `src/ingest` only.
+
 
 Compiled adapter tests use the `dev-tools`-gated `pangram-test-driver`. The
 driver validates the loopback URL and injects one typed `Analyzer` through an

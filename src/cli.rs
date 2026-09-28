@@ -4,6 +4,7 @@ pub(crate) mod bulk;
 pub(crate) mod detect;
 pub mod grammar;
 mod history;
+mod ingest;
 mod local_setup;
 mod mcp;
 mod phase7;
@@ -469,6 +470,12 @@ pub fn runtime_command() -> Command {
         .subcommand(detect)
         .subcommand(plagiarism)
         .subcommand(analyze)
+        .subcommand(ingest::video_command())
+        .subcommand(ingest::audio_command())
+        .subcommand(ingest::youtube_command())
+        .subcommand(ingest::pr_command())
+        .subcommand(ingest::issue_command())
+        .subcommand(ingest::comments_command())
         .subcommand(bulk)
         .subcommand(task)
         .subcommand(history::command())

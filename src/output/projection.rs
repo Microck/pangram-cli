@@ -207,6 +207,8 @@ fn origin_label(origin: crate::domain::TextOrigin) -> &'static str {
         crate::domain::TextOrigin::Literal => "literal",
         crate::domain::TextOrigin::Stdin => "stdin",
         crate::domain::TextOrigin::File => "file",
+        crate::domain::TextOrigin::Transcript => "transcript",
+        crate::domain::TextOrigin::Github => "github",
         crate::domain::TextOrigin::Unknown => "unknown",
     }
 }

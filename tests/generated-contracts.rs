@@ -361,7 +361,7 @@ fn output_schema_history_summaries_enforce_canonical_check_order() {
         .expect("generated output schema compiles");
     let envelope = |command: &str, checks: Value| {
         json!({
-            "schema_version": "1",
+            "schema_version": "2",
             "command": command,
             "data": {
                 "items": [{

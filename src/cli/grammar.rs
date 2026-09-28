@@ -13,6 +13,7 @@ pub enum Phase {
     McpAndAgents = 6,
     FileAndPlagiarism = 7,
     DistributionAndUpdate = 8,
+    Ingest = 9,
 }
 
 impl Serialize for Phase {
@@ -314,6 +315,65 @@ const ANALYZE_ARGUMENTS: &[ArgumentSpec] = &[
     option("--max-billable-units", "N", &[], false, false, Phase::FileAndPlagiarism).available(),
 ];
 
+const INGEST_MODELS: &[&str] = &["large-v3-turbo", "large-v3-turbo-q5_0", "large-v3"];
+
+#[rustfmt::skip]
+const VIDEO_ARGUMENTS: &[ArgumentSpec] = &[
+    positional("PATH", &[], true, false, Phase::Ingest).available(),
+    option("--model", "MODEL", INGEST_MODELS, false, false, Phase::Ingest).available(),
+    flag("--download-model", Phase::Ingest).available(),
+    flag("--detach", Phase::Ingest).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::Ingest).available(),
+    flag("--include-input", Phase::Ingest).available(),
+    flag("--save", Phase::Ingest).available(),
+    flag("--public-link", Phase::Ingest).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::Ingest).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::Ingest).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::Ingest).available(),
+];
+
+#[rustfmt::skip]
+const YOUTUBE_ARGUMENTS: &[ArgumentSpec] = &[
+    positional("URL", &[], true, false, Phase::Ingest).available(),
+    option("--model", "MODEL", INGEST_MODELS, false, false, Phase::Ingest).available(),
+    flag("--download-model", Phase::Ingest).available(),
+    flag("--detach", Phase::Ingest).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::Ingest).available(),
+    flag("--include-input", Phase::Ingest).available(),
+    flag("--save", Phase::Ingest).available(),
+    flag("--public-link", Phase::Ingest).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::Ingest).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::Ingest).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::Ingest).available(),
+];
+
+#[rustfmt::skip]
+const PR_ARGUMENTS: &[ArgumentSpec] = &[
+    positional("REF", &[], true, false, Phase::Ingest).available(),
+    flag("--comments", Phase::Ingest).available(),
+    flag("--detach", Phase::Ingest).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::Ingest).available(),
+    flag("--include-input", Phase::Ingest).available(),
+    flag("--save", Phase::Ingest).available(),
+    flag("--public-link", Phase::Ingest).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::Ingest).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::Ingest).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::Ingest).available(),
+];
+
+#[rustfmt::skip]
+const COMMENTS_ARGUMENTS: &[ArgumentSpec] = &[
+    positional("REF", &[], true, false, Phase::Ingest).available(),
+    flag("--detach", Phase::Ingest).available(),
+    option("--format", "FORMAT", OUTPUT_FORMATS, false, false, Phase::Ingest).available(),
+    flag("--include-input", Phase::Ingest).available(),
+    flag("--save", Phase::Ingest).available(),
+    flag("--public-link", Phase::Ingest).available(),
+    option("--timeout", "DURATION", &[], false, false, Phase::Ingest).available(),
+    option("--progress", "MODE", PROGRESS_MODES, false, false, Phase::Ingest).available(),
+    option("--max-billable-units", "N", &[], false, false, Phase::Ingest).available(),
+];
+
 const BULK_SOURCE_GROUP: &[ArgumentGroupSpec] = &[ArgumentGroupSpec {
     name: "bulk_source",
     required: true,
@@ -507,6 +567,12 @@ pub const FULL_GRAMMAR: GrammarSpec = GrammarSpec {
         available_command(&["detect"], CommandKind::Command, DETECT_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::TextDetection),
         available_command(&["plagiarism"], CommandKind::Command, PLAGIARISM_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
         available_command(&["analyze"], CommandKind::Command, ANALYZE_ARGUMENTS, SOURCE_CATEGORY_GROUP, Phase::FileAndPlagiarism),
+        available_command(&["video"], CommandKind::Command, VIDEO_ARGUMENTS, &[], Phase::Ingest),
+        available_command(&["audio"], CommandKind::Command, VIDEO_ARGUMENTS, &[], Phase::Ingest),
+        available_command(&["youtube"], CommandKind::Command, YOUTUBE_ARGUMENTS, &[], Phase::Ingest),
+        available_command(&["pr"], CommandKind::Command, PR_ARGUMENTS, &[], Phase::Ingest),
+        available_command(&["issue"], CommandKind::Command, PR_ARGUMENTS, &[], Phase::Ingest),
+        available_command(&["comments"], CommandKind::Command, COMMENTS_ARGUMENTS, &[], Phase::Ingest),
         available_command(&["bulk"], CommandKind::Namespace, &[], &[], Phase::BulkAndTasks),
         available_command(&["bulk", "submit"], CommandKind::Command, BULK_SUBMIT_ARGUMENTS, BULK_SOURCE_GROUP, Phase::BulkAndTasks),
         available_command(&["bulk", "status"], CommandKind::Command, ID_ARGUMENTS, &[], Phase::BulkAndTasks),

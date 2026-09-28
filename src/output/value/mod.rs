@@ -611,7 +611,7 @@ impl Serialize for CommandEnvelope {
         S: Serializer,
     {
         let mut envelope = serializer.serialize_struct("CommandEnvelope", 4)?;
-        envelope.serialize_field("schema_version", &OutputSchemaVersion::V1)?;
+        envelope.serialize_field("schema_version", &OutputSchemaVersion::V2)?;
         match self {
             Self::Success { data, meta } => {
                 envelope.serialize_field("command", &data.command())?;

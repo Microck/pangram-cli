@@ -138,6 +138,18 @@ submit a bulk request and wait for its terminal result:
 pangram bulk submit items.jsonl --max-billable-units 20 --wait
 ```
 
+### media and github shortcuts
+
+transcribe locally, then detect. `ffmpeg` and `whisper-cli` (whisper.cpp) must be installed; the first run downloads the ggml model only with `--download-model` or an interactive yes:
+
+```bash
+pangram video ./lecture.mp4 --max-billable-units 80 --download-model
+pangram youtube 'https://www.youtube.com/watch?v=...' --max-billable-units 80
+GH_TOKEN=... pangram pr owner/repo#123 --comments --max-billable-units 5
+```
+
+`youtube` uses your own `yt-dlp` install. review comments send only their prose `body`, never diffs.
+
 ### mcp client
 
 preview the exact configuration edit before writing it:
@@ -171,6 +183,12 @@ available today:
 | `pangram detect` | run Pangram 4 AI text detection |
 | `pangram plagiarism` | run plagiarism checking on text |
 | `pangram analyze` | run AI detection and plagiarism together on text |
+| `pangram video` | transcribe a local video with whisper.cpp, then detect |
+| `pangram audio` | transcribe a local audio file with whisper.cpp, then detect |
+| `pangram youtube` | download audio with your installed yt-dlp, transcribe, then detect |
+| `pangram pr` | detect AI writing in a GitHub pull request title, body, and optional comments |
+| `pangram issue` | detect AI writing in a GitHub issue title, body, and optional comments |
+| `pangram comments` | detect AI writing in GitHub issue and review comment bodies |
 | `pangram auth` | configure and inspect API-key authentication |
 | `pangram config` | inspect and update non-secret configuration |
 | `pangram doctor` | run local, non-billable diagnostics |

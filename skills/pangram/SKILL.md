@@ -57,3 +57,7 @@ Pangram task or bulk job. Do not report upstream cancellation.
 
 Do not call or claim `detect_files`. Do not use the experimental MCP Tasks
 extension, invent prompts, or assume history resources exist.
+
+Media transcription and GitHub ingest (`pangram video`, `youtube`, `pr`,
+`issue`, `comments`) are CLI-only. Over MCP, extract the text yourself and call
+`detect_text`.

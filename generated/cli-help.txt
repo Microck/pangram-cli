@@ -9,6 +9,12 @@ Commands:
   detect       Detect AI-generated text through Pangram 4
   plagiarism   Check text for plagiarism against online sources
   analyze      Run AI detection and plagiarism checks on the same text
+  video        Transcribe a local video and run Pangram 4 AI detection
+  audio        Transcribe a local audio file and run Pangram 4 AI detection
+  youtube      Download audio with yt-dlp, transcribe, and run Pangram 4 AI detection
+  pr           Detect AI writing in a GitHub pull request title and body
+  issue        Detect AI writing in a GitHub issue title and body
+  comments     Detect AI writing in GitHub issue and review comment bodies
   bulk         Submit and inspect asynchronous Pangram 4 bulk AI-detection jobs
   task         Inspect or wait for a Pangram 4 text task
   history      Inspect and manage optional local analysis history

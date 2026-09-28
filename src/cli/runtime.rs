@@ -222,6 +222,13 @@ where
             global,
             invocation,
         ),
+        Some(("video" | "audio" | "youtube" | "pr" | "issue" | "comments", sub)) => execute_ingest(
+            matches.subcommand().unwrap().0,
+            sub,
+            &matches,
+            global,
+            invocation,
+        ),
         Some(("bulk", sub)) => execute_bulk_leaf(sub, &matches, global, invocation),
         Some(("task", sub)) => execute_task_leaf(sub, &matches, global, invocation),
         Some(("history", sub)) => finish_detect(history::execute(
@@ -575,6 +582,55 @@ fn execute_detect(
     }
 
     run_detection(source, arguments, matches, global, None, invocation)
+}
+
+/// Runs one source-ingest shortcut: build text locally, then the ordinary
+/// detect path. Ingest failures surface as `detect` failure envelopes.
+fn execute_ingest(
+    name: &str,
+    matches: &ArgMatches,
+    root_matches: &ArgMatches,
+    global: crate::cli::detect::GlobalFlags,
+    invocation: &InvocationContext<'_>,
+) -> RunOutcome {
+    let started = crate::domain::UtcTimestamp::now();
+    let fail = |error| {
+        finish_detect(crate::cli::detect::early_failure(
+            crate::output::ResolvedCommand::Detect,
+            global,
+            invocation.streams,
+            started,
+            error,
+        ))
+    };
+    let arguments = match crate::cli::detect::DetectArgs::from_matches(matches) {
+        Ok(arguments) => arguments,
+        Err(error) => return fail(error),
+    };
+    let interactive = invocation.streams.all_interactive() && std::env::var_os("CI").is_none();
+    let settings = crate::ingest::IngestSettings::default();
+    let ingested = match super::ingest::ingest(name, matches, root_matches, interactive, &settings)
+    {
+        Ok(ingested) => ingested,
+        Err(error) => return fail(error),
+    };
+    if ingested.word_count < 50 {
+        crate::cli::detect::render::warning_stderr_raw(
+            "Pangram 4 targets long-form writing of at least 50 words; this is weaker evidence.",
+        );
+    }
+    if ingested.origin == crate::domain::TextOrigin::Transcript {
+        crate::cli::detect::render::warning_stderr_raw(
+            "speech transcripts are weaker evidence than long-form writing.",
+        );
+    }
+    let source = crate::cli::detect::Source::Prepared(crate::cli::detect::inputs::ResolvedInput {
+        text: ingested.text,
+        origin: ingested.origin,
+        name: Some(ingested.name),
+        word_count: ingested.word_count,
+    });
+    run_detection(source, arguments, root_matches, global, None, invocation)
 }
 
 fn execute_phase7_analysis(

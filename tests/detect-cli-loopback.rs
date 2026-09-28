@@ -172,7 +172,7 @@ async fn detect_literal_text_waits_and_prints_canonical_success() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stderr, b"", "no progress on a non-TTY pipe");
     let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["schema_version"], "1");
+    assert_eq!(envelope["schema_version"], "2");
     assert_eq!(envelope["command"], "detect");
     assert!(envelope.get("error").is_none());
     let data = &envelope["data"];

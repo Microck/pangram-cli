@@ -82,7 +82,7 @@ fn envelope(output: &std::process::Output, context: &str) -> Value {
             String::from_utf8_lossy(&output.stderr)
         )
     });
-    assert_eq!(envelope["schema_version"], "1", "{context}");
+    assert_eq!(envelope["schema_version"], "2", "{context}");
     assert_ne!(
         envelope.get("data").is_some(),
         envelope.get("error").is_some(),
