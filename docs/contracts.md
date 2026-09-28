@@ -2294,7 +2294,8 @@ and a ggml model under `{data-dir}/transcription/models/`. The engine is not
 compiled into `pangram`. `--download-model` streams the selected ggml weights,
 pinned to one upstream revision, into a partial file and installs it only
 after the exact byte size and SHA-256 match. It does not install ffmpeg,
-yt-dlp, or whisper-cli.
+yt-dlp, or whisper-cli. A cached model is re-verified by size and SHA-256
+before each use; a mismatch is `transcription_failed`.
 
 `youtube` requires user-installed `yt-dlp` on PATH, downloads audio only, then
 transcribes. Missing yt-dlp is `missing_dependency` with recovery that names

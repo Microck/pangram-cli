@@ -169,15 +169,12 @@ fn ensure_model(options: &MediaOptions) -> Result<PathBuf, CanonicalError> {
     let models = transcription_root(&options.data_dir).join("models");
     let path = models.join(options.model.file_name());
     if path.is_file() {
-        if fs::metadata(&path)
-            .map(|meta| meta.len() == options.model.size_bytes())
-            .unwrap_or(false)
-        {
+        if cached_model_matches(&path, options.model) {
             return Ok(path);
         }
         return Err(usage_with_recovery(
             ErrorCode::TranscriptionFailed,
-            "the local Whisper model failed size verification.",
+            "the local Whisper model failed SHA-256 verification.",
             "Delete the model file and re-run with --download-model.",
         ));
     }
@@ -190,6 +187,37 @@ fn ensure_model(options: &MediaOptions) -> Result<PathBuf, CanonicalError> {
         "the local Whisper model is not installed.",
         "Re-run with --download-model to fetch the ggml weights.",
     ))
+}
+
+/// Streams a cached model through SHA-256 so a same-size corrupt or replaced
+/// file is never handed to whisper-cli.
+fn cached_model_matches(path: &Path, model: WhisperModel) -> bool {
+    use std::io::Read as _;
+
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    if file
+        .metadata()
+        .map_or(true, |meta| meta.len() != model.size_bytes())
+    {
+        return false;
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1 << 20];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(_) => return false,
+        }
+    }
+    let digest: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    digest == model.sha256()
 }
 
 fn confirm_download(model: WhisperModel) -> Result<bool, CanonicalError> {
