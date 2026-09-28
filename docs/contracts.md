@@ -2291,9 +2291,10 @@ The envelope `command` is `detect`. `origin` is `transcript` or `github`.
 `video` and `audio` decode with `ffmpeg` on PATH to 16 kHz mono PCM, then
 transcribe with `whisper-cli` from `{data-dir}/transcription/bin/` or PATH
 and a ggml model under `{data-dir}/transcription/models/`. The engine is not
-compiled into `pangram`. `--download-model` downloads the selected ggml
-weights after SHA-256 verification. It does not install ffmpeg, yt-dlp, or
-whisper-cli.
+compiled into `pangram`. `--download-model` streams the selected ggml weights,
+pinned to one upstream revision, into a partial file and installs it only
+after the exact byte size and SHA-256 match. It does not install ffmpeg,
+yt-dlp, or whisper-cli.
 
 `youtube` requires user-installed `yt-dlp` on PATH, downloads audio only, then
 transcribes. Missing yt-dlp is `missing_dependency` with recovery that names
@@ -2323,9 +2324,13 @@ Default `pr` and `issue` submit title plus body. `--comments` and `comments`
 also include issue-comment `body` values and pull-request review-comment
 `body` values. The client MUST omit `diff_hunk`, patches, and file diffs.
 
-Assembled text uses labeled Markdown sections. A 404 is `github_not_found`.
-Production GitHub API base is `https://api.github.com`. Alternate bases exist
-only in test constructors.
+Assembled text uses labeled Markdown sections. The item is read from the
+issues endpoint; a `pull_request` marker enables review comments, so
+`OWNER/REPO#N` works for pull requests. Comment lists follow `Link:
+rel="next"` on the same host until exhausted. A 404 is `github_not_found`.
+A 429, or a 403 with `x-ratelimit-remaining: 0` or `retry-after`, is
+`rate_limited`, not `github_authentication`. Production GitHub API base is
+`https://api.github.com`. Alternate bases exist only in test constructors.
 
 TUI and MCP do not add ingest tools in this change.
 

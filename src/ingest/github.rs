@@ -132,6 +132,8 @@ struct IssueOrPull {
     html_url: String,
     title: String,
     body: Option<String>,
+    #[serde(default)]
+    pull_request: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -190,17 +192,12 @@ async fn fetch_async(
                 "could not build the GitHub client.",
             )
         })?;
-    let resource_path = match target.kind {
-        GithubKind::Pull => format!(
-            "/repos/{}/{}/pulls/{}",
-            target.owner, target.repo, target.number
-        ),
-        GithubKind::Issue => format!(
-            "/repos/{}/{}/issues/{}",
-            target.owner, target.repo, target.number
-        ),
-    };
-    let item: IssueOrPull = get_json(&client, settings, token, &resource_path).await?;
+    let repo = format!("/repos/{}/{}", target.owner, target.repo);
+    // The issues endpoint serves both issues and pull requests, and marks the
+    // latter with `pull_request`, so short `OWNER/REPO#N` refs resolve too.
+    let item_url = api_url(settings, &format!("{repo}/issues/{}", target.number))?;
+    let (item, _): (IssueOrPull, _) = get_page(&client, settings, token, item_url).await?;
+    let is_pull = target.kind == GithubKind::Pull || item.pull_request.is_some();
     let mut sections = vec![
         format!("# Title\n{}", item.title.trim()),
         format!(
@@ -209,48 +206,14 @@ async fn fetch_async(
         ),
     ];
     if comments {
-        let issue_comments: Vec<Comment> = get_json(
-            &client,
-            settings,
-            token,
-            &format!(
-                "/repos/{}/{}/issues/{}/comments?per_page=100",
-                target.owner, target.repo, target.number
-            ),
-        )
-        .await?;
-        for comment in issue_comments {
-            let body = comment.body.unwrap_or_default();
-            if body.trim().is_empty() {
-                continue;
-            }
-            sections.push(format!(
-                "# Comment by {}\n{}",
-                comment.user.login,
-                body.trim()
-            ));
+        let path = format!("{repo}/issues/{}/comments?per_page=100", target.number);
+        for comment in get_all(&client, settings, token, &path).await? {
+            push_comment(&mut sections, "Comment", comment);
         }
-        if target.kind == GithubKind::Pull {
-            let review_comments: Vec<Comment> = get_json(
-                &client,
-                settings,
-                token,
-                &format!(
-                    "/repos/{}/{}/pulls/{}/comments?per_page=100",
-                    target.owner, target.repo, target.number
-                ),
-            )
-            .await?;
-            for comment in review_comments {
-                let body = comment.body.unwrap_or_default();
-                if body.trim().is_empty() {
-                    continue;
-                }
-                sections.push(format!(
-                    "# Review comment by {}\n{}",
-                    comment.user.login,
-                    body.trim()
-                ));
+        if is_pull {
+            let path = format!("{repo}/pulls/{}/comments?per_page=100", target.number);
+            for comment in get_all(&client, settings, token, &path).await? {
+                push_comment(&mut sections, "Review comment", comment);
             }
         }
     }
@@ -270,13 +233,19 @@ async fn fetch_async(
     })
 }
 
-async fn get_json<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    settings: &IngestSettings,
-    token: &str,
-    path: &str,
-) -> Result<T, CanonicalError> {
-    let url = settings
+fn push_comment(sections: &mut Vec<String>, label: &str, comment: Comment) {
+    let body = comment.body.unwrap_or_default();
+    if !body.trim().is_empty() {
+        sections.push(format!(
+            "# {label} by {}\n{}",
+            comment.user.login,
+            body.trim()
+        ));
+    }
+}
+
+fn api_url(settings: &IngestSettings, path: &str) -> Result<Url, CanonicalError> {
+    settings
         .github_api
         .join(path.trim_start_matches('/'))
         .map_err(|_| {
@@ -284,7 +253,32 @@ async fn get_json<T: for<'de> Deserialize<'de>>(
                 ErrorCode::UnsupportedInput,
                 "could not build the GitHub request URL.",
             )
-        })?;
+        })
+}
+
+/// Follows `Link: rel="next"` until the list is exhausted.
+async fn get_all(
+    client: &reqwest::Client,
+    settings: &IngestSettings,
+    token: &str,
+    path: &str,
+) -> Result<Vec<Comment>, CanonicalError> {
+    let mut next = Some(api_url(settings, path)?);
+    let mut all = Vec::new();
+    while let Some(url) = next {
+        let (page, following): (Vec<Comment>, _) = get_page(client, settings, token, url).await?;
+        all.extend(page);
+        next = following;
+    }
+    Ok(all)
+}
+
+async fn get_page<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    settings: &IngestSettings,
+    token: &str,
+    url: Url,
+) -> Result<(T, Option<Url>), CanonicalError> {
     let response = client
         .get(url)
         .header("Authorization", format!("Bearer {token}"))
@@ -292,30 +286,73 @@ async fn get_json<T: for<'de> Deserialize<'de>>(
         .send()
         .await
         .map_err(|_| usage(ErrorCode::NetworkUnavailable, "the GitHub request failed."))?;
-    let status = response.status();
-    if status.as_u16() == 401 || status.as_u16() == 403 {
+    let status = response.status().as_u16();
+    let headers = response.headers();
+    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    if status == 429
+        || (status == 403
+            && (header("x-ratelimit-remaining") == Some("0") || header("retry-after").is_some()))
+    {
+        return Err(usage_with_recovery(
+            ErrorCode::RateLimited,
+            "GitHub rate-limited the request.",
+            "Wait for the GitHub rate limit to reset, then retry.",
+        ));
+    }
+    if status == 401 || status == 403 {
         return Err(usage_with_recovery(
             ErrorCode::GithubAuthentication,
             "GitHub rejected the configured token.",
             "Set GH_TOKEN or GITHUB_TOKEN with repo read access.",
         ));
     }
-    if status.as_u16() == 404 {
+    if status == 404 {
         return Err(usage(
             ErrorCode::GithubNotFound,
             "the GitHub pull request or issue was not found.",
         ));
     }
-    if !status.is_success() {
+    if !response.status().is_success() {
         return Err(usage(
             ErrorCode::NetworkUnavailable,
             "the GitHub request failed.",
         ));
     }
-    response.json().await.map_err(|_| {
+    let next = header("link")
+        .and_then(next_link)
+        .filter(|url| url.host_str() == settings.github_api.host_str());
+    let body = response.json().await.map_err(|_| {
         usage(
             ErrorCode::UnsupportedInput,
             "GitHub returned an unexpected response.",
         )
+    })?;
+    Ok((body, next))
+}
+
+/// Extracts the `rel="next"` target from an RFC 8288 `Link` header.
+fn next_link(link: &str) -> Option<Url> {
+    link.split(',').find_map(|part| {
+        let (target, params) = part.split_once(';')?;
+        params
+            .split(';')
+            .any(|param| param.trim() == r#"rel="next""#)
+            .then(|| Url::parse(target.trim().trim_start_matches('<').trim_end_matches('>')).ok())
+            .flatten()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_link;
+
+    #[test]
+    fn next_link_selects_only_the_next_relation() {
+        let header = r#"<https://api.github.com/x?page=1>; rel="prev", <https://api.github.com/x?page=3>; rel="next""#;
+        assert_eq!(
+            next_link(header).unwrap().as_str(),
+            "https://api.github.com/x?page=3"
+        );
+        assert!(next_link(r#"<https://api.github.com/x?page=1>; rel="last""#).is_none());
+    }
 }

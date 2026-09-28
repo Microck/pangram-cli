@@ -236,7 +236,15 @@ fn download_model(model: WhisperModel, models: &Path) -> Result<(), CanonicalErr
     runtime.block_on(download_model_async(model, models))
 }
 
+/// Streams the pinned weights into a `.part` file while hashing, then renames
+/// into place only after the exact size and SHA-256 match.
 async fn download_model_async(model: WhisperModel, models: &Path) -> Result<(), CanonicalError> {
+    let failed = || {
+        usage(
+            ErrorCode::NetworkUnavailable,
+            "the Whisper model download failed.",
+        )
+    };
     let client = reqwest::Client::builder()
         .use_rustls_tls()
         .build()
@@ -246,49 +254,62 @@ async fn download_model_async(model: WhisperModel, models: &Path) -> Result<(), 
                 "could not build the download client.",
             )
         })?;
-    let response = client
+    let mut response = client
         .get(model.url())
         .send()
         .await
         .and_then(|response| response.error_for_status())
-        .map_err(|_| {
-            usage(
-                ErrorCode::NetworkUnavailable,
-                "the Whisper model download failed.",
-            )
-        })?;
-    let bytes = response.bytes().await.map_err(|_| {
-        usage(
-            ErrorCode::NetworkUnavailable,
-            "the Whisper model download failed.",
-        )
-    })?;
-    if bytes.len() as u64 != model.size_bytes() || hex_sha256(&bytes) != model.sha256() {
-        return Err(usage(
-            ErrorCode::TranscriptionFailed,
-            "the downloaded Whisper model failed SHA-256 verification.",
-        ));
+        .map_err(|_| failed())?;
+    if response
+        .content_length()
+        .is_some_and(|length| length != model.size_bytes())
+    {
+        return Err(verification_failed());
     }
     let dest = models.join(model.file_name());
     let tmp = dest.with_extension("bin.part");
-    fs::write(&tmp, &bytes).map_err(|_| {
-        usage(
-            ErrorCode::InvalidConfig,
-            "could not write the Whisper model.",
-        )
-    })?;
-    fs::rename(&tmp, &dest).map_err(|_| {
-        usage(
-            ErrorCode::InvalidConfig,
-            "could not install the Whisper model.",
-        )
-    })?;
-    Ok(())
+    let result = async {
+        let mut file = fs::File::create(&tmp).map_err(|_| write_failed())?;
+        let mut hasher = Sha256::new();
+        let mut written = 0_u64;
+        while let Some(chunk) = response.chunk().await.map_err(|_| failed())? {
+            written += chunk.len() as u64;
+            if written > model.size_bytes() {
+                return Err(verification_failed());
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).map_err(|_| write_failed())?;
+        }
+        file.sync_all().map_err(|_| write_failed())?;
+        let digest: String = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if written != model.size_bytes() || digest != model.sha256() {
+            return Err(verification_failed());
+        }
+        fs::rename(&tmp, &dest).map_err(|_| write_failed())
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
-fn hex_sha256(bytes: &[u8]) -> String {
-    let hash = Sha256::digest(bytes);
-    hash.iter().map(|byte| format!("{byte:02x}")).collect()
+fn verification_failed() -> CanonicalError {
+    usage(
+        ErrorCode::TranscriptionFailed,
+        "the downloaded Whisper model failed SHA-256 verification.",
+    )
+}
+
+fn write_failed() -> CanonicalError {
+    usage(
+        ErrorCode::InvalidConfig,
+        "could not write the Whisper model.",
+    )
 }
 
 fn decode_wav(ffmpeg: &Path, input: &Path, output: &Path) -> Result<(), CanonicalError> {

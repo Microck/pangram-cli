@@ -6,7 +6,7 @@ use crate::mcp_stdio::{McpProcess, result};
 
 const RESOURCES: &[(&str, &str, &str)] = &[
     (
-        "pangram://schema/output/v1",
+        "pangram://schema/output/v2",
         "contracts/output.schema.json",
         "application/schema+json",
     ),

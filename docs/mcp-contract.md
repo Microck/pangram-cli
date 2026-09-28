@@ -211,7 +211,7 @@ Static resources return the exact embedded build-time bytes and MIME types:
 
 | URI | Embedded owner | MIME type |
 | --- | --- | --- |
-| `pangram://schema/output/v1` | `contracts/output.schema.json` | `application/schema+json` |
+| `pangram://schema/output/v2` | `contracts/output.schema.json` | `application/schema+json` |
 | `pangram://schema/errors/v1` | `generated/error-reference.json` | `application/json` |
 | `pangram://skills/pangram` | `skills/pangram/SKILL.md` | `text/markdown` |
 

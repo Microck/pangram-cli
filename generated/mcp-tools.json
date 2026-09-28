@@ -41,9 +41,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -1884,9 +1884,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -3731,9 +3731,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -5589,9 +5589,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -7440,9 +7440,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -9316,9 +9316,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -10261,9 +10261,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -11143,9 +11143,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -12033,9 +12033,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -14016,9 +14016,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -14694,9 +14694,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -15447,9 +15447,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -16183,9 +16183,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -18007,9 +18007,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -19826,9 +19826,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -20452,9 +20452,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -21097,9 +21097,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"

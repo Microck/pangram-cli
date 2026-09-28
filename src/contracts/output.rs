@@ -129,9 +129,9 @@ pub(super) fn output_schema() -> Value {
 
     json!({
         "$schema": DRAFT_2020_12,
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": CONTRACT_OWNER,
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
             {"$ref": "#/$defs/successEnvelope"},
             {"$ref": "#/$defs/errorEnvelope"}

@@ -16,7 +16,7 @@ fn embedded_resources_are_the_contracted_build_time_bytes() {
     assert_eq!(
         actual,
         [
-            ("pangram://schema/output/v1", "application/schema+json"),
+            ("pangram://schema/output/v2", "application/schema+json"),
             ("pangram://schema/errors/v1", "application/json"),
             ("pangram://skills/pangram", "text/markdown"),
         ]

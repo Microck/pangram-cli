@@ -51,7 +51,7 @@ Pangram task or bulk job. Do not report upstream cancellation.
 
 ## Load exact references
 
-- Read `pangram://schema/output/v1` for the canonical result envelope.
+- Read `pangram://schema/output/v2` for the canonical result envelope.
 - Read `pangram://schema/errors/v1` for error and exit semantics.
 - Read `pangram://skills/pangram` when the full embedded skill is needed.
 
