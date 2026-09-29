@@ -243,7 +243,7 @@ fn envelope_deserialization_rejects_invalid_shapes_and_command_data_pairs() {
         "retryable": false
     });
     let success = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": "auth_set",
         "data": {"ok": true},
         "meta": {}
@@ -251,7 +251,7 @@ fn envelope_deserialization_rejects_invalid_shapes_and_command_data_pairs() {
     assert!(serde_json::from_value::<CommandEnvelope>(success).is_ok());
 
     let both = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": "auth_set",
         "data": {"ok": true},
         "error": error,
@@ -260,14 +260,14 @@ fn envelope_deserialization_rejects_invalid_shapes_and_command_data_pairs() {
     assert!(serde_json::from_value::<CommandEnvelope>(both).is_err());
 
     let neither = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": "auth_set",
         "meta": {}
     });
     assert!(serde_json::from_value::<CommandEnvelope>(neither).is_err());
 
     let non_envelope = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": "history_export",
         "data": {},
         "meta": {}
@@ -275,7 +275,7 @@ fn envelope_deserialization_rejects_invalid_shapes_and_command_data_pairs() {
     assert!(serde_json::from_value::<CommandEnvelope>(non_envelope).is_err());
 
     let mismatched = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": "auth_status",
         "data": {"ok": true},
         "meta": {}
@@ -401,7 +401,7 @@ fn mcp_mutation_report_preserves_exact_order_and_closed_json_shape() {
         ))
         .unwrap(),
         json!({
-            "schema_version": "1",
+            "schema_version": "2",
             "command": "mcp_install",
             "data": {
                 "dry_run": true,

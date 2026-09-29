@@ -8,6 +8,12 @@ Generated from Pangram CLI 1.1.0 and schema major 1.
 | `pangram detect` | command | available | TEXT, --file PATH, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram plagiarism` | command | available | TEXT, --file PATH, --format FORMAT, --include-input, --save, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram analyze` | command | available | TEXT, --file PATH, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram video` | command | available | PATH, --model MODEL, --download-model, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram audio` | command | available | PATH, --model MODEL, --download-model, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram youtube` | command | available | URL, --model MODEL, --download-model, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram pr` | command | available | REF, --comments, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram issue` | command | available | REF, --comments, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram comments` | command | available | REF, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram bulk` | namespace | available | none |
 | `pangram bulk submit` | command | available | JSONL_PATH, --max-billable-units N, --dry-run, --wait, --format FORMAT, --progress MODE |
 | `pangram bulk status` | command | available | ID |

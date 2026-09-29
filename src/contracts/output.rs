@@ -101,7 +101,7 @@ pub(super) fn output_schema() -> Value {
             "type": "object",
             "required": ["schema_version", "command", "data", "meta"],
             "properties": {
-                "schema_version": {"const": OutputSchemaVersion::V1},
+                "schema_version": {"const": OutputSchemaVersion::V2},
                 "command": {"enum": json_commands},
                 "data": {"oneOf": [{"type": "object"}, {"type": "array"}]},
                 "meta": schema_ref::<EnvelopeMeta>(),
@@ -117,7 +117,7 @@ pub(super) fn output_schema() -> Value {
             "type": "object",
             "required": ["schema_version", "command", "error", "meta"],
             "properties": {
-                "schema_version": {"const": OutputSchemaVersion::V1},
+                "schema_version": {"const": OutputSchemaVersion::V2},
                 "command": {"enum": all_commands},
                 "error": schema_ref::<CanonicalError>(),
                 "meta": schema_ref::<EnvelopeMeta>(),
@@ -129,9 +129,9 @@ pub(super) fn output_schema() -> Value {
 
     json!({
         "$schema": DRAFT_2020_12,
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": CONTRACT_OWNER,
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
             {"$ref": "#/$defs/successEnvelope"},
             {"$ref": "#/$defs/errorEnvelope"}

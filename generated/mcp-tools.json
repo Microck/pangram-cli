@@ -41,9 +41,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -519,7 +519,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -903,7 +905,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -1044,7 +1047,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -1104,7 +1111,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -1192,7 +1204,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -1767,7 +1784,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "detect"
@@ -1807,7 +1824,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "detect"
@@ -1867,9 +1884,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -2345,7 +2362,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -2729,7 +2748,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -2870,7 +2890,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -2930,7 +2954,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -3018,7 +3047,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -3593,7 +3627,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "plagiarism"
@@ -3633,7 +3667,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "plagiarism"
@@ -3697,9 +3731,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -4175,7 +4209,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -4559,7 +4595,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -4700,7 +4737,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -4760,7 +4801,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -4848,7 +4894,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -5423,7 +5474,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "analyze"
@@ -5463,7 +5514,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "analyze"
@@ -5538,9 +5589,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -6016,7 +6067,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -6400,7 +6453,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -6541,7 +6595,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -6601,7 +6659,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -6689,7 +6752,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -7264,7 +7332,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "task_status"
@@ -7293,7 +7361,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "task_status"
@@ -7372,9 +7440,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -7850,7 +7918,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -8234,7 +8304,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -8375,7 +8446,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -8435,7 +8510,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -8523,7 +8603,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -9098,7 +9183,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "task_wait"
@@ -9127,7 +9212,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "task_wait"
@@ -9231,9 +9316,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -9333,7 +9418,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -9474,7 +9560,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -9534,7 +9624,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -9622,7 +9717,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -10050,7 +10150,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_submit"
@@ -10086,7 +10186,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_submit"
@@ -10161,9 +10261,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -10263,7 +10363,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -10404,7 +10505,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -10464,7 +10569,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -10552,7 +10662,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -10920,7 +11035,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_status"
@@ -10949,7 +11064,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_status"
@@ -11028,9 +11143,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -11130,7 +11245,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -11271,7 +11387,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -11331,7 +11451,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -11419,7 +11544,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -11787,7 +11917,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_wait"
@@ -11816,7 +11946,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_wait"
@@ -11903,9 +12033,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -12381,7 +12511,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -12765,7 +12897,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -12906,7 +13039,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -12966,7 +13103,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -13054,7 +13196,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -13800,7 +13947,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_results"
@@ -13829,7 +13976,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "bulk_results"
@@ -13869,9 +14016,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -13952,7 +14099,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -14093,7 +14241,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -14153,7 +14305,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -14241,7 +14398,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -14437,7 +14599,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "update_check"
@@ -14466,7 +14628,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "update_check"
@@ -14532,9 +14694,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -14625,7 +14787,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -14766,7 +14929,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -14826,7 +14993,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -14914,7 +15086,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -15173,7 +15350,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_list"
@@ -15202,7 +15379,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_list"
@@ -15270,9 +15447,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -15363,7 +15540,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -15504,7 +15682,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -15564,7 +15746,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -15652,7 +15839,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -15911,7 +16103,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_search"
@@ -15940,7 +16132,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_search"
@@ -15991,9 +16183,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -16469,7 +16661,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -16853,7 +17047,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -16994,7 +17189,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -17054,7 +17253,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -17142,7 +17346,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -17717,7 +17926,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_show"
@@ -17746,7 +17955,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_show"
@@ -17798,9 +18007,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -18276,7 +18485,9 @@
                 "enum": [
                   "literal",
                   "stdin",
-                  "file"
+                  "file",
+                  "transcript",
+                  "github"
                 ]
               },
               {
@@ -18660,7 +18871,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -18801,7 +19013,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -18861,7 +19077,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -18949,7 +19170,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -19524,7 +19750,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_rerun"
@@ -19553,7 +19779,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_rerun"
@@ -19600,9 +19826,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -19683,7 +19909,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -19824,7 +20051,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -19884,7 +20115,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -19972,7 +20208,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -20142,7 +20383,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_delete"
@@ -20171,7 +20412,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_delete"
@@ -20211,9 +20452,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -20294,7 +20535,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -20435,7 +20677,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -20495,7 +20741,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -20583,7 +20834,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -20753,7 +21009,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_clear"
@@ -20782,7 +21038,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "history_clear"
@@ -20841,9 +21097,9 @@
       },
       "outputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+        "$id": "https://pangram.micr.dev/schemas/output-v2.json",
         "x-contract-owner": "rust:microck_pangram_cli::contracts",
-        "title": "Pangram CLI output envelope v1",
+        "title": "Pangram CLI output envelope v2",
         "oneOf": [
           {
             "$ref": "#/$defs/successEnvelope"
@@ -20924,7 +21180,8 @@
                       "code": {
                         "enum": [
                           "missing_api_key",
-                          "invalid_api_key"
+                          "invalid_api_key",
+                          "github_authentication"
                         ]
                       },
                       "category": {
@@ -21065,7 +21322,11 @@
                           "input_conflict",
                           "unsupported_input",
                           "unsupported_combination",
-                          "bulk_limit_exceeded"
+                          "bulk_limit_exceeded",
+                          "missing_dependency",
+                          "model_download_required",
+                          "transcription_failed",
+                          "github_not_found"
                         ]
                       },
                       "category": {
@@ -21125,7 +21386,12 @@
                             "mcp_path_outside_root",
                             "update_unavailable",
                             "update_not_owned",
-                            "update_verification_failed"
+                            "update_verification_failed",
+                            "missing_dependency",
+                            "model_download_required",
+                            "transcription_failed",
+                            "github_authentication",
+                            "github_not_found"
                           ]
                         }
                       }
@@ -21213,7 +21479,12 @@
               "update_unavailable",
               "update_not_owned",
               "update_verification_failed",
-              "update_replace_failed"
+              "update_replace_failed",
+              "missing_dependency",
+              "model_download_required",
+              "transcription_failed",
+              "github_authentication",
+              "github_not_found"
             ]
           },
           "ErrorCategory": {
@@ -21383,7 +21654,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "config_set"
@@ -21412,7 +21683,7 @@
             ],
             "properties": {
               "schema_version": {
-                "const": "1"
+                "const": "2"
               },
               "command": {
                 "const": "config_set"

@@ -32,6 +32,8 @@ pub enum TextOrigin {
     Literal,
     Stdin,
     File,
+    Transcript,
+    Github,
     /// The input of a remotely authored operation the client observes by
     /// explicit upstream ID (contracts.md 4.6). Valid only on resumed
     /// reads; never produced by a locally submitted command.
@@ -59,7 +61,11 @@ impl TextInput {
         word_count: u64,
         text: Option<String>,
     ) -> Result<Self, DomainError> {
-        if matches!(origin, TextOrigin::File) != name.is_some() {
+        if matches!(
+            origin,
+            TextOrigin::File | TextOrigin::Transcript | TextOrigin::Github
+        ) != name.is_some()
+        {
             return Err(DomainError::OutOfRange("text input name"));
         }
         Ok(Self {

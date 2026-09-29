@@ -89,7 +89,7 @@ fn bulk_collection() -> Value {
 
 fn success(command: &str, data: Value) -> Value {
     json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": command,
         "data": data,
         "meta": {"started_at": "2026-07-23T12:00:00Z"}
@@ -340,7 +340,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
     success_with_malformed_error["error"] = json!({"malformed": true});
 
     let error_with_malformed_data = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "command": "detect",
         "data": false,
         "error": canonical_error("missing_api_key", "authentication", false),
@@ -756,7 +756,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "error code owns its category",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": canonical_error("missing_api_key", "authentication", false),
                     "meta": {"failed_at": "2026-07-23T12:00:00Z"}
@@ -766,7 +766,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "mismatched error category",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": canonical_error("missing_api_key", "network", false),
                     "meta": {"failed_at": "2026-07-23T12:00:00Z"}
@@ -776,7 +776,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "fixed retryability cannot be overridden",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": canonical_error("rate_limited", "rate_limit", false),
                     "meta": {"failed_at": "2026-07-23T12:00:00Z"}
@@ -786,7 +786,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "error messages are nonempty",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "missing_api_key",
@@ -801,7 +801,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "unknown submission details identify one local operation",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "submission_outcome_unknown",
@@ -822,7 +822,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "unknown submission details reject unknown fields",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "submission_outcome_unknown",
@@ -843,7 +843,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "unknown submissions require recovery guidance",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "submission_outcome_unknown",
@@ -863,7 +863,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "unknown submission recovery uses the canonical message",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "submission_outcome_unknown",
@@ -884,7 +884,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "unknown submission recovery cannot contain commands",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "submission_outcome_unknown",
@@ -908,7 +908,7 @@ fn output_schema_preserves_envelope_and_domain_invariants() {
             Case {
                 name: "unknown submission recovery accepts the canonical object",
                 instance: json!({
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "command": "detect",
                     "error": {
                         "code": "submission_outcome_unknown",

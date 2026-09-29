@@ -688,17 +688,19 @@ fn cargo_metadata_reports_the_exact_runtime_dependencies() {
     );
 }
 
-/// HTTP client construction is allowed only inside the deep analysis and
-/// updater modules. Adapters never own either protocol.
+/// HTTP client construction is allowed only inside the deep analysis,
+/// updater, and ingest modules. Adapters never own any protocol.
 #[test]
 fn http_client_paths_live_in_deep_protocol_modules_only() {
     let mut violations = Vec::new();
 
     for path in rust_source_paths() {
-        if path
-            .components()
-            .any(|component| matches!(component.as_os_str().to_str(), Some("analysis" | "update")))
-        {
+        if path.components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("analysis" | "update" | "ingest")
+            )
+        }) {
             continue;
         }
         let source = fs::read_to_string(&path).unwrap();

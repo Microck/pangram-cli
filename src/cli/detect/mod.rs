@@ -23,7 +23,7 @@
 
 pub(crate) mod client;
 pub(crate) mod inputs;
-mod render;
+pub(crate) mod render;
 pub(crate) mod save;
 
 pub(crate) use crate::analysis::config_error;
@@ -83,6 +83,7 @@ pub(crate) enum Source {
     Literal(String),
     Stdin,
     Files(Vec<String>),
+    Prepared(inputs::ResolvedInput),
 }
 
 /// The detection-relevant flags resolved from one `detect` subcommand match.

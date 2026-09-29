@@ -81,7 +81,7 @@ fn json_success_envelope_is_canonical_parseable_and_single_line() {
     );
 
     let decoded: serde_json::Value = serde_json::from_str(rendered.trim_end()).unwrap();
-    assert_eq!(decoded["schema_version"], "1");
+    assert_eq!(decoded["schema_version"], "2");
     assert_eq!(decoded["command"], "detect");
     assert!(decoded.get("error").is_none());
     let roundtrip: CommandEnvelope = serde_json::from_str(rendered.trim_end()).unwrap();
@@ -379,7 +379,7 @@ fn adversarial_payload_cannot_inject_structure_or_terminal_controls_into_any_pro
 
     // TOON carries the canonical value and decodes back to it unchanged.
     let decoded: serde_json::Value = toon_format::decode_default(&toon).unwrap();
-    assert_eq!(decoded["schema_version"], "1");
+    assert_eq!(decoded["schema_version"], "2");
 
     // Markdown must escape structural characters the payload tried to forge.
     let forged_heading = markdown

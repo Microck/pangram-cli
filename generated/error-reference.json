@@ -202,6 +202,36 @@
       "category": "update",
       "default_retryable": false,
       "contextual_retryability": true
+    },
+    {
+      "code": "missing_dependency",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "model_download_required",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "transcription_failed",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "github_authentication",
+      "category": "authentication",
+      "default_retryable": false,
+      "contextual_retryability": false
+    },
+    {
+      "code": "github_not_found",
+      "category": "usage",
+      "default_retryable": false,
+      "contextual_retryability": false
     }
   ],
   "exit_codes": [

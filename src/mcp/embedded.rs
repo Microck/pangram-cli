@@ -54,7 +54,7 @@ pub(crate) const PANGRAM_SKILL_PATH: &[u8] = b"embedded://skills/pangram/SKILL.m
 /// Ordered public resource inventory for one server lifetime.
 pub static MCP_RESOURCES: &[EmbeddedResource] = &[
     EmbeddedResource {
-        uri: "pangram://schema/output/v1",
+        uri: "pangram://schema/output/v2",
         mime_type: OUTPUT_SCHEMA.mime_type,
         bytes: OUTPUT_SCHEMA.bytes,
     },

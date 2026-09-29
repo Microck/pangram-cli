@@ -257,6 +257,33 @@ History reads, history mutations, configuration mutations, public links, and
 file roots use separate startup gates. Approved roots are opened before the
 server reads stdin and reject symlink or reparse-point traversal.
 
+# Check media and GitHub text
+
+Source: https://pangram.micr.dev/docs/how-to/media-and-github
+
+Install `ffmpeg` and `whisper-cli` (whisper.cpp). The first media run needs
+`--download-model`, or an interactive yes, to fetch the pinned ggml weights.
+
+```bash
+pangram video ./lecture.mp4 --max-billable-units 80 --download-model
+pangram audio ./interview.wav --model large-v3-turbo-q5_0 --max-billable-units 40
+pangram youtube 'https://www.youtube.com/watch?v=...' --max-billable-units 80
+```
+
+`youtube` runs your own `yt-dlp`. Pangram CLI does not install it, and using
+it is your YouTube-access decision.
+
+GitHub shortcuts read `GH_TOKEN` or `GITHUB_TOKEN`:
+
+```bash
+pangram pr owner/repo#123 --max-billable-units 5
+pangram issue https://github.com/owner/repo/issues/9 --comments --max-billable-units 10
+pangram comments owner/repo#123 --max-billable-units 10
+```
+
+Review comments send only their `body`, never the diff hunk. Output uses
+`origin: transcript` or `origin: github`.
+
 # Use JSON, JSONL, TOON, and Markdown
 
 Source: https://pangram.micr.dev/docs/how-to/output-formats
@@ -340,6 +367,12 @@ Generated from Pangram CLI 1.1.0 and schema major 1.
 | `pangram detect` | command | available | TEXT, --file PATH, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram plagiarism` | command | available | TEXT, --file PATH, --format FORMAT, --include-input, --save, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram analyze` | command | available | TEXT, --file PATH, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram video` | command | available | PATH, --model MODEL, --download-model, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram audio` | command | available | PATH, --model MODEL, --download-model, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram youtube` | command | available | URL, --model MODEL, --download-model, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram pr` | command | available | REF, --comments, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram issue` | command | available | REF, --comments, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
+| `pangram comments` | command | available | REF, --detach, --format FORMAT, --include-input, --save, --public-link, --timeout DURATION, --progress MODE, --max-billable-units N |
 | `pangram bulk` | namespace | available | none |
 | `pangram bulk submit` | command | available | JSONL_PATH, --max-billable-units N, --dry-run, --wait, --format FORMAT, --progress MODE |
 | `pangram bulk status` | command | available | ID |
@@ -449,6 +482,11 @@ Generated from Pangram CLI 1.1.0 and schema major 1.
 | `update_not_owned` | update | no | no |
 | `update_verification_failed` | update | no | no |
 | `update_replace_failed` | update | no | yes |
+| `missing_dependency` | usage | no | no |
+| `model_download_required` | usage | no | no |
+| `transcription_failed` | usage | no | no |
+| `github_authentication` | authentication | no | no |
+| `github_not_found` | usage | no | no |
 
 # Exit codes
 

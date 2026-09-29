@@ -93,10 +93,10 @@ AI detection is first in presentation and ordering.
 
 An input is either:
 
-- `TextInput`: UTF-8 text provided literally, through stdin, or from a text file
+- `TextInput`: UTF-8 text from argv (`literal`), stdin, a UTF-8 text file,
+  local speech-to-text (`transcript`), or GitHub REST prose (`github`)
 - `FileInput`: a PDF, DOCX, or RTF document sent to Pangram's file endpoint
 
-Multiple files produce independent analyses.
 
 ### Segment
 
@@ -258,6 +258,8 @@ Product-level rules:
 - `detect` runs AI detection only.
 - `plagiarism` runs plagiarism only.
 - `analyze` always runs both checks.
+- `video`, `audio`, and `youtube` transcribe media to text, then run `detect`.
+- `pr`, `issue`, and `comments` fetch GitHub prose, then run `detect`.
 - `bulk` submits and inspects asynchronous AI-detection collections.
 - JSON is the default noninteractive representation. Repeated files default to
   JSONL unless the caller selects a format.

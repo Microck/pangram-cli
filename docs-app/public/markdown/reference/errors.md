@@ -37,3 +37,8 @@ Generated from Pangram CLI 1.1.0 and schema major 1.
 | `update_not_owned` | update | no | no |
 | `update_verification_failed` | update | no | no |
 | `update_replace_failed` | update | no | yes |
+| `missing_dependency` | usage | no | no |
+| `model_download_required` | usage | no | no |
+| `transcription_failed` | usage | no | no |
+| `github_authentication` | authentication | no | no |
+| `github_not_found` | usage | no | no |

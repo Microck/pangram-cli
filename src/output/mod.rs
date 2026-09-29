@@ -122,8 +122,8 @@ macro_rules! wire_enum {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum OutputSchemaVersion {
     #[default]
-    #[serde(rename = "1")]
-    V1,
+    #[serde(rename = "2")]
+    V2,
 }
 
 wire_enum! {
@@ -179,6 +179,11 @@ wire_enum! {
         UpdateNotOwned => "update_not_owned",
         UpdateVerificationFailed => "update_verification_failed",
         UpdateReplaceFailed => "update_replace_failed",
+        MissingDependency => "missing_dependency",
+        ModelDownloadRequired => "model_download_required",
+        TranscriptionFailed => "transcription_failed",
+        GithubAuthentication => "github_authentication",
+        GithubNotFound => "github_not_found",
     }
 }
 
@@ -189,8 +194,14 @@ impl ErrorCode {
             | Self::InputConflict
             | Self::UnsupportedInput
             | Self::UnsupportedCombination
-            | Self::BulkLimitExceeded => ErrorCategory::Usage,
-            Self::MissingApiKey | Self::InvalidApiKey => ErrorCategory::Authentication,
+            | Self::BulkLimitExceeded
+            | Self::MissingDependency
+            | Self::ModelDownloadRequired
+            | Self::TranscriptionFailed
+            | Self::GithubNotFound => ErrorCategory::Usage,
+            Self::MissingApiKey | Self::InvalidApiKey | Self::GithubAuthentication => {
+                ErrorCategory::Authentication
+            }
             Self::PermissionDenied
             | Self::McpCapabilityRequired
             | Self::McpRootRequired
@@ -693,7 +704,7 @@ impl ProgressEvent {
         observed_at: UtcTimestamp,
     ) -> Self {
         Self::Analysis(AnalysisProgressEvent {
-            schema_version: OutputSchemaVersion::V1,
+            schema_version: OutputSchemaVersion::V2,
             event_type: ProgressEventType::Progress,
             analysis_id,
             check,
@@ -705,7 +716,7 @@ impl ProgressEvent {
 
     pub fn bulk(bulk_id: BulkId, status: AnalysisStatus, observed_at: UtcTimestamp) -> Self {
         Self::Bulk(BulkProgressEvent {
-            schema_version: OutputSchemaVersion::V1,
+            schema_version: OutputSchemaVersion::V2,
             event_type: ProgressEventType::Progress,
             bulk_id,
             status,

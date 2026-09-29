@@ -41,10 +41,8 @@ pub(crate) fn resolve_inputs(
             Ok(inputs)
         }
         super::Source::Literal(text) => Ok(vec![literal(text)?]),
-        // Explicit `-` or an implicit piped stdin: detects only when it
-        // carries content; a TTY stdin or empty pipe is the canonical
-        // input_required.
         super::Source::Stdin => resolve_stdin_source(streams, stdin_text),
+        super::Source::Prepared(input) => Ok(vec![input]),
     }
 }
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pangram.micr.dev/schemas/output-v1.json",
+  "$id": "https://pangram.micr.dev/schemas/output-v2.json",
   "x-contract-owner": "rust:microck_pangram_cli::contracts",
-  "title": "Pangram CLI output envelope v1",
+  "title": "Pangram CLI output envelope v2",
   "oneOf": [
     {
       "$ref": "#/$defs/successEnvelope"
@@ -478,7 +478,9 @@
           "enum": [
             "literal",
             "stdin",
-            "file"
+            "file",
+            "transcript",
+            "github"
           ]
         },
         {
@@ -862,7 +864,8 @@
                 "code": {
                   "enum": [
                     "missing_api_key",
-                    "invalid_api_key"
+                    "invalid_api_key",
+                    "github_authentication"
                   ]
                 },
                 "category": {
@@ -1003,7 +1006,11 @@
                     "input_conflict",
                     "unsupported_input",
                     "unsupported_combination",
-                    "bulk_limit_exceeded"
+                    "bulk_limit_exceeded",
+                    "missing_dependency",
+                    "model_download_required",
+                    "transcription_failed",
+                    "github_not_found"
                   ]
                 },
                 "category": {
@@ -1063,7 +1070,12 @@
                       "mcp_path_outside_root",
                       "update_unavailable",
                       "update_not_owned",
-                      "update_verification_failed"
+                      "update_verification_failed",
+                      "missing_dependency",
+                      "model_download_required",
+                      "transcription_failed",
+                      "github_authentication",
+                      "github_not_found"
                     ]
                   }
                 }
@@ -1151,7 +1163,12 @@
         "update_unavailable",
         "update_not_owned",
         "update_verification_failed",
-        "update_replace_failed"
+        "update_replace_failed",
+        "missing_dependency",
+        "model_download_required",
+        "transcription_failed",
+        "github_authentication",
+        "github_not_found"
       ]
     },
     "ErrorCategory": {
@@ -2533,7 +2550,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "1"
+          "const": "2"
         },
         "command": {
           "enum": [
@@ -2930,7 +2947,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "1"
+          "const": "2"
         },
         "command": {
           "enum": [

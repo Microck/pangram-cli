@@ -54,7 +54,7 @@ async fn bulk_submit_dry_run_emits_typed_json_without_key_or_network() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stderr, b"", "a dry run is silent on stderr");
     let envelope = stdout_envelope(&output);
-    assert_eq!(envelope["schema_version"], "1");
+    assert_eq!(envelope["schema_version"], "2");
     assert_eq!(envelope["command"], "bulk_submit");
     assert!(envelope.get("error").is_none());
     let data = &envelope["data"];
