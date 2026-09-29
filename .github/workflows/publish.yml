@@ -33,19 +33,35 @@ jobs:
       - name: Re-resolve platform packages published by an earlier attempt
         # The version commit records unpublished platform packages as
         # versionless placeholders. After any of them publish, npm ci rejects
-        # the placeholders, so a retry re-resolves the lock before installing.
+        # those placeholders, so a retry re-resolves only the published ones
+        # and keeps the rest (newer npm drops unresolvable entries entirely).
         run: |
           node -e '
             const fs = require("fs");
-            const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
-            for (const [key, value] of Object.entries(lock.packages)) {
-              if (/node_modules\/@microck\/pangram-cli-/.test(key) && !value.version) {
-                delete lock.packages[key];
-              }
-            }
+            const { execFileSync } = require("child_process");
+            const original = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+            const wanted = require("./npm/pangram-cli/package.json").optionalDependencies;
+            const published = (name) => {
+              try {
+                return execFileSync("npm", ["view", `${name}@${wanted[name]}`, "version"], {
+                  encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+                }).trim() === wanted[name];
+              } catch { return false; }
+            };
+            const placeholders = Object.entries(original.packages).filter(([key, value]) =>
+              /node_modules\/@microck\/pangram-cli-[^/]+$/.test(key) && !value.version);
+            const stale = placeholders.filter(([key]) => published(key.split("node_modules/").pop()));
+            if (stale.length === 0) { console.log("no published placeholders"); process.exit(0); }
+            const lock = structuredClone(original);
+            for (const [key] of stale) delete lock.packages[key];
             fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2) + "\n");
+            execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { stdio: "inherit" });
+            const resolved = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+            const keep = placeholders.filter((entry) => !stale.includes(entry));
+            for (const [key, value] of keep) resolved.packages[key] ??= value;
+            fs.writeFileSync("package-lock.json", JSON.stringify(resolved, null, 2) + "\n");
+            console.log(`re-resolved ${stale.length}, kept ${keep.length} unpublished placeholders`);
           '
-          npm install --package-lock-only --ignore-scripts
       - name: Install exact development dependencies
         run: npm ci --ignore-scripts --workspaces=false
       - name: Require the exact public release and authorization
