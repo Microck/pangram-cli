@@ -32,9 +32,15 @@ function platformPackagesPlugin(): TegamiPlugin {
       for (const { directory } of releasePlatforms) {
         const path = `npm/${directory}`;
         const manifest = JSON.parse(await readFile(`${path}/package.json`, "utf8"));
+        // `npm view` can exit 0 with empty output for a version that does
+        // not exist, so only an exact version echo counts as published.
         try {
-          await run("npm", ["view", `${manifest.name}@${manifest.version}`, "version"]);
-          continue;
+          const { stdout } = await run("npm", [
+            "view",
+            `${manifest.name}@${manifest.version}`,
+            "version",
+          ]);
+          if (stdout.trim() === manifest.version) continue;
         } catch (error) {
           const stderr =
             error && typeof error === "object" && "stderr" in error

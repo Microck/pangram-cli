@@ -30,6 +30,22 @@ jobs:
           node-version: "24"
           cache: npm
           registry-url: https://registry.npmjs.org
+      - name: Re-resolve platform packages published by an earlier attempt
+        # The version commit records unpublished platform packages as
+        # versionless placeholders. After any of them publish, npm ci rejects
+        # the placeholders, so a retry re-resolves the lock before installing.
+        run: |
+          node -e '
+            const fs = require("fs");
+            const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+            for (const [key, value] of Object.entries(lock.packages)) {
+              if (/node_modules\/@microck\/pangram-cli-/.test(key) && !value.version) {
+                delete lock.packages[key];
+              }
+            }
+            fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2) + "\n");
+          '
+          npm install --package-lock-only --ignore-scripts
       - name: Install exact development dependencies
         run: npm ci --ignore-scripts --workspaces=false
       - name: Require the exact public release and authorization
@@ -68,3 +84,22 @@ jobs:
         run: npm run tegami -- publish --dry-run
       - name: Publish missing platform packages, then the main package
         run: npm run tegami -- publish
+      - name: Publish any platform package still missing from the registry
+        # Tegami runs the platform hook only while it publishes the main
+        # package. If an earlier attempt published the main package but not
+        # every platform package, this pass finishes the set on retry.
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          for directory in npm/pangram-cli-*/; do
+            name="$(node -p "require('./${directory}package.json').name")"
+            version="$(node -p "require('./${directory}package.json').version")"
+            test "$version" = "$VERSION"
+            published="$(npm view "${name}@${version}" version 2>/dev/null || true)"
+            if [ "$published" = "$version" ]; then
+              echo "present: ${name}@${version}"
+              continue
+            fi
+            (cd "$directory" && npm publish --access public --provenance)
+            echo "published: ${name}@${version}"
+          done
