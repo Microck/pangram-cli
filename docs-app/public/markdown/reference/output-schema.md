@@ -1,6 +1,6 @@
 # Output schema
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 Every structured CLI and MCP result starts from the canonical typed envelope.
 

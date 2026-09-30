@@ -1,6 +1,6 @@
 # Progress events
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 `--progress jsonl` writes canonical progress envelopes to stderr. Final command output remains on stdout. Progress never includes credentials, submitted content, plagiarism matches, or public links.
 
