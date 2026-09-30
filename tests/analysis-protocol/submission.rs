@@ -112,6 +112,51 @@ async fn in_progress_poll_then_terminal_success_preserves_stage_provenance() {
     fixture.shutdown().await;
 }
 
+/// 2a. Pangram documents only `STAGE_SUCCESS` and `STAGE_FAILED` as terminal.
+/// Any other well-formed stage token is still in progress, including stages
+/// the client has never seen (live Pangram reports `STAGE_POSTPROCESSING`).
+#[tokio::test(flavor = "current_thread")]
+async fn undocumented_well_formed_stages_are_in_progress_not_contract_drift() {
+    let fixture = ProtocolFixture::start().await;
+    fixture.on_submit(Step::Json(serde_json::json!({"task_id": TASK_ID})));
+    for stage in ["STAGE_INFERENCE", "STAGE_POSTPROCESSING", "STAGE_2_QUEUED"] {
+        fixture.on_poll(Step::Json(
+            serde_json::json!({"task_id": TASK_ID, "stage": stage}),
+        ));
+    }
+    fixture.on_poll(Step::Json(pangram4_success(SYNTHETIC_TEXT)));
+
+    let analyzer = Analyzer::from_client(fixture.client());
+    let accepted = analyzer
+        .start(
+            request(SYNTHETIC_TEXT),
+            &StopObserving::new().token().clone(),
+        )
+        .await
+        .expect("acceptance succeeds");
+    let microck_pangram_cli::analysis::Accepted::Task(input) = accepted else {
+        panic!();
+    };
+    let mut stages = Vec::new();
+    let outcome = analyzer
+        .running(input)
+        .observe(
+            WaitOptions::UNBOUNDED,
+            |progress| stages.push(progress.last_stage.as_str().to_owned()),
+            StopObserving::new(),
+        )
+        .await
+        .expect("no interruption")
+        .expect("terminal success");
+
+    assert_eq!(
+        stages,
+        ["STAGE_INFERENCE", "STAGE_POSTPROCESSING", "STAGE_2_QUEUED"]
+    );
+    assert_eq!(outcome.status(), AnalysisStatus::Succeeded);
+    fixture.shutdown().await;
+}
+
 /// 3. A terminal provider failure becomes a failed analysis with a canonical
 /// upstream_analysis_failed error, never a panic.
 #[tokio::test(flavor = "current_thread")]

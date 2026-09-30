@@ -770,14 +770,16 @@ fn classify_poll(response: Response, _task_id: &UpstreamTaskId) -> Result<TaskPo
                 stage: stage.to_owned(),
             })
         }
-        "STAGE_PREPROCESSING" | "STAGE_INFERENCE" => Ok(TaskPoll::InProgress {
-            last_stage: stage.to_owned(),
-            response: ResponseSummary {
-                structural: response.structural_symptom(),
-            },
-        }),
+        in_progress if super::normalize::is_in_progress_stage(in_progress) => {
+            Ok(TaskPoll::InProgress {
+                last_stage: in_progress.to_owned(),
+                response: ResponseSummary {
+                    structural: response.structural_symptom(),
+                },
+            })
+        }
         other => Err(AnalysisError::MalformedBody(format!(
-            "unknown upstream stage token {other:?}; the upstream contract may have changed"
+            "malformed upstream stage token {other:?}; the upstream contract may have changed"
         ))),
     }
 }
