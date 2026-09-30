@@ -22,3 +22,18 @@ pangram comments owner/repo#123 --max-billable-units 10
 
 Review comments send only their `body`, never the diff hunk. Output uses
 `origin: transcript` or `origin: github`.
+
+## Paste a URL directly
+
+A bare pull request, issue, or YouTube URL runs the matching shortcut. Put the
+shortcut's flags after the URL:
+
+```bash
+pangram https://github.com/owner/repo/pull/123/files --comments --max-billable-units 5
+pangram https://github.com/owner/repo/issues/9 --max-billable-units 10
+pangram 'https://youtu.be/...' --model large-v3 --max-billable-units 80
+```
+
+`--max-billable-units` is still required. Any other bare URL fails with
+`unsupported_input` instead of being analyzed as text. To analyze a URL as
+text, use `pangram detect 'https://example.com/post'`.

@@ -157,7 +157,7 @@ const MCP_CLIENTS: &[&str] = &[
     "droid",
     "antigravity",
 ];
-const SHELLS: &[&str] = &["bash", "zsh", "fish", "powershell", "elvish"];
+const SHELLS: &[&str] = &["bash", "zsh", "fish", "powershell", "elvish", "nushell"];
 
 const fn planned_argument(name: &'static str, kind: ArgumentKind, phase: Phase) -> ArgumentSpec {
     ArgumentSpec {

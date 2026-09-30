@@ -262,6 +262,9 @@ Product-level rules:
 - `analyze` always runs both checks.
 - `video`, `audio`, and `youtube` transcribe media to text, then run `detect`.
 - `pr`, `issue`, and `comments` fetch GitHub prose, then run `detect`.
+- A bare GitHub pull-request, GitHub issue, or YouTube URL routes to `pr`,
+  `issue`, or `youtube`; any other bare URL is rejected instead of analyzed as
+  text.
 - `bulk` submits and inspects asynchronous AI-detection collections.
 - JSON is the default noninteractive representation. Repeated files default to
   JSONL unless the caller selects a format.

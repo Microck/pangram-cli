@@ -2,13 +2,14 @@
 
 #![allow(clippy::result_large_err)]
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, Command};
 
 use crate::ingest::{
-    GithubKind, GithubRef, IngestedText, MediaOptions, WhisperModel, fetch_github, transcribe_path,
-    transcribe_youtube, usage,
+    GithubKind, GithubRef, IngestedText, MediaOptions, WhisperModel, fetch_github, route_url,
+    transcribe_path, transcribe_youtube, usage, usage_with_recovery,
 };
 use crate::output::{CanonicalError, ErrorCode};
 
@@ -170,6 +171,58 @@ pub(crate) fn comments_command() -> Command {
                     .required(true)
                     .help("Pull or issue URL, or OWNER/REPO#N"),
             ),
+    )
+}
+
+/// Inserts the routed ingest subcommand in front of a bare root URL token
+/// (contracts.md 14.12), so the target's own grammar parses every trailing
+/// flag. Unsupported URLs and every other argv shape stay untouched for Clap.
+pub(crate) fn route_bare_url(arguments: &mut Vec<OsString>) {
+    let Some((insert_at, position)) = root_positional(arguments) else {
+        return;
+    };
+    let command = arguments[position]
+        .to_str()
+        .and_then(route_url)
+        .and_then(crate::ingest::UrlRoute::command);
+    if let Some(command) = command {
+        arguments.insert(insert_at, command.into());
+    }
+}
+
+/// Locates the root `TEXT` token as (insertion point, token index). Only
+/// GLOBAL flags may precede it; a `--` separator makes the next token
+/// positional, and the subcommand goes in front of the separator.
+fn root_positional(arguments: &[OsString]) -> Option<(usize, usize)> {
+    let mut index = 1;
+    loop {
+        let token = arguments.get(index)?.to_str()?;
+        if token == "--" {
+            return arguments.get(index + 1).map(|_| (index, index + 1));
+        }
+        if !token.starts_with('-') {
+            return Some((index, index));
+        }
+        let takes_value = crate::cli::FULL_GRAMMAR
+            .global_arguments
+            .iter()
+            .any(|argument| {
+                argument.kind == crate::cli::ArgumentKind::Option && argument.name == token
+            });
+        index += if takes_value { 2 } else { 1 };
+    }
+}
+
+/// The bare-URL rejection for a URL that routes to no ingest command. It
+/// never echoes the URL.
+pub(crate) fn unsupported_url_error() -> CanonicalError {
+    usage_with_recovery(
+        ErrorCode::UnsupportedInput,
+        "a bare URL must be a GitHub pull request (github.com/OWNER/REPO/pull/N), a GitHub \
+         issue (github.com/OWNER/REPO/issues/N), or a YouTube video (youtube.com/watch?v=ID, \
+         youtube.com/shorts/ID, or youtu.be/ID).",
+        "To analyze a URL as literal text, run `pangram detect 'URL'`; bare text that \
+         contains spaces is never routed.",
     )
 }
 

@@ -3,6 +3,6 @@
   "pages": [
     "install", "authenticate", "detect-text", "check-plagiarism", "combined-analysis",
     "analyze-files", "media-and-github", "bulk", "local-history", "export-rerun", "output-formats",
-    "mcp-clients", "mcp-gates", "shell-completions", "updates", "uninstall-mcp"
+    "mcp-clients", "mcp-gates", "shell-completions", "nushell", "updates", "uninstall-mcp"
   ]
 }

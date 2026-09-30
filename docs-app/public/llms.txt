@@ -22,6 +22,7 @@ Unofficial CLI, TUI, and stdio MCP server for documented Pangram APIs. Local his
 - [Configure MCP clients](https://pangram.micr.dev/docs/how-to/mcp-clients)
 - [Gate MCP capabilities and file access](https://pangram.micr.dev/docs/how-to/mcp-gates)
 - [Check media and GitHub text](https://pangram.micr.dev/docs/how-to/media-and-github)
+- [Use Pangram from Nushell](https://pangram.micr.dev/docs/how-to/nushell)
 - [Use JSON, JSONL, TOON, and Markdown](https://pangram.micr.dev/docs/how-to/output-formats)
 - [Generate shell completions](https://pangram.micr.dev/docs/how-to/shell-completions)
 - [Uninstall Pangram MCP entries](https://pangram.micr.dev/docs/how-to/uninstall-mcp)

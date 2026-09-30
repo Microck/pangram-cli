@@ -24,6 +24,9 @@ cap-fs-ext = { version = "=4.0.2", default-features = false, features = ["std"] 
 cap-std = { version = "=4.0.2", default-features = false }
 clap = { version = "=4.6.4", features = ["derive"] }
 clap_complete = "=4.6.9"
+# 4.6.1 is the newest release compatible with the clap 4.6.4 pin; 4.6.2
+# requires clap ^4.6.6.
+clap_complete_nushell = "=4.6.1"
 # Ratatui 0.29 keeps its calendar widget, and therefore `time`, outside the
 # default terminal feature graph. This remains compatible with the Rust 1.88
 # floor without retaining the vulnerable pre-0.3.47 `time` line pulled by

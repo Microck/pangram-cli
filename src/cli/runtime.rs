@@ -151,6 +151,10 @@ where
         arguments.push(FULL_GRAMMAR.name.into());
     }
 
+    // A bare root URL token routes to its ingest subcommand before any
+    // other dispatch, so the target grammar parses its flags (14.12).
+    super::ingest::route_bare_url(&mut arguments);
+
     // Bare-input dispatch runs before Clap's errors surface (and before the
     // bare `--help` fallback below) for the source-category rules Clap cannot
     // express: `pangram -` (stdin), a bare non-TTY launch whose piped stdin is
@@ -278,12 +282,22 @@ where
         Some(("completions", sub)) => execute_completions(sub, invocation),
         Some(("update", sub)) => finish(super::update::execute(&matches, sub)),
         // A bare literal-text reach (`pangram some text`) resolves to implicit
-        // detection; the literal `-` reads stdin. A no-text reach can only
-        // come from the non-rendering parsing hook because process-facing bare
-        // launches were claimed by bare dispatch or the TUI above.
+        // detection; the literal `-` reads stdin. A URL token reaching here
+        // matched no ingest route and is rejected rather than analyzed. A
+        // no-text reach can only come from the non-rendering parsing hook
+        // because process-facing bare launches were claimed by bare dispatch
+        // or the TUI above.
         None if matches.get_one::<String>("TEXT").is_some() => {
             let text = matches.get_one::<String>("TEXT").unwrap().clone();
-            if text == "-" {
+            if crate::ingest::is_url_token(&text) {
+                finish_detect(crate::cli::detect::early_failure(
+                    crate::output::ResolvedCommand::Detect,
+                    global,
+                    invocation.streams,
+                    crate::domain::UtcTimestamp::now(),
+                    super::ingest::unsupported_url_error(),
+                ))
+            } else if text == "-" {
                 execute_detect_bare_source(
                     crate::cli::detect::Source::Stdin,
                     &matches,
@@ -320,16 +334,25 @@ fn execute_completions(arguments: &ArgMatches, invocation: &InvocationContext<'_
             clap_error: None,
         };
     }
+    let mut command = runtime_command();
+    let mut bytes = Vec::new();
     let shell = match arguments.get_one::<String>("SHELL").map(String::as_str) {
         Some("bash") => clap_complete::Shell::Bash,
         Some("zsh") => clap_complete::Shell::Zsh,
         Some("fish") => clap_complete::Shell::Fish,
         Some("powershell") => clap_complete::Shell::PowerShell,
         Some("elvish") => clap_complete::Shell::Elvish,
+        Some("nushell") => {
+            clap_complete::generate(
+                clap_complete_nushell::Nushell,
+                &mut command,
+                "pangram",
+                &mut bytes,
+            );
+            return finish_raw_bytes(&bytes, invocation);
+        }
         _ => return help_outcome(invocation),
     };
-    let mut command = runtime_command();
-    let mut bytes = Vec::new();
     clap_complete::generate(shell, &mut command, "pangram", &mut bytes);
     finish_raw_bytes(&bytes, invocation)
 }
