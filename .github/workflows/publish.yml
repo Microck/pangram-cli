@@ -104,18 +104,33 @@ jobs:
         # Tegami runs the platform hook only while it publishes the main
         # package. If an earlier attempt published the main package but not
         # every platform package, this pass finishes the set on retry.
+        # The registry read path lags fresh publishes by minutes; publishing
+        # again during that window returns 409 ("previously staged version"),
+        # so wait for visibility before and after any publish attempt.
         env:
           VERSION: ${{ inputs.version }}
         run: |
+          visible() {
+            for _ in $(seq 1 "$2"); do
+              [ "$(npm view "$1" version --prefer-online 2>/dev/null || true)" = "$VERSION" ] && return 0
+              sleep 15
+            done
+            return 1
+          }
           for directory in npm/pangram-cli-*/; do
             name="$(node -p "require('./${directory}package.json').name")"
             version="$(node -p "require('./${directory}package.json').version")"
             test "$version" = "$VERSION"
-            published="$(npm view "${name}@${version}" version 2>/dev/null || true)"
-            if [ "$published" = "$version" ]; then
+            if visible "${name}@${version}" 12; then
               echo "present: ${name}@${version}"
               continue
             fi
-            (cd "$directory" && npm publish --access public --provenance)
-            echo "published: ${name}@${version}"
+            if (cd "$directory" && npm publish --access public --provenance); then
+              echo "published: ${name}@${version}"
+            elif visible "${name}@${version}" 20; then
+              echo "present after conflict: ${name}@${version}"
+            else
+              echo "::error::${name}@${version} is neither published nor publishable"
+              exit 1
+            fi
           done
