@@ -1076,7 +1076,11 @@ mapping is identical in both positions. In particular:
   an upstream terminal `STAGE_FAILED` on the poll stream is normalized to
   the same upstream terminal failure (`upstream_analysis_failed`, category
   `upstream`, exit 6), and any non-terminal stage reads as still `running`
-  until a later poll reports a terminal state
+  until a later poll reports a terminal state. Pangram documents only
+  `STAGE_SUCCESS` and `STAGE_FAILED` as terminal: every other well-formed
+  `STAGE_[A-Z0-9_]+` token (for example `STAGE_POSTPROCESSING`) is
+  non-terminal, and only a token outside that shape is
+  `upstream_contract_changed`
 - a failed analysis whose check error is a local usage or authentication
   failure exits per that error's category instead
 - a bulk collection that reaches the terminal `failed` state failed every
@@ -2304,8 +2308,11 @@ user-installed downloader is not YouTube platform permission.
 
 Noninteractive runs MUST NOT prompt. A missing model without `--download-model`
 is `model_download_required`. An all-TTY interactive run may prompt once.
-Missing ffmpeg or whisper-cli is `missing_dependency`. A failed transcribe is
-`transcription_failed`. Download transport failure is `network_unavailable`.
+Missing ffmpeg or whisper-cli is `missing_dependency`. A failed tool run
+(yt-dlp, ffmpeg, whisper-cli) is `transcription_failed`; when the tool wrote
+to stderr, `details.tool_stderr` carries its last non-empty line, terminal
+controls stripped and truncated to 200 characters. Download transport failure
+is `network_unavailable`.
 
 Media is never sent to Pangram's file endpoint (PDF, DOCX, RTF only). Billing
 uses the text estimator after transcription.

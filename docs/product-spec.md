@@ -133,8 +133,10 @@ AI detection MUST preserve:
 - upstream task identity and timing
 - public dashboard link when explicitly requested
 
-Unknown upstream stages, classifications, confidence values, or required field
-shapes MUST fail with `upstream_contract_changed`.
+Unknown classifications, confidence values, or required field shapes MUST fail
+with `upstream_contract_changed`. Pangram documents only `STAGE_SUCCESS` and
+`STAGE_FAILED` as terminal task stages; any other well-formed `STAGE_*` token
+is in progress, and a stage token outside that shape is contract drift.
 
 Pangram 4 is the only production text model. The product does not expose model
 selection and does not retain a Pangram 3 compatibility path. Requests MUST

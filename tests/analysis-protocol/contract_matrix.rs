@@ -169,9 +169,17 @@ async fn panged_documents_map_to_upstream_contract_changed() {
         .remove("version");
     variants.push(("missing version", missing_version));
 
-    let mut unknown_stage = good.clone();
-    unknown_stage["stage"] = serde_json::json!("STAGE_TELEPORTING");
-    variants.push(("unknown stage", unknown_stage));
+    // Well-formed unknown stages are in progress (see submission.rs 2a);
+    // only tokens outside the documented `STAGE_*` shape are drift.
+    for (name, token) in [
+        ("malformed stage", "teleporting"),
+        ("empty stage suffix", "STAGE_"),
+        ("lowercase stage", "STAGE_postprocessing"),
+    ] {
+        let mut malformed = good.clone();
+        malformed["stage"] = serde_json::json!(token);
+        variants.push((name, malformed));
+    }
 
     let mut unknown_classification = good.clone();
     unknown_classification["prediction_short"] = serde_json::json!("Robot");

@@ -23,10 +23,24 @@ pub(in crate::analysis) mod bulk;
 /// The accepted terminal success version. Pangram 4 returns exactly `4.0`.
 const REQUIRED_VERSION: &str = "4.0";
 
-/// The provider's documented in-progress stage tokens.
-const IN_PROGRESS_STAGES: &[&str] = &["STAGE_PREPROCESSING", "STAGE_INFERENCE"];
 const TERMINAL_SUCCESS_STAGE: &str = "STAGE_SUCCESS";
 const TERMINAL_FAILURE_STAGE: &str = "STAGE_FAILED";
+
+/// Pangram documents only `STAGE_SUCCESS` and `STAGE_FAILED` as terminal.
+/// Every other well-formed `STAGE_[A-Z0-9_]+` token is in progress, so new
+/// intermediate stages (e.g. `STAGE_POSTPROCESSING`) keep polling instead of
+/// failing. Anything outside that shape is still contract drift.
+pub(in crate::analysis) fn is_in_progress_stage(stage: &str) -> bool {
+    let Some(suffix) = stage.strip_prefix("STAGE_") else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && stage != TERMINAL_SUCCESS_STAGE
+        && stage != TERMINAL_FAILURE_STAGE
+}
 
 /// The retained length ceiling for an upstream failure message. Provider
 /// text is untrusted: it may echo submitted content or carry terminal
@@ -398,7 +412,7 @@ pub fn normalize_task_state(body: &serde_json::Value) -> Result<TaskState, Canon
         None => return Err(missing("stage")),
     };
 
-    if IN_PROGRESS_STAGES.contains(&stage) {
+    if is_in_progress_stage(stage) {
         return Ok(TaskState::InProgress {
             last_stage: stage.to_owned(),
         });
