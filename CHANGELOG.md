@@ -1,3 +1,17 @@
+## microck-pangram-cli@1.3.0
+
+### Added
+
+`pangram URL` now routes a bare GitHub pull request, GitHub issue, or YouTube URL to `pangram pr`, `pangram issue`, or `pangram youtube`. Flags after the URL go to that command, so `pangram https://github.com/owner/repo/pull/123 --max-billable-units 5` works. Any other bare URL fails with `unsupported_input` instead of being analyzed as text; use `pangram detect` to analyze a URL as text.
+
+`pangram completions nushell` generates Nushell completions, and native release archives now include `completions/pangram.nu`.
+
+### Fixed
+
+Longer AI detections no longer fail with `upstream_contract_changed` when Pangram reports its new `STAGE_POSTPROCESSING` stage. Any well-formed intermediate stage now keeps polling until Pangram returns a terminal result.
+
+`video`, `audio`, and `youtube` failures now include the underlying tool's error (for example a yt-dlp HTTP 403) in `details.tool_stderr` instead of only "yt-dlp failed."
+
 ## microck-pangram-cli@1.2.0
 
 ### Added
