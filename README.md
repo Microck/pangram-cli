@@ -11,6 +11,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-mit-000000?style=flat-square" alt="license badge"></a>
 </p>
 
+
+
+https://github.com/user-attachments/assets/1bb1be71-2399-4f66-b840-61cbae703981
+
+
+
 ---
 
 `pangram` is an unofficial terminal client for Pangram AI detection and plagiarism checking. it serves three interaction modes through one behavioral core: a JSON-first command-line interface for scripts and shell pipelines, an interactive terminal user interface for people, and a typed stdio MCP server for AI agents.
