@@ -1161,9 +1161,13 @@ Resolution:
 - no command, no input, and stdin, stdout, and stderr all TTYs: enter the TUI
   alternate-screen Analyze route
 - no command, literal text: detect. Every bare token that is not a compiled
-  subcommand and does not begin with `-` is literal text, including tokens
-  that spell planned (not yet compiled) command names; those are analyzed as
-  text. Only a hyphen-leading unknown remains a Clap usage error.
+  subcommand, is not a URL token, and does not begin with `-` is literal text,
+  including tokens that spell planned (not yet compiled) command names; those
+  are analyzed as text. Only a hyphen-leading unknown remains a Clap usage
+  error.
+- no command, a bare URL token (it begins with `http://` or `https://`, ASCII
+  case-insensitive, and contains no whitespace): bare URL routing (section
+  14.12). A URL token is never analyzed as text.
 - no command, non-TTY stdin (a pipe or redirection) with content: detect, and
   the resolved `command` is `detect`
 - no command, non-TTY stdin that decodes to no detectable text (an empty or
@@ -2193,14 +2197,17 @@ Credential keys are rejected by `config`.
 ### 14.10 Completions and update
 
 ```text
-pangram completions bash|zsh|fish|powershell|elvish
+pangram completions bash|zsh|fish|powershell|elvish|nushell
 pangram update --check
 pangram update
 pangram update --yes
 ```
 
 Completions emit only the completion script. The `completions` command is
-compiled and available.
+compiled and available. `nushell` output comes from `clap_complete_nushell`: a
+Nushell module of `extern` signatures that the user saves and loads. Native
+release archives include one script per supported shell under `completions/`,
+including `completions/pangram.nu`.
 
 Phase 8 exposes the three `update` forms under the ownership policy from
 `docs/update-contract.md`: every form resolves the running executable and its
@@ -2339,6 +2346,57 @@ rel="next"` on the same host until exhausted. A 404 is `github_not_found`.
 A 429, or a 403 with `x-ratelimit-remaining: 0` or `retry-after`, is
 `rate_limited`, not `github_authentication`. Production GitHub API base is
 `https://api.github.com`. Alternate bases exist only in test constructors.
+
+#### Bare URL routing
+
+```text
+pangram [GLOBAL] URL [TARGET FLAGS]
+```
+
+A bare URL token (section 14.1) in the root `TEXT` position selects a source
+ingest command instead of text detection:
+
+| URL | Routed command |
+| --- | --- |
+| `github.com/OWNER/REPO/pull/N`, with optional trailing path segments (for example `/files` or `/commits`), query, or fragment | `pangram pr URL` |
+| `github.com/OWNER/REPO/issues/N`, with the same optional suffixes | `pangram issue URL` |
+| `youtube.com/watch?v=ID`, `youtube.com/shorts/ID`, or `youtu.be/ID` | `pangram youtube URL` |
+| any other URL | `unsupported_input` |
+
+GitHub routing requires the exact host `github.com`, matching the `REF`
+parser. `N` is a decimal number. YouTube routing accepts the hosts
+`youtube.com`, `www.youtube.com`, `m.youtube.com`, and `music.youtube.com`
+with either a `/watch` path and a non-empty `v` query parameter or a
+`/shorts/ID` path, and the host `youtu.be` with a non-empty first path
+segment. Both `http` and `https` route.
+
+Routing inserts the target subcommand in front of the URL before Clap parses
+argv. The URL reaches the target unchanged. Everything after the URL is parsed
+by the target's grammar, so every flag the target accepts works on the routed
+form with the same validation, defaults, and errors, and the envelope, exit
+code, stdout, and stderr match the explicit subcommand spelled with the same
+arguments. `--max-billable-units` therefore stays required: a routed URL
+without it fails with `unsupported_combination` before GitHub or tool I/O.
+Only GLOBAL flags may precede the URL; the root grammar owns them. A `--`
+separator before the URL keeps routing. The root grammar accepts only GLOBAL
+flags, so a defaults-only routed form could never satisfy the required
+ceiling; routing forwards the trailing flags to the target instead.
+
+Any other URL fails with `unsupported_input` (usage, exit 2), envelope
+`command` `detect`, before credential lookup, Pangram or GitHub network I/O,
+and tool execution. The message lists the supported URL kinds, and the
+recovery names `pangram detect` for analyzing the URL as literal text. The
+error does not echo the URL. `unsupported_input` is the fitting existing code:
+the argument is present and well-formed but outside the accepted input kinds,
+matching how the `REF` parser rejects non-pull, non-issue GitHub URLs.
+`input_required` means missing input, and `unsupported_combination` means
+conflicting flags. An unsupported URL is parsed by the root grammar like any
+bare text, so a non-GLOBAL flag after it remains a Clap usage error.
+
+Only the bare root position routes. `pangram detect URL` and the other
+analysis commands analyze a URL as literal text. Text that contains whitespace,
+such as a quoted sentence that includes a URL, is not a URL token and stays
+bare detection. Piped stdin and the literal `-` never route.
 
 TUI and MCP do not add ingest tools in this change.
 

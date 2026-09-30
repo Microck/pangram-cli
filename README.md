@@ -150,6 +150,12 @@ GH_TOKEN=... pangram pr owner/repo#123 --comments --max-billable-units 5
 
 `youtube` uses your own `yt-dlp` install. review comments send only their prose `body`, never diffs.
 
+a bare pull request, issue, or YouTube URL routes to the matching shortcut, and trailing flags go to that command. any other bare URL is rejected; use `pangram detect` to analyze a URL as text:
+
+```bash
+GH_TOKEN=... pangram https://github.com/owner/repo/pull/123 --max-billable-units 5
+```
+
 ### mcp client
 
 preview the exact configuration edit before writing it:
@@ -171,6 +177,13 @@ pangram completions zsh > ~/.zsh/completions/_pangram
 pangram completions fish > ~/.config/fish/completions/pangram.fish
 ```
 
+in Nushell, save the module into an autoload directory:
+
+```nu
+mkdir ($nu.data-dir | path join vendor autoload)
+pangram completions nushell | save -f ($nu.data-dir | path join vendor autoload pangram.nu)
+```
+
 for the full authentication, MCP, history, and platform guides, see the [documentation](https://pangram.micr.dev/docs).
 
 ## command surface
@@ -179,7 +192,7 @@ available today:
 
 | command | purpose |
 | --- | --- |
-| `pangram` | bare literal text or piped stdin runs AI detection; an all-TTY launch opens the TUI |
+| `pangram` | bare literal text or piped stdin runs AI detection; a bare pull request, issue, or YouTube URL routes to its shortcut; an all-TTY launch opens the TUI |
 | `pangram detect` | run Pangram 4 AI text detection |
 | `pangram plagiarism` | run plagiarism checking on text |
 | `pangram analyze` | run AI detection and plagiarism together on text |

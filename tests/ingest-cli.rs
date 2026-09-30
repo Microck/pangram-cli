@@ -120,3 +120,160 @@ fn video_is_not_literal_detect_text() {
     let body = envelope(&output);
     assert_ne!(body["error"]["code"], "missing_api_key");
 }
+
+// Bare URL routing (contracts.md 14.12). Each routed kind is observed at the
+// first local failure of its ingest path, which bare text detection can never
+// produce: no credits, no GitHub, no YouTube.
+
+fn error_code(output: &std::process::Output) -> String {
+    envelope(output)["error"]["code"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no error code: {}", String::from_utf8_lossy(&output.stdout)))
+        .to_owned()
+}
+
+#[test]
+fn bare_github_urls_route_to_github_ingest_with_target_flags() {
+    for url in [
+        "https://github.com/octocat/hello-world/pull/1",
+        "https://github.com/octocat/hello-world/pull/1/files?diff=split#top",
+        "https://github.com/octocat/hello-world/pull/1/commits",
+        "https://github.com/octocat/hello-world/issues/2",
+        "http://GitHub.com/octocat/hello-world/issues/2#issuecomment-1",
+    ] {
+        let output = pangram_without_tools()
+            .args([url, "--comments", "--max-billable-units", "1"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(4), "{url}");
+        assert!(output.stderr.is_empty(), "{url}");
+        assert_eq!(envelope(&output)["command"], "detect", "{url}");
+        assert_eq!(error_code(&output), "github_authentication", "{url}");
+    }
+}
+
+#[test]
+fn bare_github_url_keeps_the_required_ingest_ceiling() {
+    let output = pangram_without_tools()
+        .arg("https://github.com/octocat/hello-world/pull/1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(error_code(&output), "unsupported_combination");
+}
+
+#[test]
+fn bare_github_url_after_global_flags_and_separator_still_routes() {
+    let data = tempfile::tempdir().unwrap();
+    let output = pangram_without_tools()
+        .args([
+            "--data-dir",
+            data.path().to_str().unwrap(),
+            "--no-color",
+            "https://github.com/octocat/hello-world/pull/1",
+            "--max-billable-units",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(error_code(&output), "github_authentication");
+
+    let output = pangram_without_tools()
+        .args(["--", "https://github.com/octocat/hello-world/issues/2"])
+        .output()
+        .unwrap();
+    assert_eq!(error_code(&output), "unsupported_combination");
+}
+
+#[test]
+fn bare_youtube_urls_route_to_youtube_ingest_with_target_flags() {
+    for url in [
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "https://youtube.com/watch?feature=share&v=aaaaaaaaaaa",
+        "https://m.youtube.com/watch?v=aaaaaaaaaaa",
+        "https://music.youtube.com/watch?v=aaaaaaaaaaa&list=x",
+        "https://www.youtube.com/shorts/aaaaaaaaaaa",
+        "https://youtu.be/aaaaaaaaaaa?t=10",
+        "http://youtu.be/aaaaaaaaaaa",
+    ] {
+        let output = pangram_without_tools()
+            .args([url, "--model", "large-v3", "--max-billable-units", "1"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{url}");
+        assert_eq!(error_code(&output), "missing_dependency", "{url}");
+        let message = envelope(&output)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(message.contains("yt-dlp"), "{url}: {message}");
+    }
+}
+
+#[test]
+fn bare_unsupported_url_is_unsupported_input_before_any_io() {
+    for url in [
+        "https://example.com/x",
+        "HTTPS://example.com",
+        "https://github.com/octocat/hello-world",
+        "https://github.com/octocat/hello-world/pull/abc",
+        "https://www.github.com/octocat/hello-world/pull/1",
+        "https://www.youtube.com/@channel",
+        "https://www.youtube.com/watch?list=x",
+        "https://youtu.be/",
+        "https://",
+    ] {
+        let output = pangram_without_tools().arg(url).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{url}");
+        assert!(output.stderr.is_empty(), "{url}");
+        let body = envelope(&output);
+        assert_eq!(body["command"], "detect", "{url}");
+        assert_eq!(body["error"]["code"], "unsupported_input", "{url}");
+        let message = body["error"]["message"].as_str().unwrap();
+        for kind in [
+            "github.com/OWNER/REPO/pull/N",
+            "github.com/OWNER/REPO/issues/N",
+            "youtube.com/watch?v=ID",
+            "youtu.be/ID",
+        ] {
+            assert!(message.contains(kind), "{url}: {message}");
+        }
+        let recovery = body["error"]["recovery"]["message"].as_str().unwrap();
+        assert!(recovery.contains("pangram detect"), "{url}: {recovery}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("example.com"), "{url}: {stdout}");
+        assert!(!stdout.contains("octocat"), "{url}: {stdout}");
+    }
+}
+
+#[test]
+fn bare_unsupported_url_honors_global_flags_and_rejects_target_flags() {
+    let output = pangram_without_tools()
+        .args(["https://example.com/x", "--error-format", "text"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("pangram detect"), "{stderr}");
+
+    let output = pangram_without_tools()
+        .args(["https://example.com/x", "--max-billable-units", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
+}
+
+#[test]
+fn urls_outside_the_bare_url_token_stay_literal_text() {
+    for arguments in [
+        &["read https://example.com/x today"][..],
+        &["detect", "https://example.com/x"][..],
+        &["detect", "https://github.com/octocat/hello-world/pull/1"][..],
+    ] {
+        let output = pangram_without_tools().args(arguments).output().unwrap();
+        assert_eq!(error_code(&output), "missing_api_key", "{arguments:?}");
+    }
+}

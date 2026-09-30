@@ -295,7 +295,9 @@ fn completions_are_available_raw_stdout_for_every_contracted_shell() {
             .all(|argument| argument.availability == Availability::Available)
     );
 
-    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+    let shells = argument(completions, "SHELL").accepted_values;
+    assert!(shells.contains(&"nushell"), "{shells:?}");
+    for shell in shells {
         let output = pangram().args(["completions", shell]).output().unwrap();
         assert_eq!(output.status.code(), Some(0), "{shell}");
         assert!(output.stderr.is_empty(), "{shell}");
@@ -304,6 +306,15 @@ fn completions_are_available_raw_stdout_for_every_contracted_shell() {
         assert!(script.contains("pangram"), "{shell}: {script}");
         assert!(!script.trim_start().starts_with('{'), "{shell}");
     }
+
+    // Nushell completions are a module of `extern` signatures (contracts.md
+    // 14.10), including the source-ingest subcommands.
+    let output = pangram().args(["completions", "nushell"]).output().unwrap();
+    let script = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        script.contains("export extern \"pangram youtube\""),
+        "{script}"
+    );
 }
 
 /// The README "Available today" table lists exactly the compiled binary's

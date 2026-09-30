@@ -60,6 +60,7 @@ pub(crate) const RUNTIME_DEPENDENCIES: &[&str] = &[
     "cap-std",
     "clap",
     "clap_complete",
+    "clap_complete_nushell",
     "crossterm",
     "directories",
     "ed25519-dalek",

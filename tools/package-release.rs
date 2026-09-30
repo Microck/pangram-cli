@@ -11,12 +11,13 @@ use zip::write::SimpleFileOptions;
 
 use microck_pangram_cli::domain::Sha256Hash;
 
-const SHELLS: [(&str, &str); 5] = [
+const SHELLS: [(&str, &str); 6] = [
     ("bash", "pangram.bash"),
     ("zsh", "_pangram"),
     ("fish", "pangram.fish"),
     ("powershell", "pangram.ps1"),
     ("elvish", "pangram.elv"),
+    ("nushell", "pangram.nu"),
 ];
 
 #[derive(Serialize)]

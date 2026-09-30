@@ -239,7 +239,7 @@ pub fn runtime_command() -> Command {
         .arg(
             Arg::new("SHELL")
                 .required(true)
-                .value_parser(["bash", "zsh", "fish", "powershell", "elvish"])
+                .value_parser(["bash", "zsh", "fish", "powershell", "elvish", "nushell"])
                 .help("Shell whose completion script should be generated"),
         );
 
@@ -430,7 +430,7 @@ pub fn runtime_command() -> Command {
             Arg::new("TEXT")
                 .value_name("TEXT")
                 .num_args(1)
-                .help("Bare text analyzes it through AI detection; the literal `-` reads stdin"),
+                .help("Bare text runs AI detection; the literal `-` reads stdin; a lone GitHub pull request, GitHub issue, or YouTube URL routes to `pr`, `issue`, or `youtube`, and other URLs are rejected"),
         )
         .arg(
             Arg::new("config")
