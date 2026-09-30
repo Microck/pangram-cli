@@ -436,7 +436,7 @@ those permissions.
 
 Source: https://pangram.micr.dev/docs/reference/commands
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 | Command | Kind | Availability | Arguments |
 | --- | --- | --- | --- |
@@ -492,7 +492,7 @@ Generated from Pangram CLI 1.2.0 and schema major 1.
 
 Source: https://pangram.micr.dev/docs/reference/configuration
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 | Field | Type | Required |
 | --- | --- | --- |
@@ -522,7 +522,7 @@ Environment credentials never enter general configuration output.
 
 Source: https://pangram.micr.dev/docs/reference/errors
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 | Code | Category | Retry by default | Contextual retry |
 | --- | --- | --- | --- |
@@ -569,7 +569,7 @@ Generated from Pangram CLI 1.2.0 and schema major 1.
 
 Source: https://pangram.micr.dev/docs/reference/exit-codes
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 | Code | Meaning |
 | --- | --- |
@@ -605,7 +605,7 @@ has no prompts, subscriptions, HTTP transport, or experimental Tasks extension.
 
 Source: https://pangram.micr.dev/docs/reference/mcp-tools
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 Protocol: `2026-07-28`.
 
@@ -635,7 +635,7 @@ Protocol: `2026-07-28`.
 
 Source: https://pangram.micr.dev/docs/reference/output-schema
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 Every structured CLI and MCP result starts from the canonical typed envelope.
 
@@ -661,7 +661,7 @@ exact archive passes the native smoke test required by the observable contract.
 
 Source: https://pangram.micr.dev/docs/reference/progress
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 `--progress jsonl` writes canonical progress envelopes to stderr. Final command output remains on stdout. Progress never includes credentials, submitted content, plagiarism matches, or public links.
 
@@ -685,7 +685,7 @@ would do the same.
 
 Source: https://pangram.micr.dev/docs/reference/update-manifest
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 The detached Ed25519 signature covers the exact downloaded manifest bytes.
 

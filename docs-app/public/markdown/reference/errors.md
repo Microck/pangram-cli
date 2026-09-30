@@ -1,6 +1,6 @@
 # Error catalog
 
-Generated from Pangram CLI 1.2.0 and schema major 1.
+Generated from Pangram CLI 1.3.0 and schema major 1.
 
 | Code | Category | Retry by default | Contextual retry |
 | --- | --- | --- | --- |

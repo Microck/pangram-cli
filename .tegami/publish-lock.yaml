@@ -1,6 +1,9 @@
 core:changelogs:
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: minor\n  npm:@microck/pangram-cli:\n    type: minor\n---\n\n## Added\n\n`pangram video`, `audio`, and `youtube` transcribe media locally with whisper.cpp and run AI detection on the transcript. `pangram pr`, `issue`, and `comments` detect AI writing in GitHub titles, descriptions, and comment bodies.\n\n## Changed\n\nThe JSON output schema is now major `\"2\"`. Text input `origin` adds `transcript` and `github`, and new error codes cover missing tools, model downloads, transcription, and GitHub access.\n"
-    filename: source-ingest-shortcuts.md
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: minor\n  npm:@microck/pangram-cli:\n    type: minor\n---\n\n## Added\n\n`pangram URL` now routes a bare GitHub pull request, GitHub issue, or YouTube URL to `pangram pr`, `pangram issue`, or `pangram youtube`. Flags after the URL go to that command, so `pangram https://github.com/owner/repo/pull/123 --max-billable-units 5` works. Any other bare URL fails with `unsupported_input` instead of being analyzed as text; use `pangram detect` to analyze a URL as text.\n\n`pangram completions nushell` generates Nushell completions, and native release archives now include `completions/pangram.nu`.\n"
+    filename: bare-url-routing-nushell.md
+    v: 0.0.0
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Fixed\n\nLonger AI detections no longer fail with `upstream_contract_changed` when Pangram reports its new `STAGE_POSTPROCESSING` stage. Any well-formed intermediate stage now keeps polling until Pangram returns a terminal result.\n\n`video`, `audio`, and `youtube` failures now include the underlying tool's error (for example a yt-dlp HTTP 403) in `details.tool_stderr` instead of only \"yt-dlp failed.\"\n"
+    filename: pangram-postprocessing-stage.md
     v: 0.0.0
 core:packages:
   - id: npm:pangram-cli-development-tools
@@ -8,11 +11,13 @@ core:packages:
   - id: npm:@microck/pangram-docs
     updated: false
   - changelogIds:
-      - source-ingest-shortcuts.md
+      - bare-url-routing-nushell.md
+      - pangram-postprocessing-stage.md
     id: npm:@microck/pangram-cli
     updated: true
   - changelogIds:
-      - source-ingest-shortcuts.md
+      - bare-url-routing-nushell.md
+      - pangram-postprocessing-stage.md
     id: cargo:microck-pangram-cli
     updated: true
 npm:packages:
