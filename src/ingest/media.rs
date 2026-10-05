@@ -108,6 +108,8 @@ pub(super) fn transcribe_youtube(
         &[
             OsStr::new("--no-playlist"),
             OsStr::new("--no-progress"),
+            OsStr::new("--format"),
+            OsStr::new("bestaudio"),
             OsStr::new("-x"),
             OsStr::new("--audio-format"),
             OsStr::new("wav"),

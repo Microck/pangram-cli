@@ -2308,10 +2308,11 @@ after the exact byte size and SHA-256 match. It does not install ffmpeg,
 yt-dlp, or whisper-cli. A cached model is re-verified by size and SHA-256
 before each use; a mismatch is `transcription_failed`.
 
-`youtube` requires user-installed `yt-dlp` on PATH, downloads audio only, then
-transcribes. Missing yt-dlp is `missing_dependency` with recovery that names
-installing yt-dlp. Pangram CLI does not vendor yt-dlp. Invoking a
-user-installed downloader is not YouTube platform permission.
+`youtube` requires user-installed `yt-dlp` on PATH, explicitly selects the
+best available audio-only format, extracts it to WAV, then transcribes. Missing
+yt-dlp is `missing_dependency` with recovery that names installing yt-dlp.
+Pangram CLI does not vendor yt-dlp. Invoking a user-installed downloader is
+not YouTube platform permission.
 
 Noninteractive runs MUST NOT prompt. A missing model without `--download-model`
 is `model_download_required`. An all-TTY interactive run may prompt once.
