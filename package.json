@@ -7,7 +7,7 @@
     "npm/pangram-cli"
   ],
   "engines": {
-    "node": ">=24"
+    "node": ">=24.8.0"
   },
   "scripts": {
     "docs:build": "npm run generate -w docs-app && npm run build -w docs-app",
