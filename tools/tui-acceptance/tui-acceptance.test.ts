@@ -292,7 +292,7 @@ describe.runIf(SUPPORTED_PLATFORM)("compiled TUI acceptance", () => {
         mode: "success",
         artifactName: "analysis-success",
         text: "This synthetic terminal journey remains human written today",
-        expected: ["Succeeded  anl_", "Human - Human-written", "Human 100.0%"],
+        expected: ["Succeeded  anl_", "Human - Human-written", "Human 100.0%", "Short text (under 150 words)"],
       }),
   )
 

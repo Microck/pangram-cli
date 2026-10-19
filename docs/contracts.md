@@ -2475,3 +2475,23 @@ non-full `skills get` command. It also owns the exact `skills list` Markdown and
 the two newline-terminated locator projections. Drift tests compare each
 compiled command's stdout byte-for-byte with its owning generated or embedded
 source.
+
+## Pangram 4.1 interpretation guidance (2026-10-19)
+
+Human-readable AI result projections (pretty, Markdown, and TUI Analyze/History)
+show a short-text caution when the returned complete segment sequence has a
+summed word count below 150. The returned segment count must equal the checked
+sum of the AI, AI-assisted, and human segment counters. An absent sequence,
+inconsistent segment counters, or overflowing count is unknown and does not
+produce a short-text claim. The caution applies regardless
+of classification or segment confidence; a high-confidence segment does not
+cancel the document-length limitation. It does not alter scores, classifications,
+exit codes, billing, saved canonical data, or JSON/JSONL/TOON schemas.
+
+The 4.1 announcement establishes improved calibration, a dashboard estimated
+AI-percentage range, a short-scan notice, and reported false-positive improvements.
+It does not establish new public API request selectors, response-version values,
+or range-field names. Until documented or authorized live conformance establishes
+those details, the client retains its documented request/response contract and
+does not derive a numerical interval from fractions or segment confidence.
+See `docs/pangram-4-1-investigation.md` for the verified sources and remaining gap.

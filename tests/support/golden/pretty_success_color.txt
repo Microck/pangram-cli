@@ -20,6 +20,7 @@
   [2mupstream_stage[0m: STAGE_SUCCESS
   [2mheadline[0m: Human-written
   [2mprediction[0m: The document appears to be human-written.
+  [2minterpretation_note[0m: Short text (under 150 words): detection is less certain. Treat this estimate cautiously.
   [2mclassification[0m: [32mhuman[0m
   [2mfraction_ai[0m: 0
   [2mfraction_ai_assisted[0m: 0

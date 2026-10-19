@@ -17,11 +17,13 @@ use uuid::{Uuid, Version};
 
 mod bulk;
 mod collection;
+mod detection_guidance;
 mod history;
 mod model;
 
 pub use bulk::*;
 pub use collection::*;
+pub use detection_guidance::short_text_caution;
 pub use history::*;
 pub use model::*;
 
