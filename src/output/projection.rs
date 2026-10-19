@@ -477,7 +477,7 @@ fn write_ai_result<W: HumanWriter>(
 ) -> io::Result<()> {
     writer.label_value("headline", &writer.escape(&result.headline))?;
     writer.label_value("prediction", &writer.escape(&result.prediction))?;
-    if let Some(caution) = crate::domain::short_text_caution(&result.segments) {
+    if let Some(caution) = crate::domain::short_text_caution(result) {
         writer.label_value("interpretation_note", caution)?;
     }
     writer.label_value(

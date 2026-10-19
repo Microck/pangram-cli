@@ -2480,8 +2480,10 @@ source.
 
 Human-readable AI result projections (pretty, Markdown, and TUI Analyze/History)
 show a short-text caution when the returned complete segment sequence has a
-summed word count below 150. An absent segment sequence or overflowing count is
-unknown and does not produce a short-text claim. The caution applies regardless
+summed word count below 150. The returned segment count must equal the checked
+sum of the AI, AI-assisted, and human segment counters. An absent sequence,
+inconsistent segment counters, or overflowing count is unknown and does not
+produce a short-text claim. The caution applies regardless
 of classification or segment confidence; a high-confidence segment does not
 cancel the document-length limitation. It does not alter scores, classifications,
 exit codes, billing, saved canonical data, or JSON/JSONL/TOON schemas.

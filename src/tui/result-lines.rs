@@ -88,7 +88,7 @@ pub(crate) fn analysis_result_lines(
                     ),
                 ]));
                 lines.push(Line::styled(sanitize_single_line(&result.prediction), body));
-                if let Some(caution) = crate::domain::short_text_caution(&result.segments) {
+                if let Some(caution) = crate::domain::short_text_caution(result) {
                     lines.push(Line::styled(caution, muted));
                 }
                 // The fractions row doubles as the legend for the bar below
