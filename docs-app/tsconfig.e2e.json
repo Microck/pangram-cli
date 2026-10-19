@@ -1,7 +1,10 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "incremental": false
+    "incremental": false,
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "e2e.config.ts",
