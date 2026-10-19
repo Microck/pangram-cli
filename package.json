@@ -20,8 +20,10 @@
     "test:tui": "vitest run tools/tui-acceptance/tui-acceptance.test.ts --no-file-parallelism"
   },
   "devDependencies": {
+    "@e2e-dev/web": "0.15.2",
     "@kitlangton/terminal-control": "0.6.0",
     "@modelcontextprotocol/conformance": "0.2.0-alpha.11",
+    "e2e": "0.21.2",
     "parse5": "7.3.0",
     "remark-gfm": "4.0.1",
     "remark-mdx": "3.1.1",
