@@ -18,6 +18,7 @@ fn pangram() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_pangram"));
     command
         .env_remove("PANGRAM_API_KEY")
+        .env("CODEX_HOME", home.join(".codex"))
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_DATA_HOME", data_home)
