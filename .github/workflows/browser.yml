@@ -18,6 +18,7 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --prefix ..
+      - run: npx tsc --project tsconfig.e2e.json
       - run: npm run docs:build --prefix ..
       - run: npx e2e-web install chromium --with-deps
       - run: npm run test:e2e
