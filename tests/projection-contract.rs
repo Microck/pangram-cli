@@ -624,3 +624,14 @@ fn jsonl_rejects_an_empty_series() {
     let result = render(OutputFormat::Jsonl, ColorPolicy::Plain, &[], &mut sink);
     assert!(result.is_err(), "JSONL accepted zero envelopes");
 }
+
+#[test]
+fn short_ai_results_include_an_interpretation_caution_in_human_formats_only() {
+    let envelope = success_envelope();
+    for format in [OutputFormat::Pretty, OutputFormat::Markdown] {
+        let text = render_string(format, ColorPolicy::Plain, std::slice::from_ref(&envelope));
+        assert!(text.contains("Short text (under 150 words): detection is less certain."));
+    }
+    let json = render_string(OutputFormat::Json, ColorPolicy::Plain, &[envelope]);
+    assert!(!json.contains("interpretation_note"));
+}

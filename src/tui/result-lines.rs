@@ -88,6 +88,9 @@ pub(crate) fn analysis_result_lines(
                     ),
                 ]));
                 lines.push(Line::styled(sanitize_single_line(&result.prediction), body));
+                if let Some(caution) = crate::domain::short_text_caution(&result.segments) {
+                    lines.push(Line::styled(caution, muted));
+                }
                 // The fractions row doubles as the legend for the bar below
                 // it. Pangram's per-kind segment counts ride along muted as
                 // AI/AI-assisted/human; the segment list itself is the evidence.
@@ -634,8 +637,8 @@ mod tests {
 
         assert_eq!(
             text.len(),
-            20,
-            "segments read as paragraphs, then two facts rows each"
+            21,
+            "short-text caution precedes segment paragraphs and facts"
         );
         assert_eq!(
             text,
@@ -645,6 +648,7 @@ mod tests {
                 "AI detection",
                 "Mixed - Mixed [31m authorship",
                 "The document contains mixed authorship.",
+                "Short text (under 150 words): detection is less certain. Treat this estimate cautiously.",
                 "AI 50.0%  AI-assisted 25.0%  Human 25.0%  2 segments (1/0/1)",
                 &format!("{}{}", "#".repeat(43), ".".repeat(17)),
                 "",
