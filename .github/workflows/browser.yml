@@ -1,0 +1,35 @@
+name: Documentation browser flows
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: docs-app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - run: npm ci --prefix ..
+      - run: npx tsc --project tsconfig.e2e.json
+      - run: npm run docs:build --prefix ..
+      - run: npx e2e-web install chromium --with-deps
+      - run: npm run test:e2e
+        env:
+          E2E_TELEMETRY_DISABLED: '1'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: documentation-browser-traces
+          path: docs-app/.e2e/results/
+          retention-days: 7
+          include-hidden-files: true

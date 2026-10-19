@@ -252,3 +252,11 @@ use of Pangram services remains subject to Pangram's terms, billing, retention, 
 ## license
 
 [mit license](LICENSE)
+
+### Browser regression tests
+
+Run `npm ci`, `npm run docs:build`, `npx e2e-web install chromium`, then
+`npm run test:e2e -w docs-app`. The pinned tester-army/e2e tests open every
+documentation route against the production server. No provider accounts, model
+agents, billable submissions or update-network operations are used. Native CLI,
+TUI and MCP acceptance remain in their existing real-process suites.

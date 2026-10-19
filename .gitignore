@@ -24,3 +24,5 @@ coverage/
 # Crustini/crabbox remote-build runtime state and captures: machine-local
 # artifacts, never committed or synced.
 .crabbox/
+
+.e2e/

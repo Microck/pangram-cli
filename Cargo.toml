@@ -106,7 +106,7 @@ url = "=2.5.8"
 uuid = { version = "=1.24.0", features = ["serde", "v7"] }
 xz2 = { version = "=0.1.7", features = ["static"] }
 zeroize = "=1.8.2"
-zip = { version = "=8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "=9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "=0.61.2", features = [
