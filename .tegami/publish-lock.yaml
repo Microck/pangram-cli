@@ -1,9 +1,12 @@
 core:changelogs:
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: minor\n  npm:@microck/pangram-cli:\n    type: minor\n---\n\n## Added\n\n`pangram URL` now routes a bare GitHub pull request, GitHub issue, or YouTube URL to `pangram pr`, `pangram issue`, or `pangram youtube`. Flags after the URL go to that command, so `pangram https://github.com/owner/repo/pull/123 --max-billable-units 5` works. Any other bare URL fails with `unsupported_input` instead of being analyzed as text; use `pangram detect` to analyze a URL as text.\n\n`pangram completions nushell` generates Nushell completions, and native release archives now include `completions/pangram.nu`.\n"
-    filename: bare-url-routing-nushell.md
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Security\n\nUpdate TLS, QUIC, and ZIP dependencies to patched releases while retaining signed-archive validation and the Rust 1.88 minimum. Update development test dependencies to remove reported npm advisories.\n"
+    filename: audited-dependencies.md
     v: 0.0.0
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Fixed\n\nLonger AI detections no longer fail with `upstream_contract_changed` when Pangram reports its new `STAGE_POSTPROCESSING` stage. Any well-formed intermediate stage now keeps polling until Pangram returns a terminal result.\n\n`video`, `audio`, and `youtube` failures now include the underlying tool's error (for example a yt-dlp HTTP 403) in `details.tool_stderr` instead of only \"yt-dlp failed.\"\n"
-    filename: pangram-postprocessing-stage.md
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Changed\n\nAI detection results in pretty, Markdown, and TUI views now caution that scans below 150 words are less certain, following Pangram 4.1's published interpretation guidance. Scores and machine-readable schemas are unchanged; undocumented dashboard uncertainty ranges are not fabricated.\n"
+    filename: pangram-4-1-guidance.md
+    v: 0.0.0
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Fixed\n\nYouTube transcription now explicitly downloads the best audio-only format instead of relying on yt-dlp's default format selection.\n"
+    filename: youtube-audio-only.md
     v: 0.0.0
 core:packages:
   - id: npm:pangram-cli-development-tools
@@ -11,13 +14,15 @@ core:packages:
   - id: npm:@microck/pangram-docs
     updated: false
   - changelogIds:
-      - bare-url-routing-nushell.md
-      - pangram-postprocessing-stage.md
+      - audited-dependencies.md
+      - pangram-4-1-guidance.md
+      - youtube-audio-only.md
     id: npm:@microck/pangram-cli
     updated: true
   - changelogIds:
-      - bare-url-routing-nushell.md
-      - pangram-postprocessing-stage.md
+      - audited-dependencies.md
+      - pangram-4-1-guidance.md
+      - youtube-audio-only.md
     id: cargo:microck-pangram-cli
     updated: true
 npm:packages:
