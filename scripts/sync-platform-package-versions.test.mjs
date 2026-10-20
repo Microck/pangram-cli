@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releasePlatforms } from "./release-platforms.mjs";
-import { syncPlatformPackageVersions } from "./sync-platform-package-versions.mjs";
+import { platformPackagesPlugin } from "./platform-packages-plugin.mts";
 
 test("all native package versions follow the wrapper before lockfile/PR hooks", async () => {
   const root = await mkdtemp(join(tmpdir(), "pangram-package-versions-"));
@@ -18,7 +18,7 @@ test("all native package versions follow the wrapper before lockfile/PR hooks", 
       await writeFile(join(root, "npm", directory, "package.json"), JSON.stringify({ name, version: "1.3.0", os: [os], cpu: [cpu] }));
     }
     await writeFile(join(root, "npm/pangram-cli/package.json"), JSON.stringify({ version: "1.3.1", optionalDependencies: dependencies }));
-    await syncPlatformPackageVersions(root);
+    await platformPackagesPlugin(root).applyDraft();
     const main = JSON.parse(await readFile(join(root, "npm/pangram-cli/package.json")));
     for (const { directory, os, cpu } of releasePlatforms) {
       const manifest = JSON.parse(await readFile(join(root, "npm", directory, "package.json")));
@@ -27,8 +27,6 @@ test("all native package versions follow the wrapper before lockfile/PR hooks", 
       assert.deepEqual(manifest.os, [os]);
       assert.deepEqual(manifest.cpu, [cpu]);
     }
-    const config = await readFile(new URL("./tegami.mts", import.meta.url), "utf8");
-    assert.match(config, /async applyDraft\(\)/);
-    assert.doesNotMatch(config, /async applyCliDraft\(\)/);
+
   } finally { await rm(root, { recursive: true, force: true }); }
 });
