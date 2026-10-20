@@ -1,3 +1,17 @@
+## microck-pangram-cli@1.3.1
+
+### Security
+
+Update TLS, QUIC, and ZIP dependencies to patched releases while retaining signed-archive validation and the Rust 1.88 minimum. Update development test dependencies to remove reported npm advisories.
+
+### Changed
+
+AI detection results in pretty, Markdown, and TUI views now caution that scans below 150 words are less certain, following Pangram 4.1's published interpretation guidance. Scores and machine-readable schemas are unchanged; undocumented dashboard uncertainty ranges are not fabricated.
+
+### Fixed
+
+YouTube transcription now explicitly downloads the best audio-only format instead of relying on yt-dlp's default format selection.
+
 ## microck-pangram-cli@1.3.0
 
 ### Added

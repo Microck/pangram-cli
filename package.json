@@ -14,7 +14,7 @@
     "docs:check": "npm run docs:generate && node --test scripts/check-docs.test.mjs && node scripts/check-docs.mjs && npm run check -w docs-app",
     "docs:generate": "node scripts/generate-docs.mjs",
     "docs:typecheck": "npm run generate -w docs-app && npm run typecheck -w docs-app",
-    "packages:check": "node scripts/check-packaging.mjs",
+    "packages:check": "node --test scripts/sync-platform-package-versions.test.mjs && node scripts/check-packaging.mjs",
     "tegami": "node scripts/tegami.mts",
     "test:mcp-conformance": "vitest run tools/mcp-conformance/applicability.test.ts --no-file-parallelism",
     "test:tui": "vitest run tools/tui-acceptance/tui-acceptance.test.ts --no-file-parallelism"
