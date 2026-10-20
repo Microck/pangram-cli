@@ -5,9 +5,10 @@ import type { TegamiPlugin } from "tegami";
 import { cargo } from "tegami/plugins/cargo";
 import { github } from "tegami/plugins/github";
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { releasePlatforms } from "./release-platforms.mjs";
+import { syncPlatformPackageVersions } from "./sync-platform-package-versions.mjs";
 
 const run = promisify(execFile);
 
@@ -15,17 +16,10 @@ function platformPackagesPlugin(): TegamiPlugin {
   return {
     name: "pangram-platform-packages",
     enforce: "post",
-    async applyCliDraft() {
-      const mainPath = "npm/pangram-cli/package.json";
-      const main = JSON.parse(await readFile(mainPath, "utf8"));
-      for (const { directory } of releasePlatforms) {
-        const path = `npm/${directory}/package.json`;
-        const manifest = JSON.parse(await readFile(path, "utf8"));
-        manifest.version = main.version;
-        main.optionalDependencies[manifest.name] = main.version;
-        await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
-      }
-      await writeFile(mainPath, `${JSON.stringify(main, null, 2)}\n`);
+    async applyDraft() {
+      // Run after npm's version writes, but before applyCliDraft updates the
+      // lockfile and GitHub snapshots the version branch.
+      await syncPlatformPackageVersions();
     },
     async willPublish({ pkg }) {
       if (pkg.name !== "@microck/pangram-cli") return;
