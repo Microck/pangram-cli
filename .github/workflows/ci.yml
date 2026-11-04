@@ -65,6 +65,16 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
+      - name: Cache Rust build dependencies
+        # actions/cache v4.2.4. PR caches remain scoped to their merge ref;
+        # release-archive jobs do not consume this cache.
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+          key: rust-ci-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.toolchain }}-${{ hashFiles('Cargo.lock') }}
       - name: Check formatting
         if: matrix.toolchain == '1.97.1'
         run: cargo fmt --check
