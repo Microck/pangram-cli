@@ -1,6 +1,6 @@
 # Update manifest
 
-Generated from Pangram CLI 1.3.1 and schema major 1.
+Generated from Pangram CLI 1.3.2 and schema major 1.
 
 The detached Ed25519 signature covers the exact downloaded manifest bytes.
 
