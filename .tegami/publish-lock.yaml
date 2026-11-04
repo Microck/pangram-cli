@@ -1,12 +1,6 @@
 core:changelogs:
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Security\n\nUpdate TLS, QUIC, and ZIP dependencies to patched releases while retaining signed-archive validation and the Rust 1.88 minimum. Update development test dependencies to remove reported npm advisories.\n"
-    filename: audited-dependencies.md
-    v: 0.0.0
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Changed\n\nAI detection results in pretty, Markdown, and TUI views now caution that scans below 150 words are less certain, following Pangram 4.1's published interpretation guidance. Scores and machine-readable schemas are unchanged; undocumented dashboard uncertainty ranges are not fabricated.\n"
-    filename: pangram-4-1-guidance.md
-    v: 0.0.0
-  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Fixed\n\nYouTube transcription now explicitly downloads the best audio-only format instead of relying on yt-dlp's default format selection.\n"
-    filename: youtube-audio-only.md
+  - content: "---\npackages:\n  cargo:microck-pangram-cli:\n    type: patch\n  npm:@microck/pangram-cli:\n    type: patch\n---\n\n## Security\n\nUpdate TLS certificate verification dependencies to address trust in distrusted certificates.\n"
+    filename: tls-certificate-trust-advisories.md
     v: 0.0.0
 core:packages:
   - id: npm:pangram-cli-development-tools
@@ -14,15 +8,11 @@ core:packages:
   - id: npm:@microck/pangram-docs
     updated: false
   - changelogIds:
-      - audited-dependencies.md
-      - pangram-4-1-guidance.md
-      - youtube-audio-only.md
+      - tls-certificate-trust-advisories.md
     id: npm:@microck/pangram-cli
     updated: true
   - changelogIds:
-      - audited-dependencies.md
-      - pangram-4-1-guidance.md
-      - youtube-audio-only.md
+      - tls-certificate-trust-advisories.md
     id: cargo:microck-pangram-cli
     updated: true
 npm:packages:

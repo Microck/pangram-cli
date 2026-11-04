@@ -1,3 +1,9 @@
+## microck-pangram-cli@1.3.2
+
+### Security
+
+Update TLS certificate verification dependencies to address trust in distrusted certificates.
+
 ## microck-pangram-cli@1.3.1
 
 ### Security
