@@ -4,10 +4,12 @@ import { runCli } from "tegami/cli";
 import { cargo } from "tegami/plugins/cargo";
 import { github } from "tegami/plugins/github";
 import { platformPackagesPlugin } from "./platform-packages-plugin.mts";
+import { versionFinalizerPlugin } from "./version-finalizer.mjs";
 
 const paper = tegami({
   plugins: [
     cargo(),
+    versionFinalizerPlugin(),
     github({
       repo: "Microck/pangram-cli",
       createTags: false,
