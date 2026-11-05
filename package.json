@@ -14,7 +14,7 @@
     "docs:check": "npm run docs:generate && node --test scripts/check-docs.test.mjs && node scripts/check-docs.mjs && npm run check -w docs-app",
     "docs:generate": "node scripts/generate-docs.mjs",
     "docs:typecheck": "npm run generate -w docs-app && npm run typecheck -w docs-app",
-    "packages:check": "node --test scripts/sync-platform-package-versions.test.mjs && node scripts/check-packaging.mjs",
+    "packages:check": "node --test scripts/sync-platform-package-versions.test.mjs scripts/version-finalizer.test.mjs && node scripts/check-packaging.mjs",
     "tegami": "node scripts/tegami.mts",
     "test:mcp-conformance": "vitest run tools/mcp-conformance/applicability.test.ts --no-file-parallelism",
     "test:tui": "vitest run tools/tui-acceptance/tui-acceptance.test.ts --no-file-parallelism"
@@ -23,7 +23,7 @@
     "@e2e-dev/web": "0.15.2",
     "@kitlangton/terminal-control": "0.6.0",
     "@modelcontextprotocol/conformance": "0.2.0-alpha.11",
-    "e2e": "0.21.2",
+    "e2e": "0.22.0",
     "parse5": "7.3.0",
     "remark-gfm": "4.0.1",
     "remark-mdx": "3.1.1",
